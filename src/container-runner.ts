@@ -176,6 +176,16 @@ function buildVolumeMounts(
     });
   }
 
+  // Protonmail Bridge config (for potential IMAP MCP inside the container)
+  const protonDir = path.join(homeDir, '.protonmail-bridge');
+  if (fs.existsSync(protonDir)) {
+    mounts.push({
+      hostPath: protonDir,
+      containerPath: '/home/node/.protonmail-bridge',
+      readonly: true,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);

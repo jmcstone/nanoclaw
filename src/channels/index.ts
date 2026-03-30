@@ -6,6 +6,9 @@
 // gmail
 import './gmail.js';
 
+// protonmail
+import './protonmail.js';
+
 // slack
 
 // telegram
