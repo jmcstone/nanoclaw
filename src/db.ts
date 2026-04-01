@@ -71,7 +71,9 @@ function createSchema(database: Database.Database): void {
     );
     CREATE TABLE IF NOT EXISTS sessions (
       group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      session_id TEXT NOT NULL,
+      created_at TEXT,
+      message_count INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -121,6 +123,23 @@ function createSchema(database: Database.Database): void {
     // Backfill: existing rows with folder = 'main' are the main group
     database.exec(
       `UPDATE registered_groups SET is_main = 1 WHERE folder = 'main'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add created_at and message_count to sessions if they don't exist (migration)
+  try {
+    database.exec(`ALTER TABLE sessions ADD COLUMN created_at TEXT`);
+    database.exec(
+      `UPDATE sessions SET created_at = '${new Date().toISOString()}'`,
+    );
+  } catch {
+    /* columns already exist */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE sessions ADD COLUMN message_count INTEGER DEFAULT 0`,
     );
   } catch {
     /* column already exists */
@@ -548,17 +567,39 @@ export function setRouterState(key: string, value: string): void {
 
 // --- Session accessors ---
 
-export function getSession(groupFolder: string): string | undefined {
+export interface SessionInfo {
+  session_id: string;
+  created_at: string | null;
+  message_count: number;
+}
+
+export function getSessionInfo(groupFolder: string): SessionInfo | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
-  return row?.session_id;
+    .prepare(
+      'SELECT session_id, created_at, message_count FROM sessions WHERE group_folder = ?',
+    )
+    .get(groupFolder) as SessionInfo | undefined;
+  return row ?? undefined;
+}
+
+export function getSession(groupFolder: string): string | undefined {
+  return getSessionInfo(groupFolder)?.session_id;
 }
 
 export function setSession(groupFolder: string, sessionId: string): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, session_id, created_at, message_count) VALUES (?, ?, ?, 0)',
+  ).run(groupFolder, sessionId, new Date().toISOString());
+}
+
+export function incrementSessionMessages(groupFolder: string): void {
+  db.prepare(
+    'UPDATE sessions SET message_count = message_count + 1 WHERE group_folder = ?',
+  ).run(groupFolder);
+}
+
+export function clearSession(groupFolder: string): void {
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
 }
 
 export function getAllSessions(): Record<string, string> {

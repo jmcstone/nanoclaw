@@ -11,6 +11,8 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
+  SESSION_MAX_AGE_HOURS,
+  SESSION_MAX_MESSAGES,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from './config.js';
@@ -35,12 +37,15 @@ import {
 import {
   getAllChats,
   getAllRegisteredGroups,
+  clearSession,
   getAllSessions,
   getAllTasks,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
   getRouterState,
+  getSessionInfo,
+  incrementSessionMessages,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
@@ -320,7 +325,32 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+
+  // Session rotation: check age and message count
+  const sessionInfo = getSessionInfo(group.folder);
+  let sessionId: string | undefined = sessions[group.folder];
+  if (sessionId && sessionInfo) {
+    const ageMs = sessionInfo.created_at
+      ? Date.now() - new Date(sessionInfo.created_at).getTime()
+      : 0;
+    const ageHours = ageMs / (1000 * 60 * 60);
+    if (
+      ageHours > SESSION_MAX_AGE_HOURS ||
+      sessionInfo.message_count >= SESSION_MAX_MESSAGES
+    ) {
+      logger.info(
+        {
+          group: group.folder,
+          ageHours: Math.round(ageHours),
+          messageCount: sessionInfo.message_count,
+        },
+        'Rotating session (age or message limit reached)',
+      );
+      clearSession(group.folder);
+      delete sessions[group.folder];
+      sessionId = undefined;
+    }
+  }
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -378,6 +408,11 @@ async function runAgent(
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
+    }
+
+    // Track message count for session rotation
+    if (sessions[group.folder]) {
+      incrementSessionMessages(group.folder);
     }
 
     if (output.status === 'error') {

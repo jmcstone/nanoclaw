@@ -5,7 +5,7 @@ import path from 'path';
 import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
-// isMain flag is used instead of MAIN_GROUP_FOLDER constant
+import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -91,9 +91,13 @@ export class GmailChannel implements Channel {
 
     // Start polling with error backoff
     const schedulePoll = () => {
-      const backoffMs = this.consecutiveErrors > 0
-        ? Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000)
-        : this.pollIntervalMs;
+      const backoffMs =
+        this.consecutiveErrors > 0
+          ? Math.min(
+              this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+              30 * 60 * 1000,
+            )
+          : this.pollIntervalMs;
       this.pollTimer = setTimeout(() => {
         this.pollForMessages()
           .catch((err) => logger.error({ err }, 'Gmail poll error'))
@@ -210,8 +214,18 @@ export class GmailChannel implements Channel {
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
-      const backoffMs = Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000);
-      logger.error({ err, consecutiveErrors: this.consecutiveErrors, nextPollMs: backoffMs }, 'Gmail poll failed');
+      const backoffMs = Math.min(
+        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+        30 * 60 * 1000,
+      );
+      logger.error(
+        {
+          err,
+          consecutiveErrors: this.consecutiveErrors,
+          nextPollMs: backoffMs,
+        },
+        'Gmail poll failed',
+      );
     }
   }
 
@@ -268,9 +282,7 @@ export class GmailChannel implements Channel {
 
     // Find the main group to deliver the email notification
     const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(
-      ([, g]) => g.isMain === true,
-    );
+    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
 
     if (!mainEntry) {
       logger.debug(
@@ -281,7 +293,17 @@ export class GmailChannel implements Channel {
     }
 
     const mainJid = mainEntry[0];
-    const content = `[Email from ${senderName} <${senderEmail}>]\nSubject: ${subject}\n\n${body}`;
+    const preview =
+      MAX_EMAIL_PREVIEW_CHARS > 0 && body.length > MAX_EMAIL_PREVIEW_CHARS
+        ? body.slice(0, MAX_EMAIL_PREVIEW_CHARS) + '…'
+        : body;
+    const content = [
+      `[Email from ${senderName} <${senderEmail}>]`,
+      `Subject: ${subject}`,
+      `Preview: ${preview}`,
+      '',
+      `Use mcp__gmail__search_emails or mcp__gmail__read_email to read the full email.`,
+    ].join('\n');
 
     this.opts.onMessage(mainJid, {
       id: messageId,

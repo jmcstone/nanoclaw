@@ -5,6 +5,7 @@ import path from 'path';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 
+import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -204,7 +205,10 @@ export class ProtonmailChannel implements Channel {
       for (const address of this.config.addresses) {
         await this.pollAddress(address);
         // Stagger between addresses to avoid hammering the bridge
-        if (this.config.addresses.indexOf(address) < this.config.addresses.length - 1) {
+        if (
+          this.config.addresses.indexOf(address) <
+          this.config.addresses.length - 1
+        ) {
           await new Promise((r) => setTimeout(r, 2000));
         }
       }
@@ -337,7 +341,17 @@ export class ProtonmailChannel implements Channel {
     }
 
     const mainJid = mainEntry[0];
-    const content = `[Email from ${senderName} <${senderEmail}> \u2192 ${recipientAddress}]\nSubject: ${subject}\n\n${body}`;
+    const preview =
+      MAX_EMAIL_PREVIEW_CHARS > 0 && body.length > MAX_EMAIL_PREVIEW_CHARS
+        ? body.slice(0, MAX_EMAIL_PREVIEW_CHARS) + '\u2026'
+        : body;
+    const content = [
+      `[Email from ${senderName} <${senderEmail}> \u2192 ${recipientAddress}]`,
+      `Subject: ${subject}`,
+      `Preview: ${preview}`,
+      '',
+      `To read the full email, run: node /app/src/fetch-protonmail.js ${uid} ${recipientAddress}`,
+    ].join('\n');
 
     this.opts.onMessage(mainJid, {
       id: `proton-${recipientAddress}-${uid}`,
@@ -363,8 +377,14 @@ export class ProtonmailChannel implements Channel {
   }
 
   private extractTextFromSource(source: Buffer): string {
-    const raw = source.toString('utf-8');
+    return this.extractTextFromPart(source.toString('utf-8'));
+  }
 
+  /**
+   * Recursively extract text/plain content from a MIME part.
+   * Handles nested multipart (e.g. multipart/mixed → multipart/related → text/plain).
+   */
+  private extractTextFromPart(raw: string): string {
     // Find the boundary between headers and body
     const headerEnd = raw.indexOf('\r\n\r\n');
     if (headerEnd === -1) return '';
@@ -372,12 +392,13 @@ export class ProtonmailChannel implements Channel {
     const headers = raw.slice(0, headerEnd).toLowerCase();
     const bodyRaw = raw.slice(headerEnd + 4);
 
-    // Simple multipart handling: find text/plain part
+    // Multipart: split on boundary and process each part
     const boundaryMatch = headers.match(/boundary="?([^"\r\n;]+)"?/);
     if (boundaryMatch) {
       const boundary = boundaryMatch[1];
       const parts = bodyRaw.split(`--${boundary}`);
 
+      // First pass: look for direct text/plain parts
       for (const part of parts) {
         const partHeaderEnd = part.indexOf('\r\n\r\n');
         if (partHeaderEnd === -1) continue;
@@ -387,6 +408,12 @@ export class ProtonmailChannel implements Channel {
 
         let partBody = part.slice(partHeaderEnd + 4).trim();
 
+        // Remove trailing boundary markers
+        const endBoundary = partBody.indexOf(`--${boundary}`);
+        if (endBoundary !== -1) {
+          partBody = partBody.slice(0, endBoundary).trim();
+        }
+
         // Handle quoted-printable encoding
         if (partHeaders.includes('quoted-printable')) {
           partBody = this.decodeQuotedPrintable(partBody);
@@ -394,17 +421,28 @@ export class ProtonmailChannel implements Channel {
 
         // Handle base64 encoding
         if (partHeaders.includes('base64')) {
-          partBody = Buffer.from(partBody.replace(/\s/g, ''), 'base64').toString('utf-8');
-        }
-
-        // Remove trailing boundary markers
-        const endBoundary = partBody.indexOf(`--${boundary}`);
-        if (endBoundary !== -1) {
-          partBody = partBody.slice(0, endBoundary).trim();
+          partBody = Buffer.from(
+            partBody.replace(/\s/g, ''),
+            'base64',
+          ).toString('utf-8');
         }
 
         return partBody;
       }
+
+      // Second pass: recurse into nested multipart parts
+      for (const part of parts) {
+        const partHeaderEnd = part.indexOf('\r\n\r\n');
+        if (partHeaderEnd === -1) continue;
+
+        const partHeaders = part.slice(0, partHeaderEnd).toLowerCase();
+        if (!partHeaders.includes('multipart/')) continue;
+
+        const result = this.extractTextFromPart(part.trim());
+        if (result) return result;
+      }
+
+      return '';
     }
 
     // Non-multipart: return body directly
@@ -441,7 +479,9 @@ registerChannel('protonmail', (opts: ChannelOpts) => {
   const secrets = readEnvFile(['PROTONMAIL_BRIDGE_PASSWORD']);
 
   if (!fs.existsSync(configPath)) {
-    logger.warn('Protonmail: config not found at ~/.protonmail-bridge/config.json');
+    logger.warn(
+      'Protonmail: config not found at ~/.protonmail-bridge/config.json',
+    );
     return null;
   }
   if (!secrets.PROTONMAIL_BRIDGE_PASSWORD) {

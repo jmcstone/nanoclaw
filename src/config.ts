@@ -73,6 +73,18 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+export const MAX_EMAIL_PREVIEW_CHARS = Math.max(
+  0,
+  parseInt(process.env.MAX_EMAIL_PREVIEW_CHARS || '200', 10) || 200,
+);
+export const SESSION_MAX_AGE_HOURS = Math.max(
+  1,
+  parseInt(process.env.SESSION_MAX_AGE_HOURS || '24', 10) || 24,
+);
+export const SESSION_MAX_MESSAGES = Math.max(
+  1,
+  parseInt(process.env.SESSION_MAX_MESSAGES || '50', 10) || 50,
+);
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
