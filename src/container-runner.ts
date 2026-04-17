@@ -13,6 +13,7 @@ import {
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  DOWNLOADS_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
@@ -196,6 +197,15 @@ function buildVolumeMounts(
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
+  });
+
+  // Per-group downloads directory (read-only — host downloads files, agent reads them)
+  const groupDownloadsDir = path.join(DOWNLOADS_DIR, group.folder);
+  fs.mkdirSync(groupDownloadsDir, { recursive: true });
+  mounts.push({
+    hostPath: groupDownloadsDir,
+    containerPath: '/workspace/downloads',
+    readonly: true,
   });
 
   // Copy agent-runner source into a per-group writable location so agents

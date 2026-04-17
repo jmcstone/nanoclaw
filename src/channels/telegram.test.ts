@@ -11,6 +11,7 @@ vi.mock('../env.js', () => ({ readEnvFile: vi.fn(() => ({})) }));
 // Mock config
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
+  DOWNLOADS_DIR: '/tmp/nanoclaw-test-downloads',
   TRIGGER_PATTERN: /^@Andy\b/i,
 }));
 
@@ -624,7 +625,7 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores document with filename', async () => {
+    it('stores document with filename (download failed fallback)', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -636,7 +637,9 @@ describe('TelegramChannel', () => {
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Document: report.pdf]' }),
+        expect.objectContaining({
+          content: '[Document: report.pdf] (download failed)',
+        }),
       );
     });
 
@@ -650,7 +653,9 @@ describe('TelegramChannel', () => {
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Document: file]' }),
+        expect.objectContaining({
+          content: '[Document: file] (download failed)',
+        }),
       );
     });
 

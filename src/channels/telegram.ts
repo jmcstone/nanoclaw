@@ -1,7 +1,9 @@
+import fs from 'fs';
 import https from 'https';
+import path from 'path';
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, DOWNLOADS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -39,6 +41,20 @@ async function sendTelegramMessage(
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
   }
+}
+
+/** Download a file from Telegram's servers to a local path. */
+async function downloadTelegramFile(
+  botToken: string,
+  filePath: string,
+  destPath: string,
+): Promise<void> {
+  const url = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  const buffer = Buffer.from(await response.arrayBuffer());
+  fs.writeFileSync(destPath, buffer);
 }
 
 // Bot pool for agent teams: send-only Api instances (no polling)
@@ -288,13 +304,66 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const photos = ctx.message.photo;
+      if (!photos || photos.length === 0) {
+        storeNonText(ctx, '[Photo]');
+        return;
+      }
+      const largest = photos[photos.length - 1];
+      const fileName = `photo-${ctx.message.message_id}.jpg`;
+      try {
+        const file = await ctx.api.getFile(largest.file_id);
+        if (!file.file_path) throw new Error('No file_path');
+        const destName = `${Date.now()}-${fileName}`;
+        const destPath = path.join(DOWNLOADS_DIR, group.folder, 'telegram', destName);
+        await downloadTelegramFile(this.botToken, file.file_path, destPath);
+        const containerPath = `/workspace/downloads/telegram/${destName}`;
+        logger.info({ chatJid, destPath }, 'Telegram photo downloaded');
+        storeNonText(ctx, `[Photo: ${containerPath}]`);
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Failed to download Telegram photo');
+        storeNonText(ctx, '[Photo] (download failed)');
+      }
+    });
+
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
-      const name = ctx.message.document?.file_name || 'file';
-      storeNonText(ctx, `[Document: ${name}]`);
+
+    this.bot.on('message:document', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const doc = ctx.message.document;
+      const fileName = doc?.file_name || 'file';
+      const fileSize = doc?.file_size || 0;
+
+      // Telegram Bot API limit: 20MB
+      if (fileSize > 20 * 1024 * 1024) {
+        storeNonText(ctx, `[Document: ${fileName}] (too large to download, ${Math.round(fileSize / 1024 / 1024)}MB)`);
+        return;
+      }
+
+      try {
+        const file = await ctx.getFile();
+        if (!file.file_path) throw new Error('No file_path');
+        const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const destName = `${Date.now()}-${safeName}`;
+        const destPath = path.join(DOWNLOADS_DIR, group.folder, 'telegram', destName);
+        await downloadTelegramFile(this.botToken, file.file_path, destPath);
+        const containerPath = `/workspace/downloads/telegram/${destName}`;
+        logger.info({ chatJid, fileName, destPath }, 'Telegram document downloaded');
+        storeNonText(ctx, `[Document: ${fileName}] Downloaded to: ${containerPath}`);
+      } catch (err) {
+        logger.error({ chatJid, fileName, err }, 'Failed to download Telegram document');
+        storeNonText(ctx, `[Document: ${fileName}] (download failed)`);
+      }
     });
     this.bot.on('message:sticker', (ctx) => {
       const emoji = ctx.message.sticker?.emoji || '';

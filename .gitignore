@@ -7,6 +7,7 @@ dist/
 # Local data & auth
 store/
 data/
+downloads/
 logs/
 
 # Groups - track CLAUDE.md for all groups, ignore runtime data

@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'CREDENTIAL_PROXY_PORT',
+  'NANOCLAW_DATA_ROOT',
   'ONECLI_URL',
   'TELEGRAM_BOT_POOL',
   'TZ',
@@ -41,9 +42,26 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   'nanoclaw',
   'sender-allowlist.json',
 );
-export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
-export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
-export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+// Optional external data root (e.g. ~/Data/Nanoclaw for BTRFS snapshots).
+// When set, all persistent data lives outside the project directory.
+const rawDataRoot =
+  process.env.NANOCLAW_DATA_ROOT || envConfig.NANOCLAW_DATA_ROOT || '';
+const DATA_ROOT = rawDataRoot
+  ? path.resolve(rawDataRoot.replace(/^~/, HOME_DIR))
+  : '';
+
+export const STORE_DIR = DATA_ROOT
+  ? path.resolve(DATA_ROOT, 'store')
+  : path.resolve(PROJECT_ROOT, 'store');
+export const GROUPS_DIR = DATA_ROOT
+  ? path.resolve(DATA_ROOT, 'groups')
+  : path.resolve(PROJECT_ROOT, 'groups');
+export const DATA_DIR = DATA_ROOT
+  ? path.resolve(DATA_ROOT, 'data')
+  : path.resolve(PROJECT_ROOT, 'data');
+export const DOWNLOADS_DIR = DATA_ROOT
+  ? path.resolve(DATA_ROOT, 'downloads')
+  : path.resolve(PROJECT_ROOT, 'downloads');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
