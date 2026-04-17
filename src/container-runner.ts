@@ -199,13 +199,13 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Per-group downloads directory (read-only — host downloads files, agent reads them)
+  // Per-group downloads directory (writable — both host and agent can save files here)
   const groupDownloadsDir = path.join(DOWNLOADS_DIR, group.folder);
   fs.mkdirSync(groupDownloadsDir, { recursive: true });
   mounts.push({
     hostPath: groupDownloadsDir,
     containerPath: '/workspace/downloads',
-    readonly: true,
+    readonly: false,
   });
 
   // Copy agent-runner source into a per-group writable location so agents

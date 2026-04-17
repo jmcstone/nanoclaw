@@ -320,7 +320,12 @@ export class TelegramChannel implements Channel {
         const file = await ctx.api.getFile(largest.file_id);
         if (!file.file_path) throw new Error('No file_path');
         const destName = `${Date.now()}-${fileName}`;
-        const destPath = path.join(DOWNLOADS_DIR, group.folder, 'telegram', destName);
+        const destPath = path.join(
+          DOWNLOADS_DIR,
+          group.folder,
+          'telegram',
+          destName,
+        );
         await downloadTelegramFile(this.botToken, file.file_path, destPath);
         const containerPath = `/workspace/downloads/telegram/${destName}`;
         logger.info({ chatJid, destPath }, 'Telegram photo downloaded');
@@ -346,7 +351,10 @@ export class TelegramChannel implements Channel {
 
       // Telegram Bot API limit: 20MB
       if (fileSize > 20 * 1024 * 1024) {
-        storeNonText(ctx, `[Document: ${fileName}] (too large to download, ${Math.round(fileSize / 1024 / 1024)}MB)`);
+        storeNonText(
+          ctx,
+          `[Document: ${fileName}] (too large to download, ${Math.round(fileSize / 1024 / 1024)}MB)`,
+        );
         return;
       }
 
@@ -355,13 +363,27 @@ export class TelegramChannel implements Channel {
         if (!file.file_path) throw new Error('No file_path');
         const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
         const destName = `${Date.now()}-${safeName}`;
-        const destPath = path.join(DOWNLOADS_DIR, group.folder, 'telegram', destName);
+        const destPath = path.join(
+          DOWNLOADS_DIR,
+          group.folder,
+          'telegram',
+          destName,
+        );
         await downloadTelegramFile(this.botToken, file.file_path, destPath);
         const containerPath = `/workspace/downloads/telegram/${destName}`;
-        logger.info({ chatJid, fileName, destPath }, 'Telegram document downloaded');
-        storeNonText(ctx, `[Document: ${fileName}] Downloaded to: ${containerPath}`);
+        logger.info(
+          { chatJid, fileName, destPath },
+          'Telegram document downloaded',
+        );
+        storeNonText(
+          ctx,
+          `[Document: ${fileName}] Downloaded to: ${containerPath}`,
+        );
       } catch (err) {
-        logger.error({ chatJid, fileName, err }, 'Failed to download Telegram document');
+        logger.error(
+          { chatJid, fileName, err },
+          'Failed to download Telegram document',
+        );
         storeNonText(ctx, `[Document: ${fileName}] (download failed)`);
       }
     });
