@@ -42,7 +42,7 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   'nanoclaw',
   'sender-allowlist.json',
 );
-// Optional external data root (e.g. ~/Data/Nanoclaw for BTRFS snapshots).
+// Optional external data root (e.g. ~/containers/data/NanoClaw for BTRFS snapshots).
 // When set, all persistent data lives outside the project directory.
 const rawDataRoot =
   process.env.NANOCLAW_DATA_ROOT || envConfig.NANOCLAW_DATA_ROOT || '';
