@@ -6,6 +6,7 @@ Authoritative index of project memory. Read this first.
 - [summary.md](summary.md) — one-paragraph living snapshot
 - [terminology.md](terminology.md) — domain vocabulary
 - [practices.md](practices.md) — patterns and invariants
+- [groups.md](groups.md) — current Telegram group roster and identities
 
 ## Plans
 - `plans/active/` — in-progress trackers
