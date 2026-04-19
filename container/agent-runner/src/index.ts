@@ -391,6 +391,55 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // a-mem MCP is enabled when the per-group ChromaDB mount exists at
+  // /workspace/extra/a-mem/. Groups opt in by adding the mount to
+  // container_config; groups without it get no a-mem tools.
+  const hasAmem = fs.existsSync('/workspace/extra/a-mem');
+  log(`a-mem MCP: ${hasAmem ? 'enabled' : 'disabled'}`);
+
+  const mcpServers: Record<string, any> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    gmail: {
+      command: 'npx',
+      args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+    },
+  };
+  if (hasAmem) {
+    mcpServers['a-mem'] = {
+      command: 'a-mem-mcp',
+      env: {
+        LLM_BACKEND: 'ollama',
+        LLM_MODEL: 'qwen3.5:9b',
+        OLLAMA_HOST: 'http://host.docker.internal:11434',
+        OLLAMA_API_BASE: 'http://host.docker.internal:11434',
+        EMBEDDING_MODEL: 'all-MiniLM-L6-v2',
+        CHROMA_DB_PATH: '/workspace/extra/a-mem/chroma',
+        HF_HOME: '/opt/a-mem/hf-cache',
+      },
+    };
+  }
+
+  const allowedTools = [
+    'Bash',
+    'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'WebSearch', 'WebFetch',
+    'Task', 'TaskOutput', 'TaskStop',
+    'TeamCreate', 'TeamDelete', 'SendMessage',
+    'TodoWrite', 'ToolSearch', 'Skill',
+    'NotebookEdit',
+    'mcp__nanoclaw__*',
+    'mcp__gmail__*',
+    ...(hasAmem ? ['mcp__a-mem__*'] : []),
+  ];
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -401,36 +450,12 @@ async function runQuery(
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
-        'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
-        'TodoWrite', 'ToolSearch', 'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__gmail__*',
-      ],
+      allowedTools,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-        gmail: {
-          command: 'npx',
-          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
-        },
-      },
+      mcpServers,
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
       },

@@ -13,6 +13,7 @@ Authoritative index of project memory. Read this first.
   - [2026-04-trading-group](plans/active/2026-04-trading-group/tracker.md) — Telegram trading-research group with PDF ingestion, nightly web research, backtest orchestration, and 6-agent swarm
     - **[topics-status.md](plans/active/2026-04-trading-group/topics-status.md)** — topic-by-topic current state (read this first for the design map)
   - [2026-04-nanoclaw-migration](plans/active/2026-04-nanoclaw-migration/tracker.md) — migrate persistent data from `~/Data/Nanoclaw/` to `~/containers/data/NanoClaw/` (BTRFS subvolume, snapshotted)
+  - [2026-04-amem-integration](plans/active/2026-04-amem-integration/tracker.md) — per-group a-mem in AlgoTrader + AVP containers; AlgoTrader Obsidian vault relocated under `NanoClaw/`; ChromaDB per-group; host Ollama `qwen3.5:9b`
 - `plans/complete/` — historical reference
 
 ## History

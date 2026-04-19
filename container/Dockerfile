@@ -3,7 +3,7 @@
 
 FROM node:22-slim
 
-# Install system dependencies for Chromium
+# Install system dependencies for Chromium + Python (for a-mem MCP)
 RUN apt-get update && apt-get install -y \
     chromium \
     poppler-utils \
@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    python3 \
+    python3-pip \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser
@@ -33,6 +36,29 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
+
+# --- a-mem MCP (semantic memory over ChromaDB + Ollama) ---
+# HuggingFace cache lives inside the image so the sentence-transformers
+# embedding model is always available without network access at runtime.
+ENV HF_HOME=/opt/a-mem/hf-cache
+ENV PATH="/opt/a-mem/.venv/bin:${PATH}"
+
+# Copy a-mem source (git submodule at container/a-mem-mcp/) before pip install
+# so layer caching works well — source changes bust the install, but base deps
+# stay cached.
+COPY a-mem-mcp/ /opt/a-mem-mcp/
+
+RUN python3 -m venv /opt/a-mem/.venv \
+    && /opt/a-mem/.venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/a-mem/.venv/bin/pip install --no-cache-dir \
+         --index-url https://download.pytorch.org/whl/cpu \
+         torch \
+    && /opt/a-mem/.venv/bin/pip install --no-cache-dir \
+         -e /opt/a-mem-mcp \
+         ollama \
+    && /opt/a-mem/.venv/bin/python -c \
+         "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
+    && chmod -R a+rX /opt/a-mem /opt/a-mem-mcp
 
 # Create app directory
 WORKDIR /app
