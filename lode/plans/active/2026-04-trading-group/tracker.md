@@ -209,11 +209,12 @@ Without this record, a strategy cannot be marked parked/promoted. Strategy Autho
 
 ## Phased checklist
 
-### Phase 1 — Group foundation
-- [ ] Create `groups/telegram_trading/CLAUDE.md` with trading-group persona, tools allowlist, and Obsidian paths
-- [ ] Register the new Telegram chat ID in NanoClaw config and verify Madison responds in the new group without leaking context from `telegram_main`
-- [ ] Add a nightly scheduled-task stub that writes a heartbeat file, to prove scheduling + mounts work end-to-end
-- [ ] Confirm `~/Documents/Obsidian/Main/NanoClaw/AlgoTrader/` is mounted read-write into the trading group container
+### Phase 1 — Group foundation ✅ complete
+- [x] Create `groups/telegram_trading/CLAUDE.md` with trading-group persona, tools allowlist, and Obsidian paths (a14c646)
+- [x] Register the new Telegram chat ID (`tg:-5211322204`) in NanoClaw config and verify Madison responds in the new group without leaking context from `telegram_main` (a14c646)
+- [ ] Add a nightly scheduled-task stub that writes a heartbeat file, to prove scheduling + mounts work end-to-end *(deferred — Phase 5 builds real scheduling; heartbeat stub adds little)*
+- [x] Confirm `~/Documents/Obsidian/Main/NanoClaw/AlgoTrader/` is mounted read-write into the trading group container (a14c646)
+- [x] **a-mem MCP installed** — per-group ChromaDB mounted at `/workspace/extra/a-mem/`, isolated from other groups (a14c646)
 
 ### Phase 2 — Multi-source PDF ingestion
 Ingestion handles **three source types**, not just S&C. Each has its own extraction workflow and per-source-type conventions. The downstream artifact is a **multi-artifact output**: 0-N strategies + 0-N usage-component additions + 0-N indicator additions + 0-N platform-implementation snippets + 0-N findings per article. Not 1:1.
@@ -416,7 +417,7 @@ The exercise on three Jan 2020 articles (Calhoun scaling-in, Hellal/Zhang 8-day,
 | **Era-decay claims require a named causal factor** | "Markets changed in 2020" is insufficient — *what* changed? Name the factor (retail-options boom, Reg NMS, decimalization, HFT dominance era), cite evidence it correlates with the observed decay. Without a specific factor, the decay is presumed statistical (rejection). |
 | **Rubric expanded from 12 items to 18, emphasizing methodology-first evaluation** | New items 13-18 cover parameter-sensitivity check, search-space accounting (Bonferroni-like haircut), sweep-variance-over-sweep-best reporting, filter-stacking orthogonality proof, methodology-first review order, and failure-side evidence requirement. |
 | **Deferred `trader-composition-era` classifier for the regime registry** | Markets have shifted from retail-heavy (2005) → mixed (2015) → automated-heavy (2025). A classifier tagging eras by dominant trader population would let us attribute strategy performance to era specifically, separating curve-fit drift from real-but-era-bound edge erosion. Add when a strategy demands it. |
-| **a-mem MCP deferred — not installed** | Plan originally mentioned a-mem as the semantic-recall layer for the KB. In practice, Obsidian-native tags + Dataview queries + Sweeper structured-tag matching cover current KB lookup needs. a-mem would add fuzzy semantic search on top. Defer install until real usage shows tag-based search is insufficient. Madison's CLAUDE.md explicitly states a-mem is not available. |
+| **a-mem MCP installed (per-group, isolated)** | *Supersedes earlier deferral decision.* a-mem MCP is now baked into the agent container with per-group ChromaDB at `/workspace/extra/a-mem/`. Each group gets its own isolated semantic-recall layer (no cross-group bleed). Used for: dedup before creating Obsidian notes, cross-folder pattern recall when tag/filename isn't obvious, ephemeral observations too small for a file. Obsidian remains the curated source of truth. See [lode/infrastructure/a-mem.md](../../../infrastructure/a-mem.md). |
 | **Lode mounted read-only into trading group** | Path `~/containers/nanoclaw/lode/` → `/workspace/extra/lode/`, RO. Madison sees current plan state as it evolves; can't corrupt it. Added to mount-allowlist with `allowReadWrite: false`. |
 | **Phase 1 deliberately keeps mounts minimal** | AlgoTrader framework (`~/Projects/AlgoTrader/`), TASC archive, Calibre library — all NOT mounted until the phase that needs them (4-5 for AlgoTrader, 2 for Calibre). Madison's CLAUDE.md explicitly lists unmounted paths so she asks Jeff to add them when needed rather than silently failing or working around. |
 
@@ -445,4 +446,4 @@ The exercise on three Jan 2020 articles (Calhoun scaling-in, Hellal/Zhang 8-day,
 |-------|------------|
 
 ## Current status
-Phase 0 — lode initialized; awaiting approval to enter Phase 1.
+Phase 1 complete (group registered, mounts wired, a-mem installed, end-to-end validated). Three open design topics remain before Phase 2 starts: **Topic 6** first-bundle composition, **Topic 7** strategy state machine, **Topic 8** nightly wall-clock. See [topics-status.md](topics-status.md) for current state by topic.

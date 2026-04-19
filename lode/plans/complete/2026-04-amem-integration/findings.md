@@ -1,5 +1,7 @@
 # Findings — a-mem Integration
 
+→ **Graduated to [lode/infrastructure/a-mem.md](../../../infrastructure/a-mem.md).** The durable architecture, wiring, and usage conventions now live there. The content below is kept as a historical record of what was learned during planning; refer to the infrastructure doc for current state.
+
 ## Host a-mem install state
 
 a-mem-mcp installed on host at `/home/jeff/Tools/a-mem-mcp/`:
