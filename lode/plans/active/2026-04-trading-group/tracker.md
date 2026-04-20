@@ -42,7 +42,7 @@ Both modes write findings to the same component-library page — the component's
 
 **Workflow C — Strategy iteration.** Existing strategy + identified weakness → pre-stated hypothesis → investigation bundle → Skeptic verdict. Candidate components for the hypothesis come from the Component Library (where Workflow B has been building evidence on each). This is the bundle cycle described in "Research methodology" below.
 
-**Workflow D — Strategy creation from corpus.** The swarm composes a *novel* strategy from library components — not from any single source. Triggers: newly-ingested entry signal looking for an exit/stop/sizing pairing already in the library; Sweeper-detected composition gap ("we have 12 stop patterns but no swing strategy on vol ETFs uses any of them"); explicit synthesis hypothesis ("never-tried combination of X + Y + Z"); Researcher proposal during ingestion. A created strategy then enters Workflow C's testing pipeline as a freshly-composed candidate.
+**Workflow D — Strategy creation from corpus.** The swarm composes a *novel* strategy from library components — not from any single source. Triggers: newly-ingested entry signal looking for an exit/stop/sizing pairing already in the library; Sweeper-detected composition gap ("we have 12 stop patterns but no swing strategy on vol ETFs uses any of them"); explicit synthesis hypothesis ("never-tried combination of X + Y + Z"); Corpus Researcher proposal during ingestion or continuous re-scanning. A created strategy then enters Workflow C's testing pipeline as a freshly-composed candidate.
 
 **Workflow E — Daily flow (connector).** Each daily cycle: ingestion runs (Workflow A) on whatever's in the day's source queue; daily catch produced; new components/strategies enter the backlog with triage ranks; Sweeper runs (per its cadence) to match new arrivals against existing backlog and findings; nightly testing budget is allocated across workflows per the current allocation policy; Documenter writes morning digest.
 
@@ -78,14 +78,14 @@ When (e.g.) the Engineer adds individual-stock universe support, the Sweeper gre
 **Items persist in the backlog indefinitely.** Even very-low-ranked items stay — they may resurface years later when a blocker resolves. Only `retired` items (explicit "this will never work in our universe") leave.
 
 **Triage authority:**
-- Researcher ranks at ingestion using current criteria.
+- Corpus Researcher ranks at ingestion using current criteria.
 - Skeptic vetoes promotion to "test now" priority — methodology auditor pre-screen.
 - Documenter owns criteria evolution and runs re-triage sweeps on a periodic cadence.
 
-### Daily Catch — Researcher's nightly journal
+### Daily Catch — Corpus Researcher's nightly journal
 
-Each day's discovery produces a first-class artifact at `AlgoTrader/Daily Catches/YYYY-MM-DD.md`. Records:
-- New components found (with source links)
+Each day's discovery (from Corpus Researcher's continuous work + Web Researcher's continuous scrape + quest returns) produces a first-class artifact at `AlgoTrader/Daily Catches/YYYY-MM-DD.md`. Owned by Corpus Researcher (who consolidates both internal and external arrivals). Records:
+- New components found (with source links — internal or external)
 - Complete strategies found
 - Suggested compositions (Workflow D candidates)
 - Per-item disposition: `test now` | `queue` | `park` | `reject` (with reason)
@@ -376,14 +376,20 @@ Types not in this list that a strategy demands get proposed by whichever agent s
 │    • No grid-search creep across runs                           │
 │     │                                                           │
 │     ▼                                                           │
-│  Verdict: PROMOTE / REJECT / INVESTIGATE FURTHER                │
+│  Verdict: PROMOTE / PARK / INVESTIGATE FURTHER /                │
+│           RETURN TO INGESTION (F0 only)                         │
 │    • PROMOTE → Strategy Author updates canonical strategy       │
+│                (F1+ only; F0 never promotes)                    │
 │                Documenter writes positive finding to KB         │
-│    • REJECT → Documenter writes negative finding if             │
-│               instructive (curve-fit modes, misapplied          │
-│               filters, asset-specific fragility, overly tight   │
-│               stops, brittle exit rules)                        │
-│    • INVESTIGATE → new hypothesis, back to top of cycle         │
+│    • PARK → Documenter writes unresolved_weaknesses record;     │
+│             writes negative finding if instructive (curve-fit   │
+│             modes, misapplied filters, asset-specific           │
+│             fragility, overly tight stops, brittle exit rules); │
+│             Sweeper picks up when relevant findings arrive      │
+│    • INVESTIGATE → new hypothesis, back to top of cycle;        │
+│                    bundles_completed increments                 │
+│    • RETURN TO INGESTION (F0 only) → Corpus Researcher fixes    │
+│                    extraction bug; state → untested             │
 │     │                                                           │
 │     ▼                                                           │
 │  Re-baseline; identify next weakness; repeat                    │
@@ -403,9 +409,12 @@ Jeff's ORB investigations were rigorous but bounded by one person's memory, atte
 
 ### Budgeting the cycle
 
-- A nightly window runs **one investigation bundle per strategy under active development** (not one run per strategy). Target ~1–3 strategies active simultaneously; expand as budget allows.
-- An investigation bundle is typically 8–20 runs (matching observed ORB session sizes).
+Nightly run budget is allocated across four input sources per the current policy (see Operating Model → "Evolving budget allocation"). Within that allocation:
+
+- A Workflow C iteration slot runs **one investigation bundle** on a single strategy under active development (not one run per strategy).
+- An investigation bundle is typically 8–20 runs (matching observed ORB session sizes). First bundles (F0) are smaller — 6-8 runs for Shape A (see "First-bundle shapes by onboarding type").
 - A verdict is reached when the bundle is complete. "One more quick test" is an anti-pattern the Skeptic flags.
+- Per-bundle time cap: 90 min. Overrun → "INCOMPLETE — continue next night" verdict; next night's allocation prioritizes the continuation.
 
 ### Lessons-learned + finding escalation (three levels)
 
@@ -493,8 +502,10 @@ Without this record, a strategy cannot be marked parked/promoted. Strategy Autho
 - [x] Confirm `~/Documents/Obsidian/Main/NanoClaw/AlgoTrader/` is mounted read-write into the trading group container (a14c646)
 - [x] **a-mem MCP installed** — per-group ChromaDB mounted at `/workspace/extra/a-mem/`, isolated from other groups (a14c646)
 
-### Phase 2 — Multi-source PDF ingestion
-Ingestion handles **three source types**, not just S&C. Each has its own extraction workflow and per-source-type conventions. The downstream artifact is a **multi-artifact output**: 0-N strategies + 0-N usage-component additions + 0-N indicator additions + 0-N platform-implementation snippets + 0-N findings per article. Not 1:1.
+### Phase 2 — Multi-source ingestion
+Ingestion handles **four source types**: magazine, book, web_article, academic_paper. Each has its own extraction workflow and per-source-type conventions. The downstream artifact is a **multi-artifact output**: 0-N strategies + 0-N usage-component additions + 0-N indicator additions + 0-N platform-implementation snippets + 0-N findings per source. Not 1:1.
+
+Ingestion feeds the operating model in two ways: (a) each ingested item enters the unified ranked backlog with `status: untested` + triage rank + structured-reason tags; (b) items produced during a day's ingestion are logged into that day's Daily Catch (`AlgoTrader/Daily Catches/YYYY-MM-DD.md`).
 
 - [ ] **Docling is the primary extraction tool** (pending final bake-off vs marker/pymupdf4llm). Validation on 2020-01 S&C 8-day-article (4 pages): good prose/numbers/structure extraction, small post-processing needs:
   - Small-caps section headers in S&C come through as mixed-case artifacts (`paTTern`, `SimulaTionS`) — regex normalization pass
@@ -503,13 +514,16 @@ Ingestion handles **three source types**, not just S&C. Each has its own extract
   - Speed: ~10 sec/page warm → ~15 min per S&C issue → ~33 hours for 11 years of S&C → overnight batches viable
 - [ ] **Ingest chronologically (oldest first)** so Traders' Tips cross-issue parents land in the KB before their children. Stub-resolution sweep (4th Sweeper direction) handles unavoidable out-of-order cases.
 - [ ] Build ingestion scripts (TypeScript or Python) for each source type:
-  - **`ingest-magazine.*`** — S&C, SFO, Traders, Traders World, Expiring Monthly, Bloomberg Markets. One issue → index file + per-article strategy markdown. Articles are typically 1 strategy each (S&C adds software-vendor "Traders' Tips" sections with implementation variants).
-  - **`ingest-book.*`** — books from Calibre. One book → index file + per-chapter strategy markdown; some chapters contain multiple strategies (decompose further). Author's claimed backtest results recorded but explicitly tagged as cherry-picked (authors don't publish failed books).
-  - **`ingest-web.*`** — web articles scraped via Scrapling / Playwright / trafilatura. One article → one strategy markdown (typically).
-- [ ] Source-provenance frontmatter varies by type (see findings.md "Source type taxonomy"). All three types emit `ingested_at`, `status: untested`, tags, and link to raw extract under `AlgoTrader/Sources/{type}/`.
-- [ ] Backfill existing half-done 2023 S&C issues once PDFs are migrated into Calibre.
+  - **`ingest-magazine.*`** — S&C, SFO, Traders, Traders World, Expiring Monthly, Bloomberg Markets. One issue → index file + per-article record. Articles typically 1 strategy each but may contribute only components; S&C adds software-vendor "Traders' Tips" sections with implementation variants.
+  - **`ingest-book.*`** — books from Calibre. One book → index file + per-chapter record; chapters may contain multiple strategies (decompose further); author's claimed backtest results explicitly tagged as cherry-picked.
+  - **`ingest-web.*`** — web articles scraped via Scrapling / Playwright / trafilatura. Archived copy saved locally alongside extract (web rots).
+  - **`ingest-academic-paper.*`** — SSRN / arXiv / journal PDFs and local whitepapers. Single-document, peer-reviewed or whitepaper shape (distinct from book — no chapters/ISBN; distinct from web — citation shape). PDF kept alongside extract.
+- [ ] Source-provenance frontmatter varies by type (see findings.md "Source type taxonomy"). All four types emit `ingested_at`, `status: untested`, tags, link to raw extract, and initial triage rank + reasons.
+- [ ] Corpus Researcher performs decomposition + initial triage on every ingested record during the daytime ingestion window (pilot stages) or as arrivals land (steady state).
+- [ ] **Pilot staging support:** ingestion must be resumable by stage boundary (Stage 1 = 6 months S&C, Stage 2 = 12, Stage 3 = 24, Stage 4 = 48, Stage 5 = 96, Stage 6 = full archive). Each stage gate pauses before the next ingestion slice.
 - [ ] Multi-source backfill is a long-running job — batch by year (magazines) or by author (books); resumable; emits progress to `AlgoTrader/_ingestion-log.md`.
-- [ ] Mirror key insights into a-mem MCP for semantic recall.
+- [ ] Mirror key insights into a-mem MCP for semantic recall (dedup checks at ingestion rely on it).
+- [ ] Daytime execution during pilot stages (not on the nightly 25-run budget) so Jeff can monitor and adjust mid-ingestion.
 
 **Notable book authors worth prioritizing once general ingestion works** (source quality varies by author — Skeptic should weight accordingly):
 - **John Ehlers** — DSP-based indicators (MAMA, FAMA, Hilbert transforms). Contributes distinctive entry-component candidates.
@@ -520,38 +534,44 @@ Ingestion handles **three source types**, not just S&C. Each has its own extract
 - **Ernie Chan** — modern quant strategies with detailed backtest code.
 - **Alexander Elder** — classic TA; cross-reference against S&C for corroboration.
 
-### Phase 3 — Web research pipeline
-- [ ] Curate a seed list of high-signal sources (SSRN, Alpha Architect, Quantpedia, SeekingAlpha quant posts, ArXiv q-fin, etc.) in `groups/telegram_trading/sources.yaml`
-- [ ] Add Scrapling + trafilatura to the trading container; reuse the existing Playwright MCP for JS-heavy sites
-- [ ] Nightly research task: fetch → extract → dedupe against `AlgoTrader/Strategies/` (a-mem fuzzy match) → write new strategy markdown with provenance
-- [ ] Rate-limit + polite-crawl guardrails; robots.txt respect; source attribution preserved in frontmatter
+### Phase 3 — Web research pipeline (Web Researcher infrastructure)
+- [ ] Curate seed list of high-signal sources (SSRN, Alpha Architect, Quantpedia, SeekingAlpha quant posts, ArXiv q-fin, etc.) at `AlgoTrader/Web Research/sources.yaml` (owned by Web Researcher).
+- [ ] Add Scrapling + trafilatura to the trading container; reuse the existing Playwright MCP for JS-heavy sites.
+- [ ] Continuous scrape task (runs in the 00:15 CT parallel research window): fetch → extract → dedupe against backlog (`Sources/`) and `Strategies/` via a-mem fuzzy match → write new record with provenance → entry into Daily Catch + backlog.
+- [ ] Quest handler: reads `AlgoTrader/Web Research/Quests/{date}-{slug}/prompt.md`; searches curated sources + opportunistic ones; writes `external-findings.md` sibling.
+- [ ] Scout notebook scaffolding at `AlgoTrader/Web Research/_scout-notebook.md` with initial sections: productive sources, unproductive sources, credible authors, communities, search-pattern library, dead ends. Web Researcher updates after each continuous or quest pass.
+- [ ] Rate-limit + polite-crawl guardrails; robots.txt respect; source attribution preserved in frontmatter. Archived copies saved at ingestion (web rots).
 
-### Phase 4 — Regime classifier framework + performance attribution
-- [ ] Build the pluggable **regime-classifier framework** in AlgoTrader (`trade/regimes/` package): a `Classifier` base class exposing a consistent `label(bars) → Series[str]` interface, a registry for registered classifiers, `.shift(1)`-safe forward-looking computation, NaN-during-warmup semantics.
+### Phase 4 — Metric catalog + regime classifier framework + bucketed conditional analysis
+- [ ] Build the pluggable **metric catalog framework** in AlgoTrader (`trade/metrics/` package): a `Metric` base class exposing `value(bars) → Series` + default bucketing methodology (percentile / threshold / MA-distance / custom) → `label(bars) → Series[str]`. `.shift(1)`-safe forward-looking computation; NaN-during-warmup semantics. Catalog entries in KB at `AlgoTrader/Knowledge/metrics/` carry "when to apply" guidance so the diagnosing agent can select strategy-relevant metrics.
+- [ ] Build the **regime classifier registry** as a view over promoted-from-catalog metrics (`trade/regimes/` package exposing the same `label` interface as metrics but with stable-by-contract labels + KB-wide tag namespace `#regime/<classifier>/<label>`).
 - [ ] Implement the five initial classifiers (see findings.md "Regime classifier registry"):
   - `vix-tier` (asymmetric-tail 7-bucket percentile on trailing-10y VIX)
   - `gap-size` (per-asset percentile on trailing-252d gap distribution)
   - `price-range` (Donchian-style within / breakout-up / breakout-down)
   - `trend-basic` (200DMA × 50DMA-slope 4-way)
   - `sqn-market-type` (Van Tharp 6-way: SQN × vol axis)
-- [ ] Add a regime-attribution step to AlgoTrader's `analysis/` pipeline: per-strategy, per-asset, slice CAGR/drawdown/hit-rate **by each classifier's labels**. Output a per-classifier heatmap + a cross-classifier matrix.
-- [ ] Output: `AlgoTrader/Regime Reports/{strategy}/{asset}/YYYY-MM-DD.md` in the synced vault. Reports show attribution under every registered classifier, not just a single "regime" view.
-- [ ] Classifier-informativeness report per strategy — for each classifier, how much does its labeling discriminate performance? (ANOVA-style F-stat or simpler: spread of per-label expectancy divided by aggregate.) Regime Analyst uses this to decide which classifiers to weight when targeting weaknesses.
-- [ ] Stability-by-contract invariant: classifier label names are immutable; evolution is additive (new classifier, or versioned `v2`) — documented in the registry file.
+- [ ] Build the **bucketed conditional analysis** pipeline stage: takes (trade log | bar-return table) + list of metrics → produces per-metric × per-bucket performance attribution (CAGR, hit-rate, avg return, Sharpe) + random-baseline comparison where applicable. Runs on existing results; no new backtests. LLM-judgment-driven metric selection per baseline (see Operating Model).
+- [ ] Output: `AlgoTrader/Regime Reports/{strategy}/{asset}/YYYY-MM-DD.md` in the synced vault. Reports show attribution under every *selected* metric for that baseline, not just the 5 promoted classifiers.
+- [ ] **Metric-informativeness** + **classifier-informativeness** reports per strategy — for each metric, how much does its bucketing discriminate performance? (ANOVA-style F-stat or simpler: spread of per-label expectancy / aggregate.) Informs weighting in weakness-targeting AND surfaces classifier-promotion candidates.
+- [ ] Stability-by-contract invariant (classifiers): classifier label names are immutable; evolution is additive (new classifier, or versioned `v2`). Metric catalog entries do not carry this constraint — they can evolve freely because they don't anchor KB-wide findings.
+- [ ] Periodic metric-catalog curation review cadence wired in (per pilot stage gate during ramp; monthly in steady state — see Operating Model).
 
-### Phase 5 — Backtest orchestration + iterative indicator addition
-- [ ] Define the "AlgoTrader invocation contract": given a strategy markdown + a candidate indicator, how is a runnable Python variant produced under `~/Projects/AlgoTrader/scripts/`?
-- [ ] Mount `~/Projects/AlgoTrader/` into the trading container (read-write for script outputs + vault; consider a dedicated `scripts/_nanoclaw-generated/` subtree).
-- [ ] Nightly loop (per strategy):
-  - (a) regenerate baseline regime attribution if stale
-  - (b) Regime Analyst picks the weakest regime needing help
-  - (c) Researcher queries Findings KB for candidate indicators targeting that regime
-  - (d) Skeptic filters candidates through the anti-overfit rubric
-  - (e) Generate single-variable test scripts, run via `uv run`, parse results
-  - (f) Apply cross-year + cross-asset + walk-forward gates
-  - (g) Write `AlgoTrader/Backtests/YYYY-MM-DD {strategy} {indicator}.md` in synced vault
-  - (h) If promoted: update strategy frontmatter + write finding to KB
-- [ ] Post the day's promotions + rejections summary to Telegram in the morning.
+### Phase 5 — Backtest orchestration + bundle execution
+- [ ] Define the "AlgoTrader invocation contract": given a strategy markdown + a candidate component/parameter variation, how is a runnable Python variant produced under `~/Projects/AlgoTrader/scripts/_nanoclaw-generated/`?
+- [ ] Mount `~/Projects/AlgoTrader/` into the trading container (read-write for script outputs + vault).
+- [ ] **Standalone edge analysis runner** (Workflow B for entry/exit signals): fire signal across history, compute N-bar forward returns, build random-entry/exit baseline in same asset/regime, write edge profile to the signal's Component Library page. Cheap; doesn't run full-strategy backtests.
+- [ ] **Bundle execution engine** for the nightly wall-clock (see Operating Model):
+  - 01:15 CT — 25-run budget allocated across backlog-dip / daily-catch / iteration / creativity per current policy
+  - 01:30 CT — bundle execution begins; Strategy Author composes variants; variants run via `uv run`; results parsed
+  - Per-bundle 90-min cap; overrun → Skeptic verdict "INCOMPLETE — continue next night"
+  - First-bundle shape selection (Shape A–E) based on what's being onboarded
+  - Skeptic filters candidates through 18-item anti-overfit rubric pre-run; issues verdict post-bundle
+  - ~06:30 CT — Documenter consolidates; `AlgoTrader/Backtests/YYYY-MM-DD {strategy} {bundle-topic}.md` written
+  - If `investigating → promoted`: Strategy Author updates strategy frontmatter + production_migration block; Documenter writes finding to KB
+  - If `investigating → parked`: Documenter writes unresolved_weaknesses record
+  - If RETURN TO INGESTION (F0 only): Corpus Researcher fixes extraction; state → untested
+- [ ] **07:00 CT morning digest** posted to Telegram — promotions, parks, state transitions, retirement recommendations pending Jeff's confirmation, quests fired and returned, continuous-discovery highlights.
 
 ### Phase 6 — Component library + findings KB + lessons loop
 - [ ] Scaffold `~/Documents/Obsidian/Main/NanoClaw/AlgoTrader/Knowledge/` with:
@@ -562,7 +582,7 @@ Ingestion handles **three source types**, not just S&C. Each has its own extract
   - `_pending.md` — Level-2 held-for-confirmation items
   - `_conventions.md` — tag vocabulary, component/finding schemas, single-writer ownership
 - [ ] **Bootstrap the component library** by decomposing ORB into its components with evidence cross-referenced from the existing 30+ ORB runs in `~/Projects/AlgoTrader/obsidian_vault/Strategies/opening-range-breakout/Runs/`. This gives the library a seeded set on day one.
-- [ ] AlgoTrader Engineer mirrors the **eight-category structure** in code under `~/Projects/AlgoTrader/trade/components/{indicators,entries,exits,stops,take-profits,position-sizing,entry-timing,regime-filters}/` (or an equivalent fitting the three-layer architecture). Indicators are primitives consumed by the 7 usage-role categories. Each component is a reusable Python primitive a strategy composes.
+- [ ] AlgoTrader Engineer mirrors the **nine-category structure** in code under `~/Projects/AlgoTrader/trade/components/{indicators,entries,exits,stops,take-profits,position-sizing,equity-curve,entry-timing,regime-filters}/` (or an equivalent fitting the three-layer architecture). Indicators are primitives consumed by the 8 usage-role categories. Each component is a reusable Python primitive a strategy composes.
 - [ ] Define the "finding entry" schema (frontmatter: regime tags, asset tags, strategies-tested, confidence, sources, walk-forward-validated yes/no) — see findings.md.
 - [ ] Enforce a required `## Lessons` section on every run writeup with `strategy-local` and `candidate-cross-cutting` sub-sections.
 - [ ] Documenter runs **end-of-bundle escalation review** after each Skeptic verdict: promote / hold / localize each Level-1 candidate.
@@ -570,7 +590,7 @@ Ingestion handles **three source types**, not just S&C. Each has its own extract
 - [ ] Create `AlgoTrader/Revisit Queue.md` as a first-class artifact, populated by the Sweeper (see below).
 - [ ] Every strategy's canonical file must carry `unresolved_weaknesses:`, `ingested_at:`, and `last_swept_at:` fields before it can be parked or promoted. Strategy Author owns writing them; Documenter (via Sweeper) reads and updates `last_swept_at`.
 - [ ] Every KB finding carries `promoted_at:` and `last_matched_against_strategies:` cursors. Documenter maintains.
-- [ ] Implement **Sweeper** — a scheduled task (owned by Documenter, not a separate agent) that runs weekly off-hours. Three sweep directions: forward (findings → strategies), reverse (new strategies → existing KB), cross-finding (new findings → `_pending.md`).
+- [ ] Implement **Sweeper** — a scheduled task (owned by Documenter, not a separate agent) that runs weekly off-hours (Sunday evening) plus nightly inline with the 00:15 CT research window. Four sweep directions: forward (findings → parked strategies → Revisit Queue), reverse (newly-triaged strategies → existing KB annotation), cross-finding (new findings → `_pending.md` corroborate/contradict), stub-resolution (new source → orphaned `implementation_of:` children), plus re-ranking (new capability arrives → re-rank backlog items whose `#triage-blocker/*` tag matches).
 - [ ] Sweeper writes proposed matches to `AlgoTrader/_sweep-staging.md`; Documenter reviews before committing to Revisit Queue or strategy frontmatter. Keeps the sweep auditable.
 - [ ] On-demand sweep: `@Documenter sweep` (or equivalent) triggers a run out-of-band.
 - [ ] Nightly cycle start: Documenter surfaces top Revisit Queue candidates; swarm decides whether to pursue a revisit or start a new strategy.
@@ -597,15 +617,29 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Seven agents
 - [ ] Nightly workflow becomes: Regime Analyst produces weak-regime report → Regime Analyst fires quests to both researchers for candidates → parallel internal + external findings returned → Skeptic pre-filters via rubric → Strategy Author creates single-variable test variant → backtest runs → Skeptic issues verdict → Documenter records the run + updates KB → if promoted, Strategy Author updates the canonical strategy file.
 - [ ] Feature requests flow Research lane → AlgoTrader Engineer via in-chat @-mentions (e.g. "Engineer, we need a `days_from_fomc` regime axis"). Engineer files a plan in AlgoTrader's own `lode/plans/active/`, ships, notifies chat.
 - [ ] Escalation: Skeptic veto is final on promotion; disagreements across lanes surface to Jeff via @-mention, not auto-resolve.
-- [ ] **Chat-noise control:** agents post at milestone events only (candidate selected, verdict issued, KB updated, quest fired, quest returned) — not running commentary. Documenter posts a single **morning digest** consolidating the night's activity (promotions, rejections, KB deltas, platform changes, quests fired and returned, continuous-discovery highlights).
+- [ ] **Chat-noise control:** agents post at milestone events only (candidate selected, verdict issued, KB updated, quest fired, quest returned) — not running commentary. Documenter posts a single **morning digest** (07:00 CT) consolidating the night's activity: promotions, parks, RETURN TO INGESTION flags, retirement recommendations pending Jeff's confirmation, KB deltas, platform changes, quests fired and returned, continuous-discovery highlights, Sweeper staging items awaiting review.
 - [ ] Shadow mode: one week where verdicts are issued and documented but nothing auto-writes to canonical strategy files, to calibrate signal-to-noise.
 - [ ] **Defer** until Phase 8 retro: Portfolio Theorist (cross-asset suitability specialist), Walk-Forward Auditor (temporal-robustness specialist). Add only if Phase 7 demonstrates a real gap — Skeptic currently covers both responsibilities.
 
-### Phase 8 — Hardening
-- [ ] Cost ceiling per nightly run (stop if exceeded; page Jeff).
+### Concept pilot execution (cross-phase activity — runs once Phases 2-7 are capable)
+
+The staged concept pilot (Operating Model → "Concept pilot is staged") is not a phase of its own — it's what we **do** with the capabilities Phases 2-7 build. Ordering:
+
+1. Phase 2-7 stand up enough capability to ingest, triage, test, attribute, and surface findings. (Phase 4 + Phase 5 are the critical path for being able to run a first bundle.)
+2. **Stage 1** runs on 6 months of S&C: daytime ingestion + backlog re-triage + nightly cycles on top-of-backlog items + stage-gate review.
+3. **Stage 2** (12 months cumulative), **Stage 3** (24), **Stage 4** (48), **Stage 5** (96), **Stage 6** (full archive). Each a full cycle.
+4. Smooth transition into steady-state — the last stage's "daily flow" *is* steady-state flow.
+
+The pilot is where the design locked in Topics 6-9 meets real data. Expect the allocation policy, triage criteria, metric catalog, and component library to refine significantly during the pilot.
+
+### Phase 8 — Hardening + recurring reviews
+- [ ] Cost ceiling per nightly run (stop if exceeded; page Jeff). Independent of the 25-run budget — this is a dollar/token/time guardrail against runaway cycles.
 - [ ] Backups of the `AlgoTrader/` vault subset (beyond Obsidian Sync).
-- [ ] Retrospective after first month: false-positive/false-negative rate of the Skeptic; regime-attribution accuracy; KB hit-rate (how often a KB lookup produces a *useful* indicator candidate).
-- [ ] Decide whether to add specialist agents deferred in Phase 7.
+- [ ] **Per-stage review** at each concept-pilot gate (after Stage 1, Stage 2, etc.) — Jeff + swarm decide: proceed to next stage / repeat current stage size / pause. Daytime, not on nightly budget.
+- [ ] **Monthly allocation review** (first Sunday of each month, part of the weekly Sweeper pass) — tune the four-way budget allocation based on telemetry (backlog dip vs daily catch vs iteration vs creativity).
+- [ ] **Monthly metric-catalog curation review** — Regime Analyst + Documenter review accumulated catalog observations; promote / retire / identify-gaps. Aligns with allocation review cadence.
+- [ ] **Monthly retro** starting after first month of steady-state: Skeptic false-positive/false-negative rate; metric-informativeness accuracy; KB hit-rate (how often a KB lookup produces a useful candidate); Web Researcher scout-notebook productivity per source.
+- [ ] Decide whether to add specialist agents deferred in Phase 7 (Portfolio Theorist, Walk-Forward Auditor) based on retro signal.
 
 ## Decisions
 | Decision | Rationale |
@@ -653,7 +687,7 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Seven agents
 | Component Library coexists with Findings KB under `AlgoTrader/Knowledge/` | `components/{7 subfolders}/` holds the composable pieces with their own track records; `findings/{regimes,asset-classes,cross-cutting,meta}/` holds effect-oriented insights. Both curated by the Documenter. |
 | Strategy files' `components:` section is a **wikilink composition manifest**, not free-form prose | One strategy's composition referencing library components by wikilink means a component's evidence is queryable across every strategy that uses it. Prose on the strategy page narrates *why* the composition; component pages narrate *what each piece does*. |
 | Component identity is stable-by-contract; evolution = new versioned component, not mutation | Same rationale as regime-classifier label stability: mutating a component silently misattributes prior findings. `fixed-atr-stop-v2` is a new file, not an edit of v1. |
-| Researcher actively counters entry-signal bias at ingestion | When reading an S&C article, map it to existing components first; promote genuinely novel pieces (often exits/stops/TPs/sizing) as new library entries. An article's most valuable contribution may be its stop rule, not its entry signal. |
+| Corpus Researcher actively counters entry-signal bias at ingestion | When reading an S&C article, map it to existing components first; promote genuinely novel pieces (often exits/stops/TPs/sizing) as new library entries. An article's most valuable contribution may be its stop rule, not its entry signal. |
 | Phase 6 bootstraps the library by decomposing ORB | ORB has 30+ runs of evidence already; decomposing its components (OR-breakout entry, EOD-flat exit, ATR filter, BtR cap-flips regime filter, etc.) seeds the library with components that have real track records on day one. Future strategies compose against a non-empty library. |
 | AlgoTrader component implementations live under `trade/components/{7 subpackages}/` and pair one-to-one with KB entries | Code ↔ KB mirror means implementation presence is verifiable, and the Engineer's feature-request backlog is exactly the Research lane's component proposals. |
 
@@ -673,7 +707,7 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Seven agents
 | Concept pilot is staged additively (6→12→24→48→96 month ramp on S&C) with re-triage at each gate | One-shot 132-issue commit would use day-one criteria for the entire bulk load. Staged ramp lets each stage's learning sharpen the next stage's triage. Stage sizes roughly double; tunable per-stage. Smooth transition into steady-state at the end. |
 | No hard "Mode 1 / Mode 2" boundary | Single daily flow with four input sources (backlog dip, daily catch, iteration, creativity) whose allocation share evolves as corpus matures. Smooth transition from pilot's last stage into steady-state ops. |
 | Workflow D (creativity / novel composition from library) is first-class and budgeted | Not just a reactive Sweeper output. Swarm intentionally synthesizes new strategies from library components. Allocation grows as library matures (~5% day one → ~25% by year two). |
-| Daily Catch is a first-class artifact (`AlgoTrader/Daily Catches/YYYY-MM-DD.md`) | Researcher's nightly output recording new arrivals, suggested compositions, and triage decisions. Persistent journal of what entered the system each day. Owned by Researcher. |
+| Daily Catch is a first-class artifact (`AlgoTrader/Daily Catches/YYYY-MM-DD.md`) | Corpus Researcher's nightly output consolidating new arrivals (both internal and Web Researcher's continuous scrape), suggested compositions, and triage decisions. Persistent journal of what entered the system each day. Owned by Corpus Researcher. |
 | Source-type-aware triage scoring (baseline by source type, modified by per-item factors) | Cross-corpus ranking needs a way to weight a peer-reviewed paper vs an S&C article vs a TradingView post. Source-type baseline as starting evidence shape; per-item factors refine. |
 | **Ninth component category: `equity-curve`** (performance-conditional sizing / gating — related to but distinct from `position-sizing`) | Techniques that condition trading on the strategy's *own* recent performance: trade-only-when-equity-above-MA, skip-after-N-losses, SQN-based confidence scaling, equity-drawdown-gate. Conceptually distinct from per-trade sizing (which computes "how much" from market state) — equity-curve logic is self-referential, reading the strategy's own track record. Strategies compose both (e.g. vol-scaled per-trade sizing + equity-curve on/off gate). Keeping them orthogonal makes the composition explicit. |
 | Workflow B has two evaluation modes — standalone edge analysis and comparative swap-in | Entries and exits can be evaluated standalone via bar-by-bar forward-return profiling, *without* a full strategy composition. Cheap, composition-free edge profile per signal. Other component types (stops, TPs, sizing, equity-curve, timing, filters) require swap-in evaluation against host strategies. Both modes write to the same Component Library page. Starting-point evaluation for any new entry/exit signal is its edge profile. |

@@ -315,7 +315,7 @@ Eight **usage-role** categories + one **primitives** category (indicators). The 
 ```
 AlgoTrader/Knowledge/
 ├── components/
-│   ├── indicators/              # primitives layer — consumed by the 7 usage-role categories
+│   ├── indicators/              # primitives layer — consumed by the 8 usage-role categories
 │   │   └── {indicator-slug}/
 │   │       ├── _indicator.md    # math, prose, Python for AlgoTrader
 │   │       └── implementations/ # platform-specific code snippets
@@ -327,14 +327,18 @@ AlgoTrader/Knowledge/
 │   ├── stops/
 │   ├── take-profits/
 │   ├── position-sizing/
+│   ├── equity-curve/            # performance-conditional sizing/gating (self-referential)
 │   ├── entry-timing/
 │   └── regime-filters/
+├── metrics/                    # Open-ended metric catalog for bucketed conditional analysis
+│   └── {metric-slug}.md        # computation + default bucketing + findings + "when to apply" guidance
 ├── findings/                   # Effect-oriented findings (co-exist with components)
 │   ├── regimes/
 │   ├── asset-classes/
 │   ├── cross-cutting/
 │   └── meta/                   # Classifier-informativeness, component-selection meta-findings
-└── _conventions.md
+├── _pending.md                 # Level-2 held-for-confirmation items awaiting corroboration
+└── _conventions.md             # tag vocabulary, component/finding schemas, single-writer ownership
 ```
 
 ### Platform-implementations storage convention

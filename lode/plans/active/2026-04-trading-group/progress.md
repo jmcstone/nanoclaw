@@ -2,6 +2,23 @@
 
 ## Session log
 
+### 2026-04-20 — Phases 2-8 consistency pass
+- Swept Phases 2-8 for drift introduced by the operating-model round. Fixes:
+  - **Research methodology cycle diagram:** verdict terminology updated PROMOTE/REJECT/INVESTIGATE FURTHER → PROMOTE/PARK/INVESTIGATE FURTHER/RETURN TO INGESTION with F0-only constraint on RETURN TO INGESTION and F1+-only on PROMOTE.
+  - **Budgeting the cycle:** reframed from "one bundle per strategy under active development, 1-3 strategies simultaneously" to "Workflow C iteration slot per allocation policy with per-bundle 90-min cap and INCOMPLETE overrun verdict."
+  - **Phase 2 (Multi-source ingestion):** "three source types" → "four" (added academic_paper; ingestion script listed as `ingest-academic-paper.*`); added pilot-staging resumability; added Daily Catch integration; added daytime-execution-during-pilot note.
+  - **Phase 3 (Web research pipeline):** refactored as Web Researcher infrastructure; sources.yaml path moved from group config to vault (`AlgoTrader/Web Research/sources.yaml`); added quest handler + scout notebook scaffolding.
+  - **Phase 4:** expanded from "regime classifier framework" to "metric catalog + regime classifier framework + bucketed conditional analysis"; regime registry now a view over promoted metrics; bucketed conditional analysis added as pipeline stage; metric- and classifier-informativeness as dual deliverables; catalog curation review cadence wired in.
+  - **Phase 5:** reframed from strategy-centric nightly loop to operating-model nightly wall-clock. Added standalone edge analysis runner (Workflow B for entry/exit signals). Per-bundle 90-min cap, first-bundle shape selection, verdict routing in state-machine terminology, 07:00 CT digest post-time.
+  - **Phase 6:** three sweep directions → four sweep directions + re-ranking; Python component list updated to include `equity-curve/`; "7 usage-role" → "8 usage-role" in Engineer item.
+  - **Phase 7:** clean (already updated in researcher-split round).
+  - Added new **"Concept pilot execution (cross-phase activity)"** note between Phase 7 and Phase 8 clarifying when pilot runs relative to capability phases.
+  - **Phase 8:** renamed to "Hardening + recurring reviews". Added per-stage review, monthly allocation review, monthly metric-catalog curation review. Monthly retro adjusted to start after first month of steady-state; added Web Researcher scout-notebook productivity metric.
+  - **findings.md KB directory structure diagram:** added `equity-curve/` component category + `metrics/` + `_pending.md` explicitly; "7 usage-role" → "8 usage-role".
+  - **Morning digest contents:** aligned with state-machine terminology (promotions, parks, RETURN TO INGESTION flags, retirement recommendations pending Jeff's confirmation, Sweeper staging items awaiting review).
+  - **Researcher → Corpus Researcher** in current-state locations (triage authority, Daily Catch ownership, entry-signal-bias decision row). Historical decision rows (e.g. "Start swarm at 6 roles", "Strategy Author separated from Researcher and Engineer") left intact since they document the evolution.
+- No new decisions — this is a consistency pass aligning existing phase checklists with the Operating Model locked this round.
+
 ### 2026-04-20 — Researcher split (Corpus + Web) + Topic 6 shapes
 - Topic 6 (first-bundle) split into **five shapes** depending on what's being onboarded: Shape A complete strategy (~6-8 runs: sanity + baseline(s) + auto regime attribution + LLM-selected bucketed analysis + robustness probes + walk-forward); Shape B standalone entry signal (~1-2 runs: edge profile + random-entry baseline + bucketed analysis, no full backtests); Shape C standalone exit signal (same but random-exit baseline); Shape D standalone component (~3-6 runs via Workflow B swap-in against host strategies); Shape E newly-composed strategy (like A with sharper initial hypotheses because components already have evidence).
 - **Researcher role split into Corpus Researcher + Web Researcher — 7-agent roster.** Supersedes earlier "6 agents" decision.
