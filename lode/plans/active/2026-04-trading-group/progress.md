@@ -2,6 +2,27 @@
 
 ## Session log
 
+### 2026-04-20 — Operating-model round
+- Reviewed the plan; surfaced inconsistencies (Phase 1 marked incomplete in tracker but done in topics-status; a-mem marked deferred but actually installed). Synced tracker to reality (Phase 1 ✅ with commit 8e8d995; a-mem decision superseded; Current status updated).
+- Walked through the three open topics and discovered the scoped question ("what does a first bundle look like") was actually a symptom of a larger missing layer: **the operating model of the system itself**.
+- Major operating-model design locked in this round (all captured as decisions in tracker.md and summarized as Topic 9 in topics-status.md):
+  - **Four workflows + daily connector**: A ingestion / B component evaluation / C strategy iteration / D creativity / E daily flow. Ingestion is component-first, not strategy-first — many sources contribute only components.
+  - **Unified cross-corpus ranked backlog** with structured-reason triage (Obsidian-native: frontmatter cursors + `#triage-blocker/*` / `#triage-credit/*` inline tags + prose). Same Sweeper mechanism as `unresolved_weaknesses:`. Items persist indefinitely; only `retired` leaves.
+  - **Triage criteria evolve** — early ranking is rough; sharpens with knowledge. Don't over-engineer day one.
+  - **Daily Catch** as first-class artifact (`AlgoTrader/Daily Catches/YYYY-MM-DD.md`). Researcher's nightly journal.
+  - **Pilot-then-bulk** convention — concept pilot (one-time, broad, entire stack) vs source-type pilot (recurring, narrow, extraction only) distinguished.
+  - **Concept pilot is staged additively** on S&C: 6→12→24→48→96 months cumulative. Each stage = ingest + re-triage + test top + capture findings + update criteria + decide next stage.
+  - **No hard Mode 1 / Mode 2 boundary.** Single daily flow with four input sources (backlog dip / daily catch / iteration / creativity) whose allocation share evolves as corpus matures. Starting allocation table documented.
+  - **Workflow D (creativity) is first-class and budgeted**, not just reactive.
+- **9th component category `equity-curve`** added (performance-conditional sizing/gating — related to but distinct from position-sizing; reads the strategy's own track record). Updated findings.md category table + consistency-swept 8→9 / 7→8 references.
+- **Workflow B has two evaluation modes**: standalone edge analysis (for entry/exit signals — bar-by-bar forward-return profiling, cheap, composition-free) and comparative swap-in (for everything else). Bar-by-bar profiling is the starting-point evaluation for any entry/exit signal.
+- **Random-entry baseline** is the reference for standalone edge analysis — not zero. A signal whose bar-N returns don't beat random entry into the same asset/regime has no edge.
+- **Bucketed conditional analysis** as the cheap first-line diagnostic. Re-slice existing trade logs against any metric with decision-time value; bucket by percentile/threshold; compute performance per bucket. Runs are budgeted; bucketed analysis is not.
+- **Metric catalog** at `AlgoTrader/Knowledge/metrics/` as new top-level KB artifact. Open-ended. Each metric carries computation + default bucketing + accumulated findings + "when to apply" guidance. Regime classifier registry = promoted subset.
+- **Metric selection per baseline is LLM-judgment-driven**, biased toward too many (analysis is cheap). Strategy-aware — intraday gets intraday-relevant metrics, trend-followers get trend-relevant, etc.
+- **Metric catalog ownership: Regime Analyst** (no new role). **Promotion criteria loose; periodic curation review handles it** — per pilot stage gate, then monthly in steady state.
+- **Status:** Topic 9 (Operating model) closed 🟢; Topic 6 narrowed to first-bundle shape only 🟡; Topics 7/8 still 🔴 but informed by operating model. Moving to Topic 6 next.
+
 ### 2026-04-18 — Planning session
 - Jeff requested a second Telegram group focused on trading-strategy research: S&C magazine ingestion (20 years of PDFs), nightly web research, nightly backtest runs against AlgoTrader, results to Obsidian.
 - Confirmed AlgoTrader at `~/Projects/AlgoTrader/` already has: strong anti-overfit practices, ORB strategy, three-layer architecture, run-report naming convention, `uv`-managed Python env.
@@ -200,8 +221,8 @@
 |------|-------|------------|
 
 ## Reboot check (5 questions)
-1. **Where am I?** — Phase 0 (planning) complete with expanded scope. No code changes yet.
-2. **Where am I going?** — Phase 1: create `groups/telegram_trading/`, register a new Telegram chat, verify mounts + scheduling.
-3. **What is the goal?** — A Telegram-hosted swarm of 6 lane-focused agents (Researcher, Regime Analyst, Skeptic, Strategy Author, Documenter, AlgoTrader Engineer) that ingests S&C PDFs, does nightly web research, attributes strategy performance across market regimes, adds indicators one-at-a-time targeting weak regimes with cross-year + cross-asset + walk-forward gates, and accumulates reusable findings in a curated knowledge base. Single-writer discipline keeps lanes clean.
-4. **What have I learned?** — AlgoTrader's practices already encode the anti-overfit discipline Jeff is worried about; the Skeptic adopts them verbatim. AlgoTrader already has `walkforwards.py` and a `Walkforwards/` vault folder. The regime-classification module is itself a platform feature the AlgoTrader Engineer will build (Phase 4). The Findings KB is the compounding flywheel that makes the nightly loop worth running.
-5. **What have I done?** — Initialized lode (summary, terminology, practices, lode-map), wrote the trading-group plan with 8 phases / decisions table / anti-overfit rubric / regime axis taxonomy / KB schema / 4-agent roster.
+1. **Where am I?** — Phase 1 infrastructure complete (a14c646). Design round 2026-04-20 just locked the **Operating model** as Topic 9. Three open topics remain before Phase 2 starts: Topic 6 (first-bundle shape, narrowed 🟡), Topic 7 (strategy state machine 🔴), Topic 8 (nightly wall-clock 🔴).
+2. **Where am I going?** — Work through Topic 6 → 7 → 8 in order. Topic 6 has a draft shape to confirm (~8-12 runs: sanity + 3 baselines + regime attribution + robustness probes + walk-forward). Topic 7 defines state transitions + authorities. Topic 8 defines the nightly choreography including allocation-policy enforcement.
+3. **What is the goal?** — A Telegram-hosted swarm of 6 lane-focused agents running four workflows (ingestion, component evaluation, strategy iteration, creativity) through a unified ranked backlog + Component Library + Findings KB + Metric Catalog. Starts with a staged concept pilot on S&C (6→12→24→48→96 months), then runs daily forever. Anti-curve-fit discipline first-class via 18-item Skeptic rubric. Bucketed conditional analysis + random-entry baselines make evaluation cheap before committing run budget.
+4. **What have I learned?** — The original plan described the system as single-workflow ("test strategies"). Real system has four workflows and ingestion is component-first, not strategy-first. Triage ranks everything with structured reasons (not binary in/out) so the Sweeper can resurface items when blockers resolve. Bucketed conditional analysis is effectively free and should be used aggressively before spending run budget. The 5 regime classifiers are a promoted subset of a broader open-ended metric catalog. Standalone edge analysis on entry/exit signals needs a random-entry baseline, not a zero baseline. Equity-curve-based sizing is a 9th component category distinct from position-sizing.
+5. **What have I done?** — Initialized lode; wrote 8-phase plan with ~70+ decisions; ran S&C + book validation exercises generating ~33 design refinements; Phase 1 infrastructure landed in commit a14c646 (group registered, mounts wired, a-mem installed, end-to-end validated). 2026-04-20 round: operating-model design locked (Topic 9 🟢); tracker + findings + topics-status + progress updated; consistency-swept 8→9 / 7→8 category references.

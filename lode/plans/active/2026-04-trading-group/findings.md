@@ -288,24 +288,25 @@ Each classifier's output is a **small set of named buckets**, not a continuous s
 
 ## Component Library — strategies as compositions
 
-Strategies decompose into reusable components along seven orthogonal axes. Knowledge accumulates at the **component** level, not just the strategy level, because the same component (e.g. fixed-ATR stop) appears in many strategies and its track record transfers across all of them.
+Strategies decompose into reusable components along eight orthogonal usage-role axes (plus indicators as a primitives layer consumed by all of them). Knowledge accumulates at the **component** level, not just the strategy level, because the same component (e.g. fixed-ATR stop) appears in many strategies and its track record transfers across all of them.
 
 ### Why this matters
 
 Most public trading literature fixates on entry signals because "you have to have a way to get in." Exit rules, stop patterns, take-profit logic, position-sizing, entry-timing, and regime-gating all receive far less attention — even though they often carry more of the edge than the entry signal. The component-oriented KB design directly counters this bias: every category is a first-class citizen with its own evidence library, its own curation, and its own research output. Findings compound because "fixed-ATR stop fails on leveraged ETFs" learned in one strategy becomes immediately available to every other strategy considering that stop component.
 
-### The eight component categories
+### The nine component categories
 
-Seven **usage-role** categories + one **primitives** category (indicators). The primitives layer exists because indicators (MAMA, RSI, LeavittConvSlope) are consumed by multiple usage-role components — they deserve their own library home rather than being buried inside whichever usage-role happened to first reference them.
+Eight **usage-role** categories + one **primitives** category (indicators). The primitives layer exists because indicators (MAMA, RSI, LeavittConvSlope) are consumed by multiple usage-role components — they deserve their own library home rather than being buried inside whichever usage-role happened to first reference them.
 
 | Category | Examples | Notes |
 |---|---|---|
-| **indicators** (primitives) | atr, rsi, leavitt-convolution-family, mama-fama, btr, sqn | The raw computational primitives. Consumed by the 7 usage-role categories below. Each indicator file carries its math definition + Python implementation for AlgoTrader + platform-specific implementation snippets (TradeStation EasyLanguage, Wealth-Lab C#, etc.) under an `implementations/` subfolder. |
-| **entries** | opening-range-breakout, volatility-contraction, eight-day-continuation-pattern, atr-breakout | The entry signal itself — the thing that fires a position |
-| **exits** | eod-flat, opposite-signal-flip, ma-cross-exit, trailing-indicator, same-day-close | Signal-driven exits (distinct from stops/TPs which are risk-rule exits) |
+| **indicators** (primitives) | atr, rsi, leavitt-convolution-family, mama-fama, btr, sqn | The raw computational primitives. Consumed by the 8 usage-role categories below. Each indicator file carries its math definition + Python implementation for AlgoTrader + platform-specific implementation snippets (TradeStation EasyLanguage, Wealth-Lab C#, etc.) under an `implementations/` subfolder. |
+| **entries** | opening-range-breakout, volatility-contraction, eight-day-continuation-pattern, atr-breakout | The entry signal itself — the thing that fires a position. *Evaluable standalone via bar-by-bar forward-return edge profile vs. random-entry baseline in same asset/regime. A signal whose bar-N edge doesn't beat random entry has no standalone signal.* |
+| **exits** | eod-flat, opposite-signal-flip, ma-cross-exit, trailing-indicator, same-day-close | Signal-driven exits (distinct from stops/TPs which are risk-rule exits). *Evaluable standalone via bar-by-bar forward-return edge profile vs. random-exit baseline on entries-in-regime.* |
 | **stops** | fixed-atr, fixed-pct-stop, chandelier, volatility-adjusted, breakeven-on-winner-at-midway, no-stop | Risk-rule exits on adverse movement |
 | **take-profits** | fixed-r-multiple, fixed-pct-target, trailing-percent, partial-scale-out, tiered-targets, no-tp | Risk-rule exits on favorable movement |
-| **position-sizing** | fixed-fraction, vol-scaled, kelly-fraction, regime-conditioned-sizing, scaled-in-incremental-dollar-interval | Often carries more edge than the entry signal; historically under-researched |
+| **position-sizing** | fixed-fraction, vol-scaled, kelly-fraction, regime-conditioned-sizing, scaled-in-incremental-dollar-interval | Per-trade sizing — computes "how much" from market state. Often carries more edge than the entry signal; historically under-researched. |
+| **equity-curve** | trade-only-when-equity-above-ma, skip-after-n-losses, sqn-confidence-scaling, equity-drawdown-gate, turtle-trade-off-off-on | *Performance-conditional sizing / gating.* Reads the strategy's **own** recent track record and modifies position size or gates trading accordingly. Distinct from position-sizing (which reads market state) — equity-curve components are self-referential. Strategies compose both orthogonally. |
 | **entry-timing** | session-open, pullback-to-ma, breakout-confirmation, next-day-on-bar-break, time-of-day-gate | Orthogonal to entry signal — the same signal can be acted on at different moments |
 | **regime-filters** | vix-tier-block-above-high, atr-percent-lt-threshold, btr-regime-cap-flips | Session-level gates that modulate whether entries fire at all |
 
@@ -547,7 +548,8 @@ Each artifact has exactly one owning agent. Others read; only the owner writes. 
 | Promotion verdict (structured object, not a file per se) | Skeptic | Hard veto authority |
 | `AlgoTrader/Backtests/` (run writeups with verdicts) | Documenter | Records Skeptic's verdict + run metadata. Each run report links to its chart(s). |
 | `AlgoTrader/Charts/` (flat directory of all chart PNGs) | Strategy Author (generates during run) / Documenter (ensures they exist) | Shared across assets. Kebab-case filenames derived from the run stem. Sweep runs generate combined-view charts by default; small-multiples fallback when >~10 variants. |
-| `AlgoTrader/Knowledge/components/` (component library, 8 categories: indicators + 7 usage-role) | Documenter (curation, cross-linking, track record), AlgoTrader Engineer (code implementations under `trade/components/` mirroring the 8 categories) | Components have stable-by-contract IDs; evolution is new-versioned-component, not mutation. Bootstrap by decomposing ORB in Phase 6. |
+| `AlgoTrader/Knowledge/components/` (component library, 9 categories: indicators + 8 usage-role) | Documenter (curation, cross-linking, track record), AlgoTrader Engineer (code implementations under `trade/components/` mirroring the 8 usage-role categories) | Components have stable-by-contract IDs; evolution is new-versioned-component, not mutation. Bootstrap by decomposing ORB in Phase 6. |
+| `AlgoTrader/Knowledge/metrics/` (metric catalog for bucketed conditional analysis) | Regime Analyst (proposes, curates catalog entries), AlgoTrader Engineer (implements metric computations), Documenter (page-level curation, cross-links) | Open-ended; each entry carries computation + default bucketing methodology + accumulated findings + "when to apply" guidance. Regime classifier registry is the curated promoted subset. |
 | `components/indicators/{slug}/implementations/{platform}.ext` (Traders' Tips vendor code) | Documenter (files from ingestion), Engineer (Python impl for AlgoTrader, cross-verification against platform variants) | Populated primarily from S&C Traders' Tips. Enables cross-platform verification and future C# production-migration templates. |
 | `AlgoTrader/Knowledge/findings/` (the effect-oriented Findings KB) | Documenter | Curated, not chronological. Levels 2 & 3 feed here. Coexists with components/. |
 | `AlgoTrader/Knowledge/_pending.md` (held-for-confirmation findings) | Documenter | Level-2 items awaiting a second bundle's corroboration |

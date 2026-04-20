@@ -105,17 +105,71 @@ Organized by topic (current state), not chronological. For chronological history
 
 ---
 
-## Topic 6 — First-bundle composition  🔴
+## Topic 6 — First-bundle composition  🟡
 
-**Not yet addressed.** The question is: what does a freshly-ingested strategy's opening investigation bundle look like, and how does it differ from the Nth iteration on a known strategy?
+**Narrowed and informed by Topic 9 (Operating model).** The system has multiple onboarding paths now defined — backlog dip from bulk ingestion, daily catch arrival, Workflow-D composition. The remaining question is just the *bundle shape* itself, which is the same regardless of trigger.
 
-**Now informed by:** the component-oriented KB means the first bundle has a lot of prior context available — ingested strategy decomposes into components, each with existing evidence; Sweeper's reverse-match annotates the strategy with relevant findings before the first bundle runs. So the "first bundle" is less about discovery and more about verifying the composition works in our universe, attributing across the 5 regime classifiers, establishing the baseline.
+**Working draft (to confirm):** ~8-12 runs per first bundle —
+- 1 sanity check (catches ingestion bugs)
+- 3 baseline runs (QQQ + 2 same-class leveraged variants on author's stated "best" config)
+- regime attribution across all 5 classifiers (computed from baseline data, no separate runs)
+- 2-4 robustness probes (data-window jitter, hyperparameter jitter)
+- 1 walk-forward (early failure here = no point in subsequent bundles)
+
+**Verdict:** F0 *never* PROMOTEs — insufficient cross-year evidence. Always one of: INVESTIGATE FURTHER (promising — hand off to F1 with named weakness), PARK (survives but no clear next move; record `unresolved_weaknesses:`), or RETURN TO INGESTION (mechanism didn't reproduce).
+
+**Open sub-questions:**
+- QQQ-only (5 runs) vs QQQ + 2 leveraged variants (8 runs)?
+- Walk-forward in F0 vs deferred to F1?
+- Does Researcher (who ingested) own the RETURN TO INGESTION verdict, or Skeptic?
+
+---
+
+## Topic 7 — Strategy state machine  🔴
+
+**Now informed by Topic 9.** Adds at minimum a `triaged` state ahead of testing, and re-ranking transitions on backlog and parked items.
+
+States drafted (`untested → triaged → first_bundle_running → investigating → parked | promoted | retired`) but transitions, preconditions, and reverse-transitions undefined.
 
 **Questions to resolve:**
-- What's the minimum run set for a first bundle? (Baseline per asset × regime attribution across all 5 classifiers × robustness probe = ~10-15 runs)
-- Do we run first-bundle on the full Tier 1 universe or a subset? (Cost vs. breadth tradeoff)
-- How does the first bundle's output prime the Nth-iteration flow? (What context does it hand off to weakness-targeting?)
-- Does the first bundle ever produce a PROMOTE verdict, or only INVESTIGATE FURTHER? (Probably never promotes; insufficient evidence for cross-year/walk-forward gates on a fresh strategy)
+- Preconditions per transition (e.g. `parked` requires `unresolved_weaknesses:`; `promoted` requires all 18 rubric gates)
+- Reverse transitions (`parked → investigating` from Sweeper revisit; `promoted → investigating` if production divergence found)
+- Transition authority per state (Strategy Author? Skeptic verdict? Documenter?)
+- Sweeper interaction (re-ranks backlog items; revisits parked items; skips retired)
+
+---
+
+## Topic 8 — Nightly wall-clock  🔴
+
+**Now informed by Topic 9.** Allocation policy across the four input sources (backlog/catch/iteration/creativity) is the steady-state shape; pilot stages have their own wall-clock variant.
+
+**Questions to resolve:**
+- Cycle start time (probably 2 AM ET post-data-settle, but Jeff's morning review window matters — digest must land before he wakes)
+- Intra-cycle sequence (Sweeper first → Daily Catch ingestion → triage update → run allocation → Workflow C/D execution → Documenter digest)
+- Allocation enforcement point (per-bundle? Per-agent-handoff?)
+- Weekly Sweeper schedule (Sunday evening so Monday starts fresh)
+- Per-stage cadence during the additive concept pilot (each stage's wall-clock differs from steady-state)
+- Overrun behavior (carry forward or drop?)
+
+---
+
+## Topic 9 — Operating model  🟢
+
+**Closed for initial use.** The system's daily operating shape — workflows, backlog, triage, pilot strategy, allocation policy. See [tracker.md](tracker.md) "Operating model" section for full detail.
+
+**Key decisions (~13 entries in tracker.md "Operating-model decisions" table):**
+
+- **Four workflows + daily connector:** A ingestion / B component evaluation / C strategy iteration / D creativity / E daily flow connector. Component-first, not strategy-first.
+- **Unified ranked backlog (cross-corpus).** Every ingested strategy enters one ranked queue. Source-type-aware scoring + per-item factors. Items persist indefinitely; only `retired` items leave.
+- **Triage is structured-reason-driven** with Obsidian-native storage (frontmatter cursors + inline `#triage-blocker/*` and `#triage-credit/*` tags + prose). Same mechanism as `unresolved_weaknesses:`. Sweeper matches blocker tags against newly-resolved capabilities to trigger re-ranking.
+- **Triage criteria evolve.** Owned by Documenter at `_triage-criteria.md`. Periodic re-triage sweeps re-evaluate older items. Don't over-engineer initial criteria — early ranking is necessarily rough.
+- **Daily Catch artifact** at `AlgoTrader/Daily Catches/YYYY-MM-DD.md`. Researcher's nightly journal of arrivals, compositions, and triage decisions.
+- **Pilot-then-bulk for any new source-type.** Recurring convention. Concept pilot (one-time, broad) vs source-type pilot (recurring, narrow) are different scopes.
+- **Concept pilot is staged additively** on S&C: 6→12→24→48→96 months cumulative. Each stage = ingest + re-triage + test top + capture findings + update criteria + decide next stage. Smooth transition into steady-state at the end.
+- **No "Mode 1 / Mode 2" boundary.** Single daily flow with four input sources whose budget allocation evolves with corpus maturity (table in tracker.md).
+- **Workflow D (creativity) is first-class and budgeted**, not just reactive. Allocation grows as library matures.
+
+**Why it's compounding:** three reinforcing loops — Backlog→KB→re-ranking, Components→Strategies→component evidence, Daily Catch→Library+Backlog→Sweeper revisits.
 
 ---
 
@@ -155,14 +209,14 @@ These decisions cut across multiple topics and are the backbone of the system:
 - **Single-writer discipline:** each artifact has exactly one owning agent; others read. Prevents swarm merge conflicts.
 
 ### Component Library — the major KB restructure  🟢
-Strategies decompose into reusable components along **eight categories** (one primitives layer + seven usage-role categories):
-- **Primitives:** `indicators` (RSI, ATR, LeavittConvSlope, MAMA — consumed by the 7 below)
-- **Usage-role:** `entries`, `exits`, `stops`, `take-profits`, `position-sizing`, `entry-timing`, `regime-filters`
+Strategies decompose into reusable components along **nine categories** (one primitives layer + eight usage-role categories):
+- **Primitives:** `indicators` (RSI, ATR, LeavittConvSlope, MAMA — consumed by the 8 below)
+- **Usage-role:** `entries`, `exits`, `stops`, `take-profits`, `position-sizing`, `equity-curve`, `entry-timing`, `regime-filters`
 - KB gains `components/{7 subfolders}/` alongside existing `findings/`
 - Components have their own track records, accumulated across every strategy they appear in
 - Strategy files reference components via wikilinks, not free-form text
 - Component identity is stable-by-contract (evolution = new versioned component)
-- AlgoTrader Engineer mirrors the 8 categories in `trade/components/` Python code (indicators subpackage + 7 usage-role subpackages)
+- AlgoTrader Engineer mirrors the 9 categories in `trade/components/` Python code (indicators subpackage + 8 usage-role subpackages)
 - Platform-specific code snippets (from S&C Traders' Tips) stored under `components/{category}/{slug}/implementations/{platform}.ext` for cross-platform verification and C# production-migration templates
 - Phase 6 bootstraps the library by decomposing ORB (seed with ~10+ real-evidence entries on day one)
 - Explicit rationale: counters the field-wide **entry-signal bias**, where exits/stops/TPs/sizing/timing/regime-gating are under-researched relative to the entry signal
@@ -231,7 +285,7 @@ Additional resolutions in the same round:
 
 | Artifact | Contains |
 |---|---|
-| [tracker.md](tracker.md) | 8 phases, agent roster with responsibilities, decisions table (~35 entries), research methodology, run-type taxonomy |
+| [tracker.md](tracker.md) | **Operating model** (workflows, backlog, triage, pilot strategy, allocation policy), 8 phases, agent roster with responsibilities, decisions table (~70+ entries), research methodology, run-type taxonomy |
 | [findings.md](findings.md) | Regime classifier registry, component library design, KB schemas, ownership matrix, anti-overfit rubric, asset-class taxonomy |
-| [progress.md](progress.md) | Chronological log of 12 refinement rounds, reboot check |
+| [progress.md](progress.md) | Chronological log of refinement rounds, reboot check |
 | **This file** | **Current status by topic; use as the map** |

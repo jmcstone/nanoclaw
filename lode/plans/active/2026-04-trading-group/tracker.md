@@ -11,7 +11,150 @@ Stand up a second Telegram group powered by NanoClaw that becomes Jeff's world-c
 - **AlgoTrader is the source of truth for backtests.** NanoClaw shells out to it; it does not reimplement strategy logic.
 - **Secrets via OneCLI only.** No API keys in container env.
 
+## Operating model
+
+The system operates as a continuous funnel: trading ideas enter from any source at any granularity (component or complete strategy) → land in a unified ranked backlog → triage promotes top items into nightly testing → results accumulate in the Component Library and Findings KB → KB drives both targeted iteration on existing strategies and creative composition of new ones. The funnel runs daily forever once seeded.
+
+### Four workflows + daily connector
+
+The system has four primary workflows. They share artifacts, agents, and scheduling — they differ in what triggers them and what they produce.
+
+**Workflow A — Component ingestion.** Sources contribute trading ideas at any granularity: entries, exits, stops, take-profits, position-sizing, equity-curve (performance-conditional sizing/gating), entry-timing, regime-filters, indicators — *or* complete strategies. A single S&C article might contribute only a stop pattern; a book chapter might contribute a complete strategy plus three reusable components; a paper might contribute an indicator and an entry signal but no exit. Ingestion populates the Component Library and produces 0-N strategy compositions per source. **Ingestion is not always strategy-producing** — many sources contribute only components.
+
+**Workflow B — Component evaluation.** Two evaluation modes depending on the component type:
+
+- **Standalone edge analysis** (entry and exit signals). Fire the signal and measure the forward-bar return distribution at 1, 2, 3, …, N bars, attributed by regime/asset. **The meaningful baseline is a random-entry benchmark into the same asset/regime** — not zero. A positive forward return proves nothing if random entries into the same pool produce the same positive return (e.g. equities are up on average). What matters is the *delta* of the signal vs. random. If the signal's bar-N edge isn't beating random entry, there's no signal. Bar-by-bar forward-return profiling (with random-entry baseline) is the starting-point evaluation for entry/exit signals — cheap, composition-free, and produces a well-defined "edge profile" for each signal that lives on its Component Library page.
+- **Comparative swap-in** (for stops, take-profits, position-sizing, equity-curve, entry-timing, regime-filters). Swap component X into one or more host strategies; measure the delta vs. the strategy's incumbent component, attributed by regime/asset. Evidence accumulates on the component's library page across every host strategy it's been tried in.
+
+Both modes write findings to the same component-library page — the component's track record is the union of its standalone edge profile and its swap-in deltas.
+
+**Bucketed conditional analysis — the cheap first-line diagnostic.** Before spending backtest budget on new strategy variants, slice the *existing* trade log (or bar-by-bar forward returns) against any market metric with a well-defined decision-time value. Bucket the metric by percentile or threshold, compute strategy/signal performance per bucket, spot where the edge lives and where it breaks.
+
+- **The bucketing is free** given existing results. No new backtest runs — only metric-computation + groupby. This is the primary way to discover strategy weaknesses cheaply, *before* committing Workflow C iteration budget. **Runs are the budgeted resource; bucketed analysis is not.** The 25-run nightly budget pays for backtest executions; conditional-attribution passes run essentially unbounded on every baseline's trade log.
+- **The metric catalog is open-ended.** Any metric with a well-defined decision-time value qualifies: VIX, ATR(N), opening gap, distance-from-MA(200), distance-from-MA(100), breadth (% above 50/200DMA), yield-curve slope, credit spread, COT positioning, day-of-week, days-from-FOMC, and whatever else proves useful. Catalog lives at `AlgoTrader/Knowledge/metrics/` alongside `components/` and `findings/`. Each metric entry carries: its computation + default bucketing methodology (percentile windows, fixed thresholds, MA-distance bands, etc.) + **accumulated findings/observations** (where it's proved discriminating, where it hasn't, for which strategy families) + **"when to apply" guidance** (strategy-family tags, hold-duration relevance, mechanism applicability) so the selecting agent can pick intelligently.
+- **Metric selection per baseline is LLM-judgment-driven, not auto-run-all.** The Regime Analyst (or whichever agent is diagnosing) consults the catalog and picks metrics relevant to the strategy being tested — intraday strategies get intraday-relevant metrics; daily trend-followers get trend-relevant metrics; mean-reversion strategies get vol + range metrics; etc. **Err toward selecting too many rather than too few**, because conditional analysis is cheap. The promoted classifiers often end up among the picks but are not privileged — the selection is strategy-aware, not classifier-only.
+- **Regime classifiers are the curated, promoted subset.** The five classifiers (`vix-tier`, `gap-size`, `price-range`, `trend-basic`, `sqn-market-type`) are metrics that graduated to classifier status: stable labels, locked bucketing, KB-wide tag namespace (`#regime/<classifier>/<label>`). Any metric in the catalog that consistently discriminates performance across many strategies can be promoted to the classifier registry. Classifier registry = view over promoted metrics.
+- **What bucketed analysis feeds:**
+  - *Standalone edge profile per signal* (bar-by-bar returns × metric buckets → heatmap; signal vs. random-entry baseline in each bucket)
+  - *Strategy weakness identification* ("underperforms when VIX > p75 AND MA(200) posture flat" → Workflow C hypothesis input)
+  - *Metric-informativeness scoring per strategy* — for this strategy, which metrics discriminate performance?
+  - *Classifier-promotion candidates* — metrics that discriminate consistently across many strategies become classifier-registry promotion candidates.
+
+**Workflow C — Strategy iteration.** Existing strategy + identified weakness → pre-stated hypothesis → investigation bundle → Skeptic verdict. Candidate components for the hypothesis come from the Component Library (where Workflow B has been building evidence on each). This is the bundle cycle described in "Research methodology" below.
+
+**Workflow D — Strategy creation from corpus.** The swarm composes a *novel* strategy from library components — not from any single source. Triggers: newly-ingested entry signal looking for an exit/stop/sizing pairing already in the library; Sweeper-detected composition gap ("we have 12 stop patterns but no swing strategy on vol ETFs uses any of them"); explicit synthesis hypothesis ("never-tried combination of X + Y + Z"); Researcher proposal during ingestion. A created strategy then enters Workflow C's testing pipeline as a freshly-composed candidate.
+
+**Workflow E — Daily flow (connector).** Each daily cycle: ingestion runs (Workflow A) on whatever's in the day's source queue; daily catch produced; new components/strategies enter the backlog with triage ranks; Sweeper runs (per its cadence) to match new arrivals against existing backlog and findings; nightly testing budget is allocated across workflows per the current allocation policy; Documenter writes morning digest.
+
+### Unified ranked backlog (cross-corpus)
+
+Every ingested strategy enters one ranked queue, regardless of source. The S&C 2018 article, the TradingView post from yesterday, the Ehlers book chapter from 2004, and the Workflow-D-composed candidate all compete on the same axis.
+
+**Ranking is structured-reason-driven, not opaque-score-driven.** Each backlog item carries a rank (frontmatter cursor) and inline tagged reasons describing why it ranks where it does. The Sweeper matches blocker tags against newly-resolved capabilities to trigger re-ranking.
+
+Storage follows the project's locked Obsidian-native convention: minimal frontmatter (`triage_rank`, `triaged_at`, `last_re_ranked_at`, `status`) + inline hierarchical tags co-located with the claim they describe + prose narrative. Tag namespaces:
+- `#triage-credit/<axis>/<detail>` — positive factors (e.g. `#triage-credit/source-type/peer-reviewed`, `#triage-credit/author/credible`)
+- `#triage-blocker/<axis>/<detail>` — blocking factors (e.g. `#triage-blocker/asset-class/individual-stocks-coverage-thin`, `#triage-blocker/decomposition/pattern-not-systematic`)
+
+Example triage section in a backlog strategy file:
+
+```markdown
+## Triage
+**Rank:** #437. Low — testing not warranted given current knowledge + universe.
+
+Established-magazine source, author credible.
+#triage-credit/source-type/established-magazine #triage-credit/author/credible
+
+Targets individual stocks; we trade ETFs predominantly with only a small Tier-1.5 stock list.
+#triage-blocker/asset-class/individual-stocks-coverage-thin
+
+Move-up triggers: if we expand individual-stock universe.
+```
+
+When (e.g.) the Engineer adds individual-stock universe support, the Sweeper greps for `#triage-blocker/asset-class/individual-stocks-coverage-thin`, finds matching items, re-ranks them with that blocker dropped.
+
+**Triage criteria themselves evolve.** Owned by Documenter at `AlgoTrader/Knowledge/_triage-criteria.md`. Versioned; periodic re-triage sweeps re-evaluate older items against current criteria. Don't over-engineer initial criteria — early ranking is necessarily rough; sharpens as the KB matures and we learn what discriminates.
+
+**Items persist in the backlog indefinitely.** Even very-low-ranked items stay — they may resurface years later when a blocker resolves. Only `retired` items (explicit "this will never work in our universe") leave.
+
+**Triage authority:**
+- Researcher ranks at ingestion using current criteria.
+- Skeptic vetoes promotion to "test now" priority — methodology auditor pre-screen.
+- Documenter owns criteria evolution and runs re-triage sweeps on a periodic cadence.
+
+### Daily Catch — Researcher's nightly journal
+
+Each day's discovery produces a first-class artifact at `AlgoTrader/Daily Catches/YYYY-MM-DD.md`. Records:
+- New components found (with source links)
+- Complete strategies found
+- Suggested compositions (Workflow D candidates)
+- Per-item disposition: `test now` | `queue` | `park` | `reject` (with reason)
+- Outputs of the night's testing on items marked `test now`
+
+The Daily Catch is the upstream input that the Sweeper has not yet matched — it's the day's raw arrivals before they've propagated through the backlog and KB. Persistent journal of what entered the system each day.
+
+### Onboarding new sources — pilot-then-bulk
+
+Any new source-type gets a pilot before bulk ingestion. Two distinct pilot scopes:
+
+| Pilot type | When | Scope | Exit criteria |
+|---|---|---|---|
+| **Concept pilot** | Once, at system inception | Entire stack: ingestion + decomposition + triage + first-bundle execution + KB accumulation + Sweeper + daily-catch + agent coordination | The four workflows actually work end-to-end; artifacts are well-formed; pipeline issues found and fixed |
+| **Source-type pilot** | When adding any new source-type (Trader's World, TradingView, etc.) | Just the ingestion side: extraction quality on this source's PDFs/HTML/format; source-specific metadata captures correctly; new tags or schema fields added if needed | Extraction is acceptable; downstream pipeline already proven elsewhere |
+
+The very first S&C ingestion is *both* — concept pilot wrapped around an S&C-specific pilot. Every subsequent corpus is just source-type.
+
+### Concept pilot is staged (additive ramp on S&C)
+
+Rather than one-shot "small pilot → fix → commit to all 132 issues," the concept pilot ramps additively, with full re-triage of the entire backlog at each stage gate:
+
+| Stage | Cumulative S&C | Delta added |
+|---|---|---|
+| 1 | 6 months | +6 |
+| 2 | 12 months | +6 |
+| 3 | 24 months | +12 |
+| 4 | 48 months | +24 |
+| 5 | 96 months | +48 |
+| 6 | full archive | +remaining |
+
+Stage sizes roughly double — early stages small for fast learning, later stages large because criteria are stable. Numbers are starting suggestions, tunable per-stage based on how the prior stage went.
+
+Each stage is a complete cycle:
+1. Ingest the next slice (Workflow A)
+2. **Re-rank the entire backlog** using sharpened triage criteria from prior stage's learning (Sweeper)
+3. Test the top N from the now-larger, now-sharper backlog (Workflow C; some Workflow D as the library matures)
+4. Capture findings into KB
+5. Update triage criteria; document what we learned about ranking
+6. Decide whether to proceed to next stage, repeat the same stage size, or pause
+
+Smooth transition into steady-state operations — the last pilot stage just becomes the first day of steady-state daily flow.
+
+### Evolving budget allocation (not "modes")
+
+There is no hard "Mode 1 / Mode 2" boundary. There is one daily flow with four input sources whose share of the nightly run budget evolves as the corpus matures:
+
+| Allocation | Day 1 | After ~6 months | After ~2 years |
+|---|---|---|---|
+| Backlog dip (top of ranked queue) | 80% | 40% | 15% |
+| Daily catch processing | 10% | 25% | 25% |
+| Workflow C iteration on parked/active strategies | 5% | 20% | 35% |
+| Workflow D creativity | 5% | 15% | 25% |
+
+Numbers are starting allocations; the policy is reviewed monthly (or per stage in the pilot) and tuned with telemetry.
+
+Rationale: in early days, almost the entire budget should drain the backlog because that's where signal lives and the corpus to be creative with is thin. Over time the backlog ages, daily-catch becomes a meaningful slice, the library becomes rich enough to compose novelly, and ongoing iteration on tested strategies eats a growing share.
+
+### Why the operating model is compounding
+
+Three reinforcing loops:
+
+1. **Backlog → KB → Backlog re-ranking.** Tested items add findings; findings sharpen triage criteria; sharper criteria re-rank the backlog; better next-night picks; more findings. The system gets better at choosing what to test as it tests more.
+2. **Components → Strategies → Component evidence.** Library components feed strategies; strategy results refine each component's track record; richer component evidence makes Workflow D creativity sharper; new compositions exercise components further.
+3. **Daily catch → Library + Backlog → Sweeper revisits.** New arrivals continuously enrich both; Sweeper continuously matches; old parked work resurfaces when its blocker resolves. Nothing is one-and-done.
+
 ## Research methodology (the core loop)
+
+*This section details the bundle cycle — the mechanics of Workflow C above. Workflow A (ingestion), B (component evaluation), and D (creativity) are described in the Operating Model section. This section describes how a single investigation bundle runs once a strategy is in the testing pipeline.*
 
 A strategy is developed through a **multi-run iterative cycle**, not a single nightly backtest. Evidence: Jeff's manual ORB work at `~/Projects/AlgoTrader/obsidian_vault/Strategies/opening-range-breakout/Runs/` shows ~30+ runs per day across QQQ / SOXL / cross-asset, chained into investigative sequences (e.g. `005→010→011 regime analysis pre-vs-post-2021`, `011→015 btr regime refined sweep`, `025→026→027→028→029 bar-size jitter widening`, `023 problem period diagnostic` revisiting `005`).
 
@@ -278,9 +421,10 @@ Ingestion handles **three source types**, not just S&C. Each has its own extract
 
 ### Phase 6 — Component library + findings KB + lessons loop
 - [ ] Scaffold `~/Documents/Obsidian/Main/NanoClaw/AlgoTrader/Knowledge/` with:
-  - `components/` — **eight subfolders**: `indicators/` (primitives), `entries/`, `exits/`, `stops/`, `take-profits/`, `position-sizing/`, `entry-timing/`, `regime-filters/`
+  - `components/` — **nine subfolders**: `indicators/` (primitives), `entries/`, `exits/`, `stops/`, `take-profits/`, `position-sizing/`, `equity-curve/`, `entry-timing/`, `regime-filters/`
   - Each `indicators/{slug}/` carries `_indicator.md` (math, prose, Python for AlgoTrader) + `implementations/{platform}.ext` for vendor-specific code snippets from Traders' Tips
   - `findings/` — `regimes/`, `asset-classes/`, `cross-cutting/`, `meta/`
+  - `metrics/` — open-ended metric catalog for bucketed conditional analysis; promoted subset is the regime classifier registry
   - `_pending.md` — Level-2 held-for-confirmation items
   - `_conventions.md` — tag vocabulary, component/finding schemas, single-writer ownership
 - [ ] **Bootstrap the component library** by decomposing ORB into its components with evidence cross-referenced from the existing 30+ ORB runs in `~/Projects/AlgoTrader/obsidian_vault/Strategies/opening-range-breakout/Runs/`. This gives the library a seeded set on day one.
@@ -311,7 +455,7 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Six agents i
 - [ ] **Documenter** — sole owner of the Findings Knowledge Base, the Component Library, and all run-report writeups. Curates by topic (merges new findings into existing entries rather than appending chronologically), maintains cross-links between regimes ↔ components ↔ asset classes ↔ strategies, keeps frontmatter tags consistent, runs KB-health audits (dead links, orphan findings, stale confidence labels, components without recent evidence). Merges Researcher component proposals into the library after reviewing for duplication. *Owns:* `AlgoTrader/Knowledge/` (both `components/` and `findings/`), `AlgoTrader/Backtests/`, all cross-linking/tagging across `AlgoTrader/`.
 
 **Platform lane** (writes Python inside `~/Projects/AlgoTrader/`):
-- [ ] **AlgoTrader Engineer** — extends and maintains the framework: new indicators in `trade/indicators.py`, the regime-classifier framework in `trade/regimes/`, the **component library implementations in `trade/components/`** (seven subpackages mirroring the KB), new analysis pipeline stages, new walk-forward modes, test coverage, the `trade/inverse_pairs.py` reference table, and the pre-promotion divergence-check tooling. When the Research lane proposes a new component, the Engineer ships its Python implementation; component code is paired one-to-one with its KB entry. Follows AlgoTrader's own lode + practices (pre-commit hooks, ruff + mypy + pytest, three-layer architecture). *Owns:* `~/Projects/AlgoTrader/{trade,strategies,analysis}/` (reusable framework code — **not** the nanoclaw-generated strategy scripts, which belong to the Strategy Author).
+- [ ] **AlgoTrader Engineer** — extends and maintains the framework: new indicators in `trade/indicators.py`, the regime-classifier framework in `trade/regimes/`, the **component library implementations in `trade/components/`** (eight subpackages mirroring the KB's usage-role categories), new analysis pipeline stages, new walk-forward modes, test coverage, the `trade/inverse_pairs.py` reference table, and the pre-promotion divergence-check tooling. When the Research lane proposes a new component, the Engineer ships its Python implementation; component code is paired one-to-one with its KB entry. Follows AlgoTrader's own lode + practices (pre-commit hooks, ruff + mypy + pytest, three-layer architecture). *Owns:* `~/Projects/AlgoTrader/{trade,strategies,analysis}/` (reusable framework code — **not** the nanoclaw-generated strategy scripts, which belong to the Strategy Author).
 
 **Coordination:**
 - [ ] Nightly workflow becomes: Regime Analyst produces weak-regime report → Researcher/Regime Analyst propose candidate indicators → Skeptic pre-filters via rubric → Strategy Author creates single-variable test variant → backtest runs → Skeptic issues verdict → Documenter records the run + updates KB → if promoted, Strategy Author updates the canonical strategy file.
@@ -369,13 +513,42 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Six agents i
 | Tag namespace is `#regime/<classifier>/<label>`, not `#regime/<label>` | Classifier-qualified tags keep KB matching precise as the registry grows. A `#regime/high-vol` tag is ambiguous; `#regime/vix-tier/high` vs. `#regime/sqn/bear-volatile` is not. |
 | Regime Analyst has standing mandate to propose new classifiers as first-class research output | "A classifier that better discriminates strategy performance" is itself a KB-worthy finding. Avoids the trap of treating classifier design as framework plumbing only. |
 | Classifier-informativeness scoring per-strategy is a Phase 4 deliverable | For each classifier, quantify how much its labeling discriminates the strategy's performance. Tells the Regime Analyst which lens to look through when attributing weakness. Simple first cut: spread of per-label expectancy / aggregate expectancy. |
-| Strategies are compositions of reusable components across seven orthogonal categories | Entries, exits, stops, take-profits, position-sizing, entry-timing, regime-filters. Knowledge accumulates per-component, not just per-strategy — "fixed-ATR stop fails on leveraged ETFs" learned in one strategy transfers instantly to every strategy considering that component. Counters the field-wide entry-signal bias where exits/stops/TPs/sizing are under-researched. |
+| Strategies are compositions of reusable components across eight orthogonal usage-role categories (plus indicators as primitives) | Entries, exits, stops, take-profits, position-sizing, equity-curve (performance-conditional), entry-timing, regime-filters. Knowledge accumulates per-component, not just per-strategy — "fixed-ATR stop fails on leveraged ETFs" learned in one strategy transfers instantly to every strategy considering that component. Counters the field-wide entry-signal bias where exits/stops/TPs/sizing/equity-curve are under-researched. |
 | Component Library coexists with Findings KB under `AlgoTrader/Knowledge/` | `components/{7 subfolders}/` holds the composable pieces with their own track records; `findings/{regimes,asset-classes,cross-cutting,meta}/` holds effect-oriented insights. Both curated by the Documenter. |
 | Strategy files' `components:` section is a **wikilink composition manifest**, not free-form prose | One strategy's composition referencing library components by wikilink means a component's evidence is queryable across every strategy that uses it. Prose on the strategy page narrates *why* the composition; component pages narrate *what each piece does*. |
 | Component identity is stable-by-contract; evolution = new versioned component, not mutation | Same rationale as regime-classifier label stability: mutating a component silently misattributes prior findings. `fixed-atr-stop-v2` is a new file, not an edit of v1. |
 | Researcher actively counters entry-signal bias at ingestion | When reading an S&C article, map it to existing components first; promote genuinely novel pieces (often exits/stops/TPs/sizing) as new library entries. An article's most valuable contribution may be its stop rule, not its entry signal. |
 | Phase 6 bootstraps the library by decomposing ORB | ORB has 30+ runs of evidence already; decomposing its components (OR-breakout entry, EOD-flat exit, ATR filter, BtR cap-flips regime filter, etc.) seeds the library with components that have real track records on day one. Future strategies compose against a non-empty library. |
 | AlgoTrader component implementations live under `trade/components/{7 subpackages}/` and pair one-to-one with KB entries | Code ↔ KB mirror means implementation presence is verifiable, and the Engineer's feature-request backlog is exactly the Research lane's component proposals. |
+
+### Operating-model decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Ingestion is component-first, not strategy-first | Most sources contribute components (entries, exits, stops, etc.) rather than complete strategies. Component Library is the working medium; strategies are compositions. |
+| Four workflows (A ingestion / B component evaluation / C strategy iteration / D creativity) + E daily connector | Single-workflow framing missed creativity and the component-evaluation track. Explicit four-way decomposition prevents drift back into "strategies are the only first-class artifact" thinking. |
+| Unified cross-corpus ranked backlog | A TradingView post and a 1990s S&C article compete on the same axis. One ranking, not per-source queues. Allows top items from any corpus to surface together. |
+| Triage is structured-reason-driven, not opaque-score-driven | Every blocker carries a tag the Sweeper can match. When a blocker's underlying capability is added (e.g. individual-stock universe), affected items auto-resurface for re-ranking. Same mechanism as `unresolved_weaknesses:` for parked strategies, extended to backlog items. |
+| Triage uses Obsidian-native style (frontmatter cursors + inline `#triage-blocker/*` and `#triage-credit/*` tags + prose) | Same locked convention as strategies, findings, and weaknesses. No nested YAML schemas — agents drift on rigid YAML; tags + prose evolve naturally. |
+| Triage criteria evolve as KB matures | Early ranking is necessarily rough — we don't yet know which mechanisms work in our universe. Sharpens with knowledge. Documenter owns criteria evolution at `_triage-criteria.md`. Periodic re-triage sweeps re-evaluate older items against current criteria. Don't over-engineer day-one criteria. |
+| Items persist in the backlog indefinitely | Low-ranked items aren't deleted — blocker may resolve years later. Only `retired` (explicit "never will work") items leave the backlog. Preserves the option for future capability-resolution to resurface old work. |
+| Pilot-then-bulk for any new source-type | Find pipeline issues on a small slice before committing to a multi-week bulk load. Recurring pattern, not one-time. Apply to S&C, Trader's World, TradingView, books, papers, etc. |
+| Concept pilot vs source-type pilot are different in scope | Concept pilot tests the entire system (one-time, weeks-long, broad). Source-type pilots test only extraction for new sources (recurring, days-long, narrow). Don't conflate them. |
+| Concept pilot is staged additively (6→12→24→48→96 month ramp on S&C) with re-triage at each gate | One-shot 132-issue commit would use day-one criteria for the entire bulk load. Staged ramp lets each stage's learning sharpen the next stage's triage. Stage sizes roughly double; tunable per-stage. Smooth transition into steady-state at the end. |
+| No hard "Mode 1 / Mode 2" boundary | Single daily flow with four input sources (backlog dip, daily catch, iteration, creativity) whose allocation share evolves as corpus matures. Smooth transition from pilot's last stage into steady-state ops. |
+| Workflow D (creativity / novel composition from library) is first-class and budgeted | Not just a reactive Sweeper output. Swarm intentionally synthesizes new strategies from library components. Allocation grows as library matures (~5% day one → ~25% by year two). |
+| Daily Catch is a first-class artifact (`AlgoTrader/Daily Catches/YYYY-MM-DD.md`) | Researcher's nightly output recording new arrivals, suggested compositions, and triage decisions. Persistent journal of what entered the system each day. Owned by Researcher. |
+| Source-type-aware triage scoring (baseline by source type, modified by per-item factors) | Cross-corpus ranking needs a way to weight a peer-reviewed paper vs an S&C article vs a TradingView post. Source-type baseline as starting evidence shape; per-item factors refine. |
+| **Ninth component category: `equity-curve`** (performance-conditional sizing / gating — related to but distinct from `position-sizing`) | Techniques that condition trading on the strategy's *own* recent performance: trade-only-when-equity-above-MA, skip-after-N-losses, SQN-based confidence scaling, equity-drawdown-gate. Conceptually distinct from per-trade sizing (which computes "how much" from market state) — equity-curve logic is self-referential, reading the strategy's own track record. Strategies compose both (e.g. vol-scaled per-trade sizing + equity-curve on/off gate). Keeping them orthogonal makes the composition explicit. |
+| Workflow B has two evaluation modes — standalone edge analysis and comparative swap-in | Entries and exits can be evaluated standalone via bar-by-bar forward-return profiling, *without* a full strategy composition. Cheap, composition-free edge profile per signal. Other component types (stops, TPs, sizing, equity-curve, timing, filters) require swap-in evaluation against host strategies. Both modes write to the same Component Library page. Starting-point evaluation for any new entry/exit signal is its edge profile. |
+| **Random-entry baseline is the reference for standalone edge analysis** — not zero | A signal with positive forward-bar returns isn't a signal if random entries into the same asset/regime produce the same forward returns (e.g. equities drift up on average). The meaningful measurement is the *delta* of the signal's bar-N returns vs. a random-entry benchmark in the same pool. If the delta is ≤ 0, there's no standalone edge. Component Library edge profiles record both the signal's return distribution AND the random-entry baseline's, making the delta explicit. |
+| **Bucketed conditional analysis is the cheap first-line diagnostic** | Re-slicing existing trade logs or bar-returns against arbitrary metrics costs only metric-computation + groupby — not backtest runs. This is the primary way to discover strategy weaknesses *before* committing Workflow C iteration budget. Runs are the budgeted resource; bucketed analysis is not. |
+| **Metric catalog is a new top-level KB artifact** at `AlgoTrader/Knowledge/metrics/` | Metrics (VIX, ATR, opening gap, MA distance, breadth, yield-curve, COT, FOMC proximity, etc.) are the open-ended raw material for bucketed conditional analysis. Sits alongside `components/` and `findings/`. Each metric entry carries its computation and default bucketing methodology. Grows organically as diagnostics surface new useful metrics. |
+| **Regime classifier registry = curated, promoted subset of the metric catalog** | The 5 Phase-4 classifiers (`vix-tier`, `gap-size`, `price-range`, `trend-basic`, `sqn-market-type`) are metrics that graduated to classifier status: stable labels, locked bucketing, KB-wide tag namespace `#regime/<classifier>/<label>`. Metrics that consistently discriminate performance across many strategies get promoted from catalog to registry. Same promotion pattern as components (many ingested, few curated). |
+| **Classifier-informativeness scoring generalizes to metric-informativeness per strategy** | For each strategy, bucketed analysis can score any metric by how much its labels discriminate the strategy's performance. Classifier-informativeness (existing Phase-4 deliverable) is the same scoring applied to the promoted metrics only. Metric-informativeness sweep across the full catalog surfaces classifier-promotion candidates. |
+| **Metric catalog ownership: Regime Analyst** | Natural extension of the regime-attribution specialty — metrics are the raw material regimes classify against. No new swarm role needed. Regime Analyst proposes new metrics; AlgoTrader Engineer implements the computation; Documenter curates catalog pages and cross-links. |
+| **Metric selection per baseline is LLM-judgment-driven, biased toward too many** | Given the catalog's "when to apply" guidance and each metric's accumulated findings, the diagnosing agent picks strategy-relevant metrics (intraday / trend-following / mean-reversion / etc.). Err toward more rather than fewer — conditional analysis is cheap. No privileged classifier subset; selection is strategy-aware. |
+| **Promotion criteria stay loose; periodic catalog curation review handles it** | Formal "promote this metric to classifier" thresholds deferred. Instead: a periodic review (per pilot stage gate during the ramp; monthly in steady state) where Regime Analyst + Documenter look at the metric catalog's accumulated observations and make promote / retire / gap-identify decisions. Aligns with the monthly allocation review cadence. |
 
 ### Design changes from the S&C ingestion validation exercise (Jan 2020 + July 2015 issues)
 
