@@ -244,6 +244,40 @@ stateDiagram-v2
 - Strategies moved `investigating → parked` (Regime Analyst + Skeptic consensus)
 - New `promoted` strategies and any `promoted → investigating` reopens
 
+### Nightly wall-clock (Central Time — Jeff's local)
+
+The nightly cycle runs every night (Mon-Sun). All times Central Time (CT); market close is 3 PM CT (4 PM ET) so by midnight the day's data has long since settled.
+
+| Time (CT) | Activity | Responsibility |
+|---|---|---|
+| **00:00** | Data settle check (confirm today's market-close data is clean and loaded) | automated |
+| **00:15** | Continuous research tasks start in parallel: Web Researcher scheduled scrape + Corpus Researcher re-decomposition passes + Sweeper (forward + reverse + re-ranking + stub-resolution) | Corpus + Web Researchers; Documenter via Sweeper |
+| **00:45** | Daily Catch compiled; new arrivals triaged + ranked | Corpus Researcher |
+| **01:00** | Sweeper staging reviewed → any `parked → investigating` moves finalized | Documenter |
+| **01:15** | Allocation decision — 25-run budget split across backlog dip / daily catch / iteration / creativity per current allocation policy | nightly scheduler |
+| **01:30** | Bundle execution begins — Strategy Author composes variants; AlgoTrader runs backtests; Skeptic issues verdicts per bundle; Documenter records run reports | Authoring + Platform + Skeptic |
+| **~06:30** | Post-run consolidation; Skeptic-recommended retirements queued for Jeff; morning digest drafted | Documenter |
+| **07:00** | Morning digest posted to Telegram | Documenter |
+
+**Sunday evenings:** extra deep Sweeper pass (the "weekly sweep" already called out in Research methodology). First Sunday of each month also runs the monthly allocation-policy review. Output ready for Monday 00:00.
+
+### Allocation and overrun policies
+
+- **Per-bundle allocation, no mid-night reallocation.** Bundle slots locked at 01:15; simpler than dynamic reallocation.
+- **Per-bundle time cap: 90 min.** Bundle exceeding the cap → Skeptic issues an "INCOMPLETE — continue next night" verdict; current results recorded; next night's allocation prioritizes the continuation. Preserves evidence over dropping work.
+- **Total cycle hard cap: ~5.5 hours** (01:30 → 07:00). Leaves buffer before digest deadline.
+- **Digest deadline: 07:00 CT** (Jeff's morning). Non-negotiable — cycle must wrap in time.
+
+### Pilot-stage cadence deviation
+
+During the additive concept pilot (S&C staged ramp 6→12→24→48→96 months):
+
+- **Stage-start ingestion runs daytime**, not on the nightly budget. Jeff monitors and can adjust mid-ingestion.
+- **Full backlog re-triage** happens after ingestion completes, also daytime.
+- **Nightly cycles then proceed normally** — drain the top of the now-larger, now-sharper-ranked backlog.
+- **Stage duration varies** — Stage 1 (~5-15 top-of-backlog strategies from 6 months of S&C) might take ~5-10 nights at 1-2 strategies/night for F0.
+- **Stage gate review** (Jeff + swarm): proceed / repeat current stage size / pause before next ingestion. Happens daytime, not during nightly cycle.
+
 ### Why the operating model is compounding
 
 Three reinforcing loops:
@@ -663,6 +697,10 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Seven agents
 | **`bundles_completed:` preserved across parked → investigating; resets on RETURN TO INGESTION path** | Sweeper revisit continues research from where it paused (prior effort counts). RETURN TO INGESTION means prior F0 was invalid (extraction bug) — resets because those runs didn't measure the real mechanism. |
 | **Retirement requires Jeff's confirmation** | Skeptic can *recommend* retirement via verdict; Documenter surfaces in morning digest; Jeff confirms or overrides. Hard transitions to retired don't auto-fire — terminal state deserves human signoff. |
 | **`investigating → parked` is a soft-consensus decision, not a hard N-bundle threshold** | Regime Analyst + Skeptic agreement that no viable next hypothesis remains; Documenter writes + tracks. No bundle count trigger. Judgment call because strategies vary in how long they warrant iteration before parking. |
+| **Nightly cycle: 00:00 CT start; 07:00 CT digest deadline (Jeff's local / morning review)** | Central Time (Jeff in Texas), not Eastern. Market close 3 PM CT means data is settled hours before cycle start. Digest lands as Jeff wakes. Cycle runs Mon-Sun; Sunday evenings add deep Sweeper pass + monthly allocation review (first Sunday). |
+| **Per-bundle allocation locked at 01:15 CT; no mid-night reallocation** | Simpler than dynamic reallocation. Bundle slots allocated once per night across backlog-dip / daily-catch / iteration / creativity per current policy. |
+| **Per-bundle time cap: 90 min; overrun verdict = "INCOMPLETE — continue next night"** | Preserves evidence over dropping work. Next night's allocation prioritizes continuation. Catches bundles that run longer than expected (robustness sweeps, cross-asset validation). |
+| **Pilot-stage ingestion runs daytime, not on the nightly budget** | Jeff can monitor and adjust mid-ingestion during the pilot. Nightly cycles proceed normally once the new slice is ingested + backlog re-triaged. Stage gate review also daytime. |
 
 ### Design changes from the S&C ingestion validation exercise (Jan 2020 + July 2015 issues)
 

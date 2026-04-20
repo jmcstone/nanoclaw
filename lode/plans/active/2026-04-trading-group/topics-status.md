@@ -141,17 +141,26 @@ State diagram, transition authority, preconditions, and Sweeper interactions cap
 
 ---
 
-## Topic 8 — Nightly wall-clock  🔴
+## Topic 8 — Nightly wall-clock  🟢
 
-**Now informed by Topic 9.** Allocation policy across the four input sources (backlog/catch/iteration/creativity) is the steady-state shape; pilot stages have their own wall-clock variant.
+**Closed.** All times Central Time (Jeff is in Texas). Cycle runs Mon-Sun.
 
-**Questions to resolve:**
-- Cycle start time (probably 2 AM ET post-data-settle, but Jeff's morning review window matters — digest must land before he wakes)
-- Intra-cycle sequence (Sweeper first → Daily Catch ingestion → triage update → run allocation → Workflow C/D execution → Documenter digest)
-- Allocation enforcement point (per-bundle? Per-agent-handoff?)
-- Weekly Sweeper schedule (Sunday evening so Monday starts fresh)
-- Per-stage cadence during the additive concept pilot (each stage's wall-clock differs from steady-state)
-- Overrun behavior (carry forward or drop?)
+**Timeline:**
+- **00:00 CT** — data settle check (market close 3 PM CT, data long-since settled)
+- **00:15** — continuous research + Sweeper (forward, reverse, re-ranking, stub-resolution) in parallel
+- **00:45** — Daily Catch compiled; new arrivals triaged
+- **01:00** — Sweeper staging reviewed; `parked → investigating` moves finalized (Documenter)
+- **01:15** — 25-run budget allocated across backlog-dip / daily-catch / iteration / creativity per current policy
+- **01:30** — bundle execution begins
+- **~06:30** — post-run consolidation; Skeptic-recommended retirements queued for Jeff; digest drafted
+- **07:00 CT** — morning digest posted (Jeff's wake-up deadline)
+
+**Policies:**
+- **Per-bundle allocation locked at 01:15; no mid-night reallocation.**
+- **Per-bundle time cap: 90 min.** Overrun → Skeptic verdict "INCOMPLETE — continue next night"; next night prioritizes continuation. Preserves evidence.
+- **Total cycle hard cap: ~5.5 hours** (01:30 → 07:00). Buffer before digest.
+- **Sunday evening:** deep Sweeper pass; first Sunday of each month adds the monthly allocation-policy review.
+- **During pilot stages:** stage-start ingestion and backlog re-triage run **daytime**, not on nightly budget, so Jeff can monitor and adjust. Stage gate review also daytime.
 
 ---
 
