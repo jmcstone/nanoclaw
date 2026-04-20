@@ -540,8 +540,15 @@ Each artifact has exactly one owning agent. Others read; only the owner writes. 
 
 | Artifact | Owner | Notes |
 |----------|-------|-------|
-| `AlgoTrader/Sources/` (raw scrapes, S&C extractions) | Researcher | Raw provenance layer |
-| `AlgoTrader/Web Research/` (curated strategy discoveries) | Researcher | Cleaned discovery notes |
+| `AlgoTrader/Sources/magazine/`, `AlgoTrader/Sources/book/` | Corpus Researcher | Internal-corpus extractions |
+| `AlgoTrader/Sources/web/`, `AlgoTrader/Sources/academic_paper/` | Web Researcher | External-origin extractions |
+| `AlgoTrader/Web Research/` (continuous discovery notes + quest external-findings + scout notebook) | Web Researcher | Cleaned discovery notes and accumulated web-research expertise |
+| `AlgoTrader/Web Research/_scout-notebook.md` | Web Researcher | Web Researcher's own long-term memory of productive/unproductive sources, credible authors, search patterns |
+| `AlgoTrader/Web Research/Quests/{date}-{slug}/prompt.md` | Requesting agent | Quest trigger written by whichever agent needs the research |
+| `AlgoTrader/Web Research/Quests/{date}-{slug}/internal-findings.md` | Corpus Researcher | Internal corpus response to the quest |
+| `AlgoTrader/Web Research/Quests/{date}-{slug}/external-findings.md` | Web Researcher | External/web response to the quest |
+| `AlgoTrader/Web Research/Quests/{date}-{slug}/integration.md` | Requesting agent | Disposition + next steps (ingest / park / reject) |
+| Backlog triage (ranking + reasons on each `untested` strategy record) | Corpus Researcher | Ranks new ingests; updates existing ranks during re-triage sweeps |
 | `AlgoTrader/Strategies/*.md` (canonical strategy definitions) | Strategy Author | One file per strategy |
 | `~/Projects/AlgoTrader/scripts/_nanoclaw-generated/` (Python test variants) | Strategy Author | Single-variable test scripts |
 | `AlgoTrader/Regime Reports/` (per-strategy × per-asset attribution) | Regime Analyst | |

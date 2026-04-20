@@ -202,11 +202,12 @@ States drafted (`untested → triaged → first_bundle_running → investigating
 
 These decisions cut across multiple topics and are the backbone of the system:
 
-### Agent roster — 6 agents in 3 lanes  🟢
-- **Research lane:** Researcher, Regime Analyst, Skeptic
+### Agent roster — 7 agents in 3 lanes  🟢
+- **Research lane:** Corpus Researcher, Web Researcher, Regime Analyst, Skeptic
 - **Authoring lane:** Strategy Author, Documenter
 - **Platform lane:** AlgoTrader Engineer
 - **Single-writer discipline:** each artifact has exactly one owning agent; others read. Prevents swarm merge conflicts.
+- **Both researchers run continuously and respond to quests in parallel.** Corpus Researcher is internal-first (works the corpus); Web Researcher is external-first (curated scrape + opportunistic exploration + scout notebook). Quests fired by any agent at `Web Research/Quests/{date}-{slug}/` with four sibling files: `prompt.md` (requester), `internal-findings.md` (Corpus), `external-findings.md` (Web), `integration.md` (requester).
 
 ### Component Library — the major KB restructure  🟢
 Strategies decompose into reusable components along **nine categories** (one primitives layer + eight usage-role categories):
