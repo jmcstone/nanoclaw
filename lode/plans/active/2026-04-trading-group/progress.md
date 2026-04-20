@@ -246,9 +246,49 @@
 | Time | Error | Resolution |
 |------|-------|------------|
 
-## Reboot check (5 questions)
-1. **Where am I?** — Phase 1 infrastructure complete (a14c646). Design round 2026-04-20 just locked the **Operating model** as Topic 9. Three open topics remain before Phase 2 starts: Topic 6 (first-bundle shape, narrowed 🟡), Topic 7 (strategy state machine 🔴), Topic 8 (nightly wall-clock 🔴).
-2. **Where am I going?** — Work through Topic 6 → 7 → 8 in order. Topic 6 has a draft shape to confirm (~8-12 runs: sanity + 3 baselines + regime attribution + robustness probes + walk-forward). Topic 7 defines state transitions + authorities. Topic 8 defines the nightly choreography including allocation-policy enforcement.
-3. **What is the goal?** — A Telegram-hosted swarm of 7 lane-focused agents (Corpus Researcher + Web Researcher + Regime Analyst + Skeptic / Strategy Author + Documenter / AlgoTrader Engineer) running four workflows (ingestion, component evaluation, strategy iteration, creativity) through a unified ranked backlog + Component Library + Findings KB + Metric Catalog. Starts with a staged concept pilot on S&C (6→12→24→48→96 months), then runs daily forever. Anti-curve-fit discipline first-class via 18-item Skeptic rubric. Bucketed conditional analysis + random-entry baselines make evaluation cheap before committing run budget. Quests are the inter-agent research primitive.
-4. **What have I learned?** — The original plan described the system as single-workflow ("test strategies"). Real system has four workflows and ingestion is component-first, not strategy-first. Triage ranks everything with structured reasons (not binary in/out) so the Sweeper can resurface items when blockers resolve. Bucketed conditional analysis is effectively free and should be used aggressively before spending run budget. The 5 regime classifiers are a promoted subset of a broader open-ended metric catalog. Standalone edge analysis on entry/exit signals needs a random-entry baseline, not a zero baseline. Equity-curve-based sizing is a 9th component category distinct from position-sizing.
-5. **What have I done?** — Initialized lode; wrote 8-phase plan with ~70+ decisions; ran S&C + book validation exercises generating ~33 design refinements; Phase 1 infrastructure landed in commit a14c646 (group registered, mounts wired, a-mem installed, end-to-end validated). 2026-04-20 round: operating-model design locked (Topic 9 🟢); tracker + findings + topics-status + progress updated; consistency-swept 8→9 / 7→8 category references.
+## Reboot check (5 questions) — updated 2026-04-20 end-of-session
+
+1. **Where am I?** — Phase 1 infrastructure complete (a14c646). **Design phase is DONE as of 2026-04-20.** All 9 topics in topics-status.md closed 🟢 (Topic 9 operating model + Topics 6/7/8 first-bundle/state-machine/wall-clock + earlier Topics 1-5). Phases 2-8 checklists consistency-swept against the locked operating model (76b947f). Ready for Phase 2 implementation.
+
+2. **Where am I going?** — **Phase 2: Multi-source ingestion.** First concrete action: run a source-type pilot on **Docling** with a single S&C issue to confirm extraction quality end-to-end, then build the four ingestion scripts (`ingest-magazine.*`, `ingest-book.*`, `ingest-web.*`, `ingest-academic-paper.*`) + Daily Catch scaffolding + initial backlog schema. After Phase 2, the critical path to running the first investigation bundle is Phase 4 (metric catalog + regime classifiers + bucketed conditional analysis) and Phase 5 (bundle-execution engine). Once Phases 2, 4, 5 are capable, the staged concept pilot begins (Stage 1 = 6 months of S&C).
+
+3. **What is the goal?** — A Telegram-hosted 7-agent swarm (Corpus Researcher, Web Researcher, Regime Analyst, Skeptic, Strategy Author, Documenter, AlgoTrader Engineer) running four workflows (ingestion / component evaluation / strategy iteration / creativity) through a unified ranked backlog + Component Library (9 categories incl. equity-curve) + Findings KB + Metric Catalog (regime classifier registry is the promoted subset). Operates on a nightly 25-run budget (00:00–07:00 CT; digest posts 07:00 CT when Jeff wakes) with evolving budget allocation across four input sources. Starts with a staged concept pilot on S&C (6→12→24→48→96 months, each stage with full backlog re-triage). Anti-curve-fit first-class via 18-item Skeptic rubric + random-entry baselines + bucketed conditional analysis + Sweeper's 5 directions. Quests are the inter-agent research primitive (four sibling files per quest).
+
+4. **What have I learned?** —
+   - **The system is a funnel, not a single workflow.** Trading ideas enter at any granularity (component or strategy) via any source type (magazine / book / web / academic paper) → unified ranked backlog → triage promotes top items → results feed KB → KB drives iteration + creativity. Runs daily forever once seeded.
+   - **Component-first ingestion.** Most sources contribute components (entries, exits, stops, sizing, equity-curve, timing, filters, indicators), not complete strategies. Strategies are compositions via wikilinks.
+   - **Triage is structured-reason-driven with Obsidian-native storage** (frontmatter cursors + `#triage-blocker/*` / `#triage-credit/*` inline tags + prose). Same mechanism as `unresolved_weaknesses:` — when a blocker's underlying capability resolves, Sweeper surfaces the affected item for re-ranking. Items persist indefinitely; only `retired` leaves.
+   - **Triage criteria evolve** with KB maturity. Don't over-engineer day-one ranking.
+   - **Bucketed conditional analysis is effectively free** — re-slicing existing trade logs against any metric costs only metric-computation + groupby. Runs are budgeted; bucketed analysis is not. The 5 regime classifiers are a promoted subset of an open-ended metric catalog.
+   - **Standalone edge analysis** on entry/exit signals needs a random-entry baseline, not zero baseline. Delta matters; a "positive return" is meaningless if random entries produce the same.
+   - **No hard "Mode 1 / Mode 2" boundary.** Single daily flow with four input sources (backlog dip / daily catch / iteration / creativity) whose allocation share evolves with corpus maturity.
+   - **Two researchers run continuously in parallel** (Corpus + Web). Both respond to quests. Scout notebook is Web Researcher's long-term memory asset.
+   - **State machine is 6 states** with `bundles_completed:` counter distinguishing F0 (=0) from F1+. Retirement requires Jeff's confirmation via morning digest.
+   - **First-bundle shape varies by onboarding type** (Shape A-E). Shape A uses QQQ-only baseline; leveraged variants to F1.
+
+5. **What have I done?** —
+   - Initialized lode; wrote 8-phase plan with ~70+ decisions in earlier rounds (pre-2026-04-20); ran S&C + book validation exercises generating ~33 design refinements.
+   - Phase 1 infrastructure landed (a14c646): group `tg:-5211322204` registered, mounts wired, a-mem installed, end-to-end validated.
+   - **2026-04-20 session (7 commits, all on main):**
+     - `8e8d995` — initial lode sync (Phase 1 marked done, a-mem graduated from active → complete)
+     - `1cd4c93` — Operating Model locked as Topic 9
+     - `47fe606` — Researcher split (Corpus + Web, 7-agent roster)
+     - `317f18e` — Topic 6 closed (first-bundle shapes A–E)
+     - `3cff688` — Topic 7 closed (state machine — 6 states with `bundles_completed:` counter)
+     - `e1b65bc` — Topic 8 closed (nightly wall-clock — 00:00–07:00 CT)
+     - `76b947f` — Phases 2-8 consistency pass (all drift resolved)
+
+## Handover notes (for fresh session start)
+
+**Entry point:** [topics-status.md](topics-status.md) — topic-by-topic current state map.
+
+**Reading order for a fresh session:**
+1. `topics-status.md` — get the map
+2. `tracker.md` Operating Model section (starts after Guiding constraints; covers workflows, backlog, triage, pilot, wall-clock, state machine, first-bundle shapes) — understand the system shape
+3. `tracker.md` Phased checklist — current Phase 2 implementation starting point
+4. `findings.md` for schemas, component library details, Skeptic's 18-item rubric, asset-class taxonomy (reference when implementing specific pieces)
+5. This progress.md for the chronological history if needed
+
+**No blockers.** Design is complete. Phase 2 is unblocked.
+
+**Suggested next concrete action:** Source-type pilot with Docling on a single S&C issue to confirm extraction + decomposition workflow end-to-end before committing to building all four ingestion scripts.
