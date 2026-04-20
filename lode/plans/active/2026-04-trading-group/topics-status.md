@@ -126,17 +126,18 @@ Organized by topic (current state), not chronological. For chronological history
 
 ---
 
-## Topic 7 — Strategy state machine  🔴
+## Topic 7 — Strategy state machine  🟢
 
-**Now informed by Topic 9.** Adds at minimum a `triaged` state ahead of testing, and re-ranking transitions on backlog and parked items.
+**Closed.** Six states: `untested → triaged → investigating → parked | promoted | retired`. F0 vs F1+ collapsed into a single `investigating` state with `bundles_completed:` counter (0 = F0 phase).
 
-States drafted (`untested → triaged → first_bundle_running → investigating → parked | promoted | retired`) but transitions, preconditions, and reverse-transitions undefined.
+State diagram, transition authority, preconditions, and Sweeper interactions captured in tracker.md "Strategy state machine" subsection.
 
-**Questions to resolve:**
-- Preconditions per transition (e.g. `parked` requires `unresolved_weaknesses:`; `promoted` requires all 18 rubric gates)
-- Reverse transitions (`parked → investigating` from Sweeper revisit; `promoted → investigating` if production divergence found)
-- Transition authority per state (Strategy Author? Skeptic verdict? Documenter?)
-- Sweeper interaction (re-ranks backlog items; revisits parked items; skips retired)
+**Key decisions:**
+- **`bundles_completed:` preserved across `parked → investigating` Sweeper revisits**; resets only on the RETURN TO INGESTION path (prior F0 was invalid due to extraction bug).
+- **Retirement requires Jeff's confirmation** — Skeptic recommends via verdict; Documenter surfaces in morning digest; Jeff confirms or overrides. No auto-retirement.
+- **`investigating → parked` is a soft Regime Analyst + Skeptic consensus**, not a hard N-bundle threshold. Judgment call — strategies vary in how long they warrant iteration.
+- **Transition authority:** Corpus Researcher writes triage + RETURN TO INGESTION fixes; Nightly scheduler promotes triaged → investigating; Skeptic verdict drives investigating-state transitions; Documenter via Sweeper review drives parked → investigating; Jeff confirms retirements.
+- **Sweeper interactions:** Forward sweep can change state (parked → investigating after Documenter review); reverse sweep, re-ranking sweep, stub-resolution sweep all annotate without state changes; retired strategies skipped by all sweeps.
 
 ---
 

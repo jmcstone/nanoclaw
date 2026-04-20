@@ -166,6 +166,84 @@ The first bundle (F0) is the entry point into the testing pipeline for any newly
 - **PARK** — survived F0 but no clear next move. Record `unresolved_weaknesses:`; Sweeper picks up when relevant findings arrive later.
 - **RETURN TO INGESTION** — mechanism didn't reproduce or extraction bug surfaced. Whoever notices (Skeptic during methodology audit, Corpus Researcher during sanity) flags; Corpus Researcher owns the extraction fix since they authored the ingested record.
 
+### Strategy state machine
+
+Every strategy (whether ingested, composed via Workflow D, or re-entering after parking) moves through a six-state lifecycle. Frontmatter carries the current `status` + a `bundles_completed:` counter that distinguishes F0 from F1+ without needing a separate state.
+
+**States:**
+
+| State | Meaning |
+|---|---|
+| `untested` | Just ingested (or just returned-to-ingestion for re-extraction). No triage rank yet, or needs re-ranking. |
+| `triaged` | Triage rank + structured reasons assigned. In the ranked backlog. Eligible for nightly selection. |
+| `investigating` | Active testing. Frontmatter `bundles_completed: 0` means F0 in progress or just begun; `≥1` means F1+ iteration. Covers both "bundle in progress" and "between bundles forming next hypothesis." |
+| `parked` | No clear next move. `unresolved_weaknesses:` populated. Waits for Sweeper to surface a revisit. |
+| `promoted` | Passed all 18 Skeptic rubric gates; validated strategy. `production_migration:` block populated if shorts are involved; cross-asset tier recorded. |
+| `retired` | Explicit "this will never work in our universe." Terminal state. `retired_reason:` required. |
+
+**State diagram:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> untested: ingestion
+    untested --> triaged: Corpus Researcher ranks
+    triaged --> investigating: scheduler picks\n(bundles_completed=0)
+    investigating --> investigating: next bundle\n(bundles_completed++)
+    investigating --> untested: RETURN TO INGESTION\n(only when bundles_completed=0)
+    investigating --> parked: PARK verdict OR\nno viable next hypothesis
+    investigating --> promoted: all 18 rubric gates pass
+    investigating --> retired: Skeptic recommends,\nJeff confirms
+    parked --> investigating: Sweeper revisit\n(Documenter enqueues)
+    parked --> retired: Jeff admin
+    promoted --> investigating: production divergence\nOR contradicting finding
+    promoted --> retired: Jeff admin
+    retired --> [*]
+```
+
+**Transition authority:**
+
+| Transition | Authority |
+|---|---|
+| `untested → triaged` | Corpus Researcher (ranks per current criteria) |
+| `triaged → investigating` | Nightly scheduler (automated, per allocation policy); sets `bundles_completed: 0`, `current_bundle: <id>` |
+| `investigating → untested` (RETURN TO INGESTION) | Skeptic or Corpus Researcher flags; only permitted when `bundles_completed: 0` (F0 only); Corpus Researcher fixes extraction; `bundles_completed` resets on re-entry to triaged |
+| `investigating → parked` | Regime Analyst + Skeptic consensus that no viable next hypothesis remains; Documenter writes + tracks; no hard N-bundle threshold — judgment call |
+| `investigating → promoted` | Skeptic verdict: all 18 rubric gates pass + production_migration populated + cross-asset tier recorded |
+| `investigating → retired` | Skeptic recommends via verdict; **Jeff confirms** in morning digest; `retired_reason:` populated |
+| `parked → investigating` | Documenter reviews Sweeper staging, writes new-hypothesis context; `bundles_completed` retained from prior parking |
+| `parked → retired` | Jeff admin (typically prompted by something structural — asset class removed, etc.) |
+| `promoted → investigating` | Production-divergence check fails OR newly-promoted finding contradicts the strategy's basis |
+| `promoted → retired` | Jeff admin |
+
+**Preconditions:**
+
+- `untested → triaged`: `triage_rank`, `triaged_at`, ≥1 `#triage-blocker/*` or `#triage-credit/*` tag
+- `investigating → promoted`: all 18 rubric items documented pass; `production_migration:` block populated (if strategy has shorts); cross-asset tier recorded per findings.md taxonomy; walk-forward verified
+- `investigating → parked`: `unresolved_weaknesses:` populated with structured tags (`#weakness/*` namespace)
+- `* → retired`: `retired_reason:` populated with prose + structured tags
+- `promoted → investigating`: new bundle hypothesis references the triggering issue (production divergence, contradicting finding); `bundles_completed` retained
+
+**`bundles_completed:` semantics:**
+
+- Set to `0` on every `triaged → investigating` transition (including re-entries via `parked → investigating` are NOT re-entries through triaged; `bundles_completed` is preserved in that path).
+- Increments by 1 on every Skeptic verdict that doesn't RETURN TO INGESTION.
+- Does NOT reset on `parked → investigating` via Sweeper revisit — prior work is preserved; next bundle is conceptually F(N+1).
+- Resets to 0 on RETURN TO INGESTION path (`investigating → untested → triaged → investigating`) because the prior F0 was invalid.
+
+**Sweeper interactions (no state changes unless noted):**
+
+- **Forward sweep** (parked → Revisit Queue → `parked → investigating`): runs over `parked` strategies, matches `unresolved_weaknesses:` against newly-promoted findings → staging → Documenter reviews → state change.
+- **Reverse sweep:** runs over newly-`triaged` strategies, annotates each with "relevant KB findings at ingestion time" for the first bundle's context. No state change.
+- **Re-ranking sweep:** runs over `triaged` backlog when new capabilities arrive; updates `triage_rank` on items whose `#triage-blocker/*` matches a newly-resolved capability. No state change (still `triaged`; rank changes).
+- **Stub-resolution sweep:** resolves orphaned `implementation_of:` children when parent source ingests. No state change.
+- **`retired` strategies** are skipped by all sweeps.
+
+**Morning digest includes:**
+- Skeptic-recommended retirements pending Jeff's confirmation
+- Strategies moved `parked → investigating` via Sweeper revisit (Documenter-confirmed)
+- Strategies moved `investigating → parked` (Regime Analyst + Skeptic consensus)
+- New `promoted` strategies and any `promoted → investigating` reopens
+
 ### Why the operating model is compounding
 
 Three reinforcing loops:
@@ -581,6 +659,10 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Seven agents
 | **Shape A uses QQQ-only baseline; leveraged variants deferred to F1** | F0 can't PROMOTE anyway, so spending cross-leverage budget on first bundles is waste. SOXL/TQQQ runs only happen in F1+ when Shape A is determined promising. |
 | **Walk-forward stays in F0, not deferred to F1** | One run is cheap insurance against continuing on a strategy that would fail walk-forward later. Failure in F0 walk-forward saves all subsequent F1+ effort. |
 | **RETURN TO INGESTION authority: whoever notices flags; Corpus Researcher fixes** | Skeptic (during methodology audit) or Corpus Researcher (during sanity review) can flag a failed-reproduction bundle. Corpus Researcher owns the extraction fix because they authored the ingested record. Not a veto — a routing decision. |
+| **Strategy state machine: 6 states — untested / triaged / investigating / parked / promoted / retired** | F0 and F1+ collapsed into one `investigating` state with a `bundles_completed:` counter (0 = F0 phase). Simpler state set; distinction preserved via frontmatter cursor. State diagram + full authority and precondition tables in Operating Model section. |
+| **`bundles_completed:` preserved across parked → investigating; resets on RETURN TO INGESTION path** | Sweeper revisit continues research from where it paused (prior effort counts). RETURN TO INGESTION means prior F0 was invalid (extraction bug) — resets because those runs didn't measure the real mechanism. |
+| **Retirement requires Jeff's confirmation** | Skeptic can *recommend* retirement via verdict; Documenter surfaces in morning digest; Jeff confirms or overrides. Hard transitions to retired don't auto-fire — terminal state deserves human signoff. |
+| **`investigating → parked` is a soft-consensus decision, not a hard N-bundle threshold** | Regime Analyst + Skeptic agreement that no viable next hypothesis remains; Documenter writes + tracks. No bundle count trigger. Judgment call because strategies vary in how long they warrant iteration before parking. |
 
 ### Design changes from the S&C ingestion validation exercise (Jan 2020 + July 2015 issues)
 
