@@ -144,6 +144,28 @@ Numbers are starting allocations; the policy is reviewed monthly (or per stage i
 
 Rationale: in early days, almost the entire budget should drain the backlog because that's where signal lives and the corpus to be creative with is thin. Over time the backlog ages, daily-catch becomes a meaningful slice, the library becomes rich enough to compose novelly, and ongoing iteration on tested strategies eats a growing share.
 
+### First-bundle shapes by onboarding type
+
+The first bundle (F0) is the entry point into the testing pipeline for any newly-onboarded item. Its shape depends on *what* was onboarded. Five shapes:
+
+| Shape | Onboarding type | Run budget | Composition |
+|---|---|---|---|
+| **A** | Complete strategy ingested (S&C full-strategy article, book chapter strategy, paper with full strategy) | ~6-8 runs | 1 sanity + 1 QQQ baseline + auto regime attribution across 5 classifiers (free) + LLM-selected bucketed conditional analysis (free) + 2-4 robustness probes (data-window + hyperparameter jitter) + 1 walk-forward |
+| **B** | Standalone entry signal ingested | ~1-2 runs | 1 edge profile (bar-by-bar forward returns across history) + random-entry baseline (free; same data) + delta check + LLM-selected bucketed analysis (free). **No full-strategy backtests yet** — signal must compose into a strategy via Workflow C swap-in or Workflow D before reaching Shape A. |
+| **C** | Standalone exit signal ingested | ~1-2 runs | Like Shape B but baseline is random-exit on a reference set of entries in the target regime |
+| **D** | Standalone non-signal component (stop, TP, sizing, equity-curve, entry-timing, regime-filter) | ~3-6 runs | Can't be tested alone — Workflow B comparative swap-in against 1-3 host strategies in the library. Delta measured per host, attributed by regime. |
+| **E** | Newly-composed strategy (Workflow D output) | ~6-8 runs | Same as Shape A but each component already has evidence from its own prior Shape-B/C/D bundle, so the initial hypothesis can be sharper and some robustness probes may be trimmed |
+
+**Shape A locked defaults:**
+- **QQQ-only baseline.** Leveraged variants (SOXL, TQQQ) become F1 if Shape A looks promising — avoids spending cross-leverage budget on a strategy that can't PROMOTE from F0 anyway.
+- **Walk-forward in F0**, not deferred. One run is cheap insurance; failure here means F1+ is wasted effort.
+
+**Verdicts (all shapes):**
+- **PROMOTE** — impossible from F0. Cross-year + cross-asset + walk-forward evidence insufficient after a single bundle.
+- **INVESTIGATE FURTHER** — promising; hand off to F1 with named weakness dimension + pre-stated hypothesis.
+- **PARK** — survived F0 but no clear next move. Record `unresolved_weaknesses:`; Sweeper picks up when relevant findings arrive later.
+- **RETURN TO INGESTION** — mechanism didn't reproduce or extraction bug surfaced. Whoever notices (Skeptic during methodology audit, Corpus Researcher during sanity) flags; Corpus Researcher owns the extraction fix since they authored the ingested record.
+
 ### Why the operating model is compounding
 
 Three reinforcing loops:
@@ -555,6 +577,10 @@ Apply `/add-telegram-swarm` to provision multiple bot identities. **Seven agents
 | **Both researchers run continuously and respond to quests in parallel** | Not sequential (internal first, external backup). Quest reports carry two sibling files — `internal-findings.md` (Corpus Researcher) + `external-findings.md` (Web Researcher) — integrated by the requesting agent in `integration.md`. Over-search is self-correcting (Corpus dedups at ingestion); under-search is irrecoverable. Backtest runs are the budgeted resource; agent time is cheap. |
 | **Web Researcher maintains a scout notebook as accumulated expertise** | `AlgoTrader/Web Research/_scout-notebook.md` records productive sources, unproductive ones, credible authors, communities, search patterns that worked, and dead ends to avoid. Compounds over time; makes quests faster because prior scouting informs where to look first. The scout notebook is the agent's own long-term memory artifact. |
 | **Quest is the inter-agent research primitive** at `AlgoTrader/Web Research/Quests/{YYYY-MM-DD}-{slug}/{prompt,internal-findings,external-findings,integration}.md` | Any agent fires a quest by writing `prompt.md`. Both researchers respond in parallel into sibling files. The requesting agent writes `integration.md` with disposition. Preserves single-writer discipline while enabling parallel research. Quests are a first-class artifact type, not an ad-hoc chat pattern. |
+| **First-bundle shape is onboarding-type-dependent** (Shape A–E) | Complete strategy, standalone entry, standalone exit, standalone non-signal component, newly-composed strategy each have different F0 shapes. Shape A (~6-8 runs: sanity + QQQ baseline + auto regime/bucketed attribution + robustness + walk-forward). Shape B/C (~1-2 runs, no full backtests). Shape D (~3-6 runs comparative swap-in). Shape E (~6-8 sharper-hypothesis runs). F0 never PROMOTEs; verdicts are INVESTIGATE FURTHER / PARK / RETURN TO INGESTION. |
+| **Shape A uses QQQ-only baseline; leveraged variants deferred to F1** | F0 can't PROMOTE anyway, so spending cross-leverage budget on first bundles is waste. SOXL/TQQQ runs only happen in F1+ when Shape A is determined promising. |
+| **Walk-forward stays in F0, not deferred to F1** | One run is cheap insurance against continuing on a strategy that would fail walk-forward later. Failure in F0 walk-forward saves all subsequent F1+ effort. |
+| **RETURN TO INGESTION authority: whoever notices flags; Corpus Researcher fixes** | Skeptic (during methodology audit) or Corpus Researcher (during sanity review) can flag a failed-reproduction bundle. Corpus Researcher owns the extraction fix because they authored the ingested record. Not a veto — a routing decision. |
 
 ### Design changes from the S&C ingestion validation exercise (Jan 2020 + July 2015 issues)
 

@@ -105,23 +105,24 @@ Organized by topic (current state), not chronological. For chronological history
 
 ---
 
-## Topic 6 — First-bundle composition  🟡
+## Topic 6 — First-bundle composition  🟢
 
-**Narrowed and informed by Topic 9 (Operating model).** The system has multiple onboarding paths now defined — backlog dip from bulk ingestion, daily catch arrival, Workflow-D composition. The remaining question is just the *bundle shape* itself, which is the same regardless of trigger.
+**Closed.** The first bundle is shape-by-onboarding-type, not one size. Five shapes captured in tracker.md Operating Model section:
 
-**Working draft (to confirm):** ~8-12 runs per first bundle —
-- 1 sanity check (catches ingestion bugs)
-- 3 baseline runs (QQQ + 2 same-class leveraged variants on author's stated "best" config)
-- regime attribution across all 5 classifiers (computed from baseline data, no separate runs)
-- 2-4 robustness probes (data-window jitter, hyperparameter jitter)
-- 1 walk-forward (early failure here = no point in subsequent bundles)
+| Shape | Onboarding | Runs | Notes |
+|---|---|---|---|
+| **A** | Complete strategy | ~6-8 | Sanity + 1 QQQ baseline + auto regime/bucketed attribution (free) + 2-4 robustness probes + 1 walk-forward |
+| **B** | Standalone entry signal | ~1-2 | Edge profile + random-entry baseline; no full backtests |
+| **C** | Standalone exit signal | ~1-2 | Like B, random-exit baseline on reference entries |
+| **D** | Standalone non-signal component (stops, TPs, sizing, equity-curve, timing, filters) | ~3-6 | Workflow B comparative swap-in against 1-3 host strategies |
+| **E** | Newly-composed strategy (Workflow D output) | ~6-8 | Like A with sharper hypotheses since components have prior evidence |
 
-**Verdict:** F0 *never* PROMOTEs — insufficient cross-year evidence. Always one of: INVESTIGATE FURTHER (promising — hand off to F1 with named weakness), PARK (survives but no clear next move; record `unresolved_weaknesses:`), or RETURN TO INGESTION (mechanism didn't reproduce).
+**Locked defaults:**
+- **QQQ-only baseline for Shape A.** Leveraged variants (SOXL, TQQQ) move to F1 if Shape A promising. F0 can't PROMOTE regardless, so spending cross-leverage budget at F0 is waste.
+- **Walk-forward in F0**, not deferred. One run is cheap insurance; failure here saves F1+ effort.
+- **RETURN TO INGESTION** — whoever notices flags (Skeptic during methodology audit, Corpus Researcher during sanity); Corpus Researcher owns the extraction fix since they authored the ingested record.
 
-**Open sub-questions:**
-- QQQ-only (5 runs) vs QQQ + 2 leveraged variants (8 runs)?
-- Walk-forward in F0 vs deferred to F1?
-- Does Researcher (who ingested) own the RETURN TO INGESTION verdict, or Skeptic?
+**Verdicts (all shapes):** PROMOTE impossible from F0; always one of INVESTIGATE FURTHER (hand off to F1 with named weakness + hypothesis), PARK (record `unresolved_weaknesses:`, wait for Sweeper resurface), or RETURN TO INGESTION.
 
 ---
 
