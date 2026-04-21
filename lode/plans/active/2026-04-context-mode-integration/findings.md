@@ -137,6 +137,20 @@ Madison container
 
 ## Open engineering questions
 
+### NODE_PATH required for globally-installed packages (found during execution)
+
+First rebuild completed cleanly but `require.resolve('context-mode/package.json')` from `/app/dist/index.js` returned "Cannot find module." The package was installed at `/usr/local/lib/node_modules/context-mode` but Node's default module resolution from `/app/dist/` searches:
+
+```
+/workspace/group/node_modules → /workspace/node_modules → /node_modules → /home/node/.node_modules → /home/node/.node_libraries → /usr/local/lib/node
+```
+
+It does NOT search `/usr/local/lib/node_modules/` — that's where globally-installed npm packages land but isn't on the default resolution path.
+
+**Fix:** `ENV NODE_PATH=/usr/local/lib/node_modules` in the Dockerfile. Appended to the resolver's search list. Safe for this container since the agent-runner is the only Node process; no conflicts with local-shadowing expectations.
+
+This gotcha applies to any future globally-installed npm package the agent-runner tries to `require.resolve` (e.g. agent-browser, @anthropic-ai/claude-code — though those are invoked via their shell binaries, not resolved as modules).
+
 ### `CLAUDE_PLUGIN_ROOT` env handling
 Context-mode's hook commands use `${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse.mjs`. Claude Code sets this automatically when loading a plugin. **The Agent SDK inside the container doesn't.** Options:
 - Install context-mode at a fixed absolute path in the container (e.g. `/opt/context-mode/`) and hardcode that in the hook commands

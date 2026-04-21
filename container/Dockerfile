@@ -60,8 +60,13 @@ RUN python3 -m venv /opt/a-mem/.venv \
          "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
     && chmod -R a+rX /opt/a-mem /opt/a-mem-mcp
 
-# context-mode MCP plugin (path resolved at runtime via createRequire)
+# context-mode MCP plugin (path resolved at runtime via createRequire).
+# NODE_PATH makes globally-installed packages (context-mode, agent-browser,
+# @anthropic-ai/claude-code) resolvable from any working directory — without
+# this, require.resolve('context-mode/...') from /app/dist/index.js fails
+# because default resolution doesn't traverse /usr/local/lib/node_modules.
 RUN npm install -g context-mode
+ENV NODE_PATH=/usr/local/lib/node_modules
 
 # Create app directory
 WORKDIR /app

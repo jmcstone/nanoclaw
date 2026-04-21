@@ -205,19 +205,32 @@ function createPreCompactHook(assistantName?: string): HookCallback {
 }
 
 /**
- * Locate the context-mode npm package root via Node's module resolver.
- * Returns null on failure (e.g. package not installed) — callers should
- * degrade gracefully. Cached after first successful resolve.
+ * Locate the context-mode npm package root by walking Node's module search
+ * paths. Can't use require.resolve('context-mode/package.json') directly —
+ * Node 22 enforces the package's `exports` field strictly and context-mode
+ * doesn't expose `./package.json` as a subpath. So we walk the same paths
+ * Node would search and pick the first directory containing a package.json.
+ *
+ * Returns null on failure (package not installed, etc.) — callers should
+ * degrade gracefully. Cached after first call.
  */
 let _ctxModeRootCache: string | null | undefined = undefined;
 function resolveCtxModeRoot(): string | null {
   if (_ctxModeRootCache !== undefined) return _ctxModeRootCache;
   try {
     const req = createRequire(import.meta.url);
-    const pkgJson = req.resolve('context-mode/package.json');
-    _ctxModeRootCache = path.dirname(pkgJson);
+    const searchPaths = req.resolve.paths('context-mode') ?? [];
+    for (const searchDir of searchPaths) {
+      const candidate = path.join(searchDir, 'context-mode');
+      if (fs.existsSync(path.join(candidate, 'package.json'))) {
+        _ctxModeRootCache = candidate;
+        return _ctxModeRootCache;
+      }
+    }
+    log(`context-mode: not found in any module search path (${searchPaths.join(', ')})`);
+    _ctxModeRootCache = null;
   } catch (err) {
-    log(`context-mode: cannot resolve install dir — ${err instanceof Error ? err.message : String(err)}`);
+    log(`context-mode: resolve error — ${err instanceof Error ? err.message : String(err)}`);
     _ctxModeRootCache = null;
   }
   return _ctxModeRootCache;
