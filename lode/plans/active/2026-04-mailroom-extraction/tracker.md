@@ -117,12 +117,21 @@ All items landed in ConfigFiles commit `d5d79a6` (2026-04-21). Written inline (s
 
 Ops: `mailroom-inbox-mcp-1` container reports `(healthy)` per Docker healthcheck (node one-liner GETs `/health` every 30s). Both services (ingestor + inbox-mcp) running from the same `mailroom-local:latest` image.
 
-### Phase M3 — Backfill as compose services
+### Phase M3 — Backfill as compose services ✅
 
-- [ ] **M3.1** Port `scripts/inbox-backfill-proton.ts` → mailroom `src/backfill/proton.ts`. Same logic, different imports, different config entry (from env.vault).
-- [ ] **M3.2** Port `scripts/inbox-backfill-gmail.ts` → mailroom `src/backfill/gmail.ts`.
-- [ ] **M3.3** Add `backfill-proton` and `backfill-gmail` services to docker-compose with `profiles: [backfill]` so they don't start with `dcc up mailroom`. Invoked via `docker compose run --rm backfill-proton`.
-- [ ] **M3.4** Test both — dry-runs first, then real runs. Verify idempotency (second run inserts 0 new rows).
+All items landed in ConfigFiles commit `6e2ad9d` (2026-04-21). Ported by 2 parallel general-purpose subagents; tested inline with ingestor stopped.
+
+- [x] **M3.1** Proton backfill `src/backfill/proton.ts` — descending UID walk per address (newest-first; Ctrl-C-safe). Connects to `protonmail-bridge:143` via Docker service DNS. Reads config from `process.env` only (no config.json, no readEnvFile). Cursor `proton.<addr>.{ceiling_uid, lowest_processed_uid}` in `/var/mailroom/data/backfill-cursor.json`. Reuses `deriveProtonThreadId` + `parseReferencesHeader` from `../proton/thread.js` and `extractProtonmailBody` from `../proton/poller.js` (promoted to export). Legacy flat-cursor migration dropped (mailroom starts fresh). CLI: `--address`, `--from-scratch`, `--dry-run`, `--batch-size`, `--floor-uid`. Sequential addresses with 2s stagger + 250ms between batches (`6e2ad9d`).
+- [x] **M3.2** Gmail backfill `src/backfill/gmail.ts` — paginated `users.messages.list` from `--since` date (default 2 years). Reuses `createGmailClient` + `extractGmailBodyParts` from `../gmail/poller.js` (no OAuth duplication). Rate-limited (≤ 5 msg/sec per acceptance criterion). Atomic cursor writes (tmp+rename) into shared `backfill-cursor.json` keyed under `gmail`. CLI: `--since`, `--from-scratch`, `--dry-run`, `--max-messages`. SIGINT flushes cursor and exits 130 (`6e2ad9d`).
+- [x] **M3.3** Compose services were scaffolded in M0 already (`profiles: [backfill]`); M3 just wired the `command:` entry points to the new `dist/backfill/{gmail,proton}.js` paths (already compose-declared). Invocation pattern: `env-vault env.vault -- docker compose --profile backfill run --rm backfill-{gmail,proton}` (plus any CLI flags). **Note**: `dcc` does not wrap `run`, so env-vault is called directly (`6e2ad9d`).
+- [x] **M3.4** Idempotency verified in both directions:
+  - Gmail: 1st real run → 2 inserted, 1 skipped. 2nd run → 0 inserted, 3 skipped. ✅
+  - Proton (jeff@thestonefamily.us, batch-size 5) → 13 inserted (new), 4 skipped (overlap with live ingestor's earlier work), 0 errors. 2nd run → 0 inserted, 0 walked (cursor at floor). ✅
+  - Dry-runs work cleanly (0 writes, full walk).
+
+**Concurrency caveat (documented in the Proton port)**: the backfill and the live ingestor must NOT connect to the same Proton address simultaneously — the bridge rate-limits concurrent IMAP sessions for one user. The M3 smoke test stopped the ingestor via `docker compose stop ingestor` for ~90s and restarted after. Future full-history Proton backfill runs should follow the same pattern (or add a flag to the live poller that temporarily disables per-address polling while a backfill owns that address). Gmail has no equivalent concern — the API tolerates parallel reads fine.
+
+Cursor race note from the Gmail agent's port: both backfills write the same `backfill-cursor.json`; atomic rename prevents torn writes but not lost updates if both run simultaneously (last writer wins for the other source's top-level key). In practice one page re-list on the next run; dedup absorbs. Could split into `backfill-cursor.{gmail,proton}.json` later if it matters.
 
 ### Phase M4 — Nanoclaw-side wiring (on `unified-inbox` branch)
 
@@ -182,10 +191,8 @@ Ops: `mailroom-inbox-mcp-1` container reports `(healthy)` per Docker healthcheck
 
 ## Current status
 
-**Phases M0 + M1 + M2 complete (ConfigFiles `421c97e`, `a74e8c7`, `d5d79a6`). Phase M3 (backfill compose services) next.** Both mailroom services are LIVE on jarvis:
-- `mailroom-ingestor-1` — polling Gmail + Protonmail, writing to encrypted `/var/mailroom/data/store.db`, emitting `inbox:new` events to `ipc-out/`. Protonmail path working (no ENOTFOUND).
-- `mailroom-inbox-mcp-1` — Streamable HTTP MCP server on port 8080 internal, reports `(healthy)` per docker healthcheck. Reachable from any container on `mailroom_shared` via `http://inbox-mcp:8080/mcp`. Full MCP handshake + FTS5 search verified end-to-end.
+**Phases M0 + M1 + M2 + M3 complete (ConfigFiles `421c97e`, `a74e8c7`, `d5d79a6`, `6e2ad9d`). Phase M4 (nanoclaw wiring) next.** Mailroom stack is self-sufficient — ingestion, encrypted storage, MCP query API, idempotent backfill all working end-to-end. Remaining work is on the nanoclaw side: wire Madison's agent container to reach mailroom's MCP, plus a `mailroom-subscriber` channel that drains `ipc-out/` events into the existing router/group-queue so fresh inbox arrivals surface in Madison's Telegram group.
 
-**Parallel-operation caveat unchanged**: nanoclaw's host-side Gmail poller still running in parallel; ~50% of new Gmail arrivals during this window land in mailroom-only, invisible to Madison until M4 wires her container. Protonmail side is net-positive (recovering a 3-week backlog that was dark on the nanoclaw side).
+Running on jarvis: `mailroom-ingestor-1` (up) + `mailroom-inbox-mcp-1` (healthy). Parallel-operation caveat unchanged — nanoclaw's host-side Gmail poller still racing with mailroom's until M5.
 
-Known blockers: none. Next is M3 — port the two backfill scripts to become `profiles: [backfill]` compose services invoked via `docker compose run --rm backfill-{proton,gmail}`.
+Known blockers: none. Next is M4 — 4 tasks: (1) `src/channels/mailroom-subscriber.ts` watching `~/containers/data/mailroom/ipc-out/`, (2) `--network mailroom_shared` on Madison's container at spawn (container-runner), (3) swap inbox MCP registration in agent-runner from stdio to `{type: 'http', url: 'http://inbox-mcp:8080/mcp'}`, (4) verify Madison's CLAUDE.md if any user-visible strings reference the stdio path.
