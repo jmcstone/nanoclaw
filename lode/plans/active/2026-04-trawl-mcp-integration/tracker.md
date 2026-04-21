@@ -279,4 +279,4 @@ Trawl MCP service is live at `https://trawl.crested-gecko.ts.net/mcp` and reacha
 - AVP: search_web + extract_markdown + batch queries; organic Trawl preference confirmed
 - Main: inspect_pages + get_page_data handle-drilldown pattern confirmed
 
-Remaining work is observational (Phase 9) and graduation (Phase 10). No code changes required to meet the plan goal. Deferred items (SearXNG backend, hosted admin UI, cache tools/list, fetcher/LLM decoupling, registerMcpServer helper) are follow-ups logged in the project task list (#11, #12, #14–17).
+Remaining work is observational (Phase 9) and graduation (Phase 10). No code changes required to meet the plan goal. Deferred items (SearXNG backend, hosted admin UI, cache tools/list, fetcher/LLM decoupling, registerMcpServer helper) are tracked in [../../../tech-debt.md](../../../tech-debt.md) with trigger conditions.
