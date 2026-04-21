@@ -7,6 +7,7 @@ import { OAuth2Client } from 'google-auth-library';
 
 import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
 import { logger } from '../logger.js';
+import { pickBody } from './email-body.js';
 import { findEmailTargetJid } from './email-routing.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -260,11 +261,14 @@ export class GmailChannel implements Channel {
     // Skip emails from self (our own replies)
     if (senderEmail === this.userEmail) return;
 
-    // Extract body text
-    const body = this.extractTextBody(msg.data.payload);
+    const { plain, html } = this.extractBodyParts(msg.data.payload);
+    const body = pickBody(plain, html);
 
     if (!body) {
-      logger.debug({ messageId, subject }, 'Skipping email with no text body');
+      logger.debug(
+        { messageId, subject },
+        'Skipping email with no extractable body',
+      );
       return;
     }
 
@@ -330,32 +334,29 @@ export class GmailChannel implements Channel {
     );
   }
 
-  private extractTextBody(
-    payload: gmail_v1.Schema$MessagePart | undefined,
-  ): string {
-    if (!payload) return '';
+  private extractBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): {
+    plain: string;
+    html: string;
+  } {
+    const acc = { plain: '', html: '' };
+    if (!payload) return acc;
 
-    // Direct text/plain body
-    if (payload.mimeType === 'text/plain' && payload.body?.data) {
-      return Buffer.from(payload.body.data, 'base64').toString('utf-8');
-    }
-
-    // Multipart: search parts recursively
-    if (payload.parts) {
-      // Prefer text/plain
-      for (const part of payload.parts) {
-        if (part.mimeType === 'text/plain' && part.body?.data) {
-          return Buffer.from(part.body.data, 'base64').toString('utf-8');
+    const walk = (part: gmail_v1.Schema$MessagePart): void => {
+      if (part.body?.data) {
+        const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
+        if (part.mimeType === 'text/plain' && !acc.plain) {
+          acc.plain = decoded;
+        } else if (part.mimeType === 'text/html' && !acc.html) {
+          acc.html = decoded;
         }
       }
-      // Recurse into nested multipart
-      for (const part of payload.parts) {
-        const text = this.extractTextBody(part);
-        if (text) return text;
+      if (part.parts) {
+        for (const child of part.parts) walk(child);
       }
-    }
+    };
 
-    return '';
+    walk(payload);
+    return acc;
   }
 }
 

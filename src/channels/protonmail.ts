@@ -8,6 +8,7 @@ import nodemailer from 'nodemailer';
 import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
+import { pickBody } from './email-body.js';
 import { findEmailTargetJid } from './email-routing.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -49,6 +50,8 @@ export class ProtonmailChannel implements Channel {
   private processedIds = new Set<string>();
   private messageMeta = new Map<string, MessageMeta>();
   private consecutiveErrors = 0;
+  private addressCooldownUntil = new Map<string, number>();
+  private addressErrorCount = new Map<string, number>();
   private connected = false;
   private smtpTransport: nodemailer.Transporter | null = null;
 
@@ -175,6 +178,8 @@ export class ProtonmailChannel implements Channel {
       this.smtpTransport.close();
       this.smtpTransport = null;
     }
+    this.addressCooldownUntil.clear();
+    this.addressErrorCount.clear();
     this.connected = false;
     logger.info('Protonmail channel stopped');
   }
@@ -202,35 +207,57 @@ export class ProtonmailChannel implements Channel {
   private async pollAllAddresses(): Promise<void> {
     if (!this.config) return;
 
-    try {
-      for (const address of this.config.addresses) {
-        await this.pollAddress(address);
-        // Stagger between addresses to avoid hammering the bridge
-        if (
-          this.config.addresses.indexOf(address) <
-          this.config.addresses.length - 1
-        ) {
-          await new Promise((r) => setTimeout(r, 2000));
-        }
+    const stagger = 2000;
+    let attempted = 0;
+    let succeeded = 0;
+
+    for (let i = 0; i < this.config.addresses.length; i++) {
+      const address = this.config.addresses[i];
+      const cooldownUntil = this.addressCooldownUntil.get(address) ?? 0;
+      if (Date.now() < cooldownUntil) {
+        logger.debug(
+          { address, cooldownMsLeft: cooldownUntil - Date.now() },
+          'Protonmail address in cooldown, skipping this cycle',
+        );
+        continue;
       }
-      this.consecutiveErrors = 0;
-    } catch (err) {
-      this.consecutiveErrors++;
-      const backoffMs = Math.min(
-        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
-        30 * 60 * 1000,
-      );
-      logger.error(
-        {
-          err,
-          consecutiveErrors: this.consecutiveErrors,
-          nextPollMs: backoffMs,
-        },
-        'Protonmail poll failed',
-      );
+
+      attempted++;
+      try {
+        await this.pollAddress(address);
+        succeeded++;
+        this.addressErrorCount.delete(address);
+        this.addressCooldownUntil.delete(address);
+      } catch (err) {
+        const n = (this.addressErrorCount.get(address) ?? 0) + 1;
+        this.addressErrorCount.set(address, n);
+        const cooldownMs = Math.min(60_000 * Math.pow(2, n - 1), 15 * 60_000);
+        this.addressCooldownUntil.set(address, Date.now() + cooldownMs);
+        logger.warn(
+          { address, errorCount: n, cooldownMs, err },
+          'Protonmail address poll failed, cooling down',
+        );
+      }
+
+      if (i < this.config.addresses.length - 1) {
+        await new Promise((r) => setTimeout(r, stagger));
+      }
     }
 
-    // Cap processed ID set to prevent unbounded growth
+    if (attempted > 0 && succeeded === 0) {
+      this.consecutiveErrors++;
+      logger.error(
+        {
+          attempted,
+          succeeded,
+          consecutiveErrors: this.consecutiveErrors,
+        },
+        'Protonmail poll failed for all attempted addresses',
+      );
+    } else {
+      this.consecutiveErrors = 0;
+    }
+
     if (this.processedIds.size > 5000) {
       const ids = [...this.processedIds];
       this.processedIds = new Set(ids.slice(ids.length - 2500));
@@ -301,16 +328,16 @@ export class ProtonmailChannel implements Channel {
       ? new Date(envelope.date).toISOString()
       : new Date().toISOString();
 
-    // Extract text body from raw source
     const fetchMsg = msg as { source?: Buffer };
-    const body = fetchMsg.source
-      ? this.extractTextFromSource(fetchMsg.source)
-      : '';
+    const { plain, html } = fetchMsg.source
+      ? this.extractBodyFromSource(fetchMsg.source)
+      : { plain: '', html: '' };
+    const body = pickBody(plain, html);
 
     if (!body) {
       logger.debug(
         { uid, subject, address: recipientAddress },
-        'Skipping email with no text body',
+        'Skipping email with no extractable body',
       );
       return;
     }
@@ -374,77 +401,48 @@ export class ProtonmailChannel implements Channel {
     );
   }
 
-  private extractTextFromSource(source: Buffer): string {
-    return this.extractTextFromPart(source.toString('utf-8'));
+  private extractBodyFromSource(source: Buffer): {
+    plain: string;
+    html: string;
+  } {
+    const acc = { plain: '', html: '' };
+    this.walkMimePart(source.toString('utf-8'), acc);
+    return acc;
   }
 
   /**
-   * Recursively extract text/plain content from a MIME part.
-   * Handles nested multipart (e.g. multipart/mixed → multipart/related → text/plain).
+   * Recursively walk a MIME part, accumulating the first text/plain and
+   * text/html payloads found. Handles nested multipart containers.
    */
-  private extractTextFromPart(raw: string): string {
-    // Find the boundary between headers and body
+  private walkMimePart(
+    raw: string,
+    acc: { plain: string; html: string },
+  ): void {
     const headerEnd = raw.indexOf('\r\n\r\n');
-    if (headerEnd === -1) return '';
+    if (headerEnd === -1) return;
 
     const headers = raw.slice(0, headerEnd).toLowerCase();
     const bodyRaw = raw.slice(headerEnd + 4);
 
-    // Multipart: split on boundary and process each part
     const boundaryMatch = headers.match(/boundary="?([^"\r\n;]+)"?/);
     if (boundaryMatch) {
       const boundary = boundaryMatch[1];
       const parts = bodyRaw.split(`--${boundary}`);
-
-      // First pass: look for direct text/plain parts
       for (const part of parts) {
-        const partHeaderEnd = part.indexOf('\r\n\r\n');
-        if (partHeaderEnd === -1) continue;
-
-        const partHeaders = part.slice(0, partHeaderEnd).toLowerCase();
-        if (!partHeaders.includes('text/plain')) continue;
-
-        let partBody = part.slice(partHeaderEnd + 4).trim();
-
-        // Remove trailing boundary markers
-        const endBoundary = partBody.indexOf(`--${boundary}`);
-        if (endBoundary !== -1) {
-          partBody = partBody.slice(0, endBoundary).trim();
-        }
-
-        // Handle quoted-printable encoding
-        if (partHeaders.includes('quoted-printable')) {
-          partBody = this.decodeQuotedPrintable(partBody);
-        }
-
-        // Handle base64 encoding
-        if (partHeaders.includes('base64')) {
-          partBody = Buffer.from(
-            partBody.replace(/\s/g, ''),
-            'base64',
-          ).toString('utf-8');
-        }
-
-        return partBody;
+        const trimmed = part.trim();
+        if (!trimmed || trimmed === '--') continue;
+        this.walkMimePart(trimmed, acc);
       }
-
-      // Second pass: recurse into nested multipart parts
-      for (const part of parts) {
-        const partHeaderEnd = part.indexOf('\r\n\r\n');
-        if (partHeaderEnd === -1) continue;
-
-        const partHeaders = part.slice(0, partHeaderEnd).toLowerCase();
-        if (!partHeaders.includes('multipart/')) continue;
-
-        const result = this.extractTextFromPart(part.trim());
-        if (result) return result;
-      }
-
-      return '';
+      return;
     }
 
-    // Non-multipart: return body directly
+    const isPlain = headers.includes('text/plain');
+    const isHtml = headers.includes('text/html');
+    if (!isPlain && !isHtml) return;
+
     let body = bodyRaw.trim();
+    const endBoundary = body.search(/\n--[^\n]*--\s*$/);
+    if (endBoundary !== -1) body = body.slice(0, endBoundary).trim();
 
     if (headers.includes('quoted-printable')) {
       body = this.decodeQuotedPrintable(body);
@@ -456,7 +454,8 @@ export class ProtonmailChannel implements Channel {
       body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8');
     }
 
-    return body;
+    if (isPlain && !acc.plain) acc.plain = body;
+    else if (isHtml && !acc.html) acc.html = body;
   }
 
   private decodeQuotedPrintable(text: string): string {
