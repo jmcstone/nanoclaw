@@ -29,6 +29,23 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  trawl?: TrawlConfig;
+}
+
+type TrawlMode = 'wildcard' | 'category' | 'explicit';
+
+interface TrawlConfig {
+  enabled: boolean;
+  mode?: TrawlMode;
+  excludedTools?: string[];
+  allowedTools?: string[];
+  allowedCategories?: string[];
+  url?: string;
+}
+
+interface TrawlToolInfo {
+  name: string;
+  category?: string;
 }
 
 interface ContainerOutput {
@@ -325,6 +342,129 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+// --- Trawl MCP helpers -----------------------------------------------------
+// Trawl downtime must never brick the container: on any lookup failure we
+// skip Trawl registration and continue with native tools.
+
+const TRAWL_DEFAULT_URL = 'https://trawl.crested-gecko.ts.net/mcp';
+const TRAWL_TOOLS_LIST_TIMEOUT_MS = 10_000;
+const TRAWL_TOOL_PREFIX = 'mcp__trawl__';
+
+/** Match `zoho_*`, `save_*`, exact names. Only trailing `*` is supported. */
+function patternMatches(pattern: string, name: string): boolean {
+  if (pattern.endsWith('*')) return name.startsWith(pattern.slice(0, -1));
+  return name === pattern;
+}
+
+function anyPatternMatches(patterns: readonly string[], name: string): boolean {
+  return patterns.some(p => patternMatches(p, name));
+}
+
+function prefixed(name: string): string {
+  return TRAWL_TOOL_PREFIX + name;
+}
+
+/**
+ * Fetch the Trawl MCP tools/list via Streamable HTTP (JSON-RPC POST).
+ * Returns null on any failure — caller falls back to skipping allowlist
+ * expansion (explicit mode still works from static config).
+ */
+async function fetchTrawlTools(url: string): Promise<TrawlToolInfo[] | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TRAWL_TOOLS_LIST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {},
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      log(`Trawl tools/list HTTP ${res.status}`);
+      return null;
+    }
+    const text = await res.text();
+    // Streamable HTTP may return either plain JSON or an SSE stream with a
+    // single `data:` frame. Support both defensively.
+    let payload: unknown;
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{')) {
+      payload = JSON.parse(trimmed);
+    } else {
+      const dataLine = trimmed.split('\n').find(l => l.startsWith('data:'));
+      if (!dataLine) {
+        log(`Trawl tools/list: unparseable response (first 200): ${trimmed.slice(0, 200)}`);
+        return null;
+      }
+      payload = JSON.parse(dataLine.slice('data:'.length).trim());
+    }
+    const toolsRaw = (payload as { result?: { tools?: unknown } } | undefined)?.result?.tools;
+    if (!Array.isArray(toolsRaw)) {
+      log('Trawl tools/list: no tools array in response');
+      return null;
+    }
+    const tools: TrawlToolInfo[] = [];
+    for (const t of toolsRaw) {
+      if (!t || typeof (t as { name?: unknown }).name !== 'string') continue;
+      const rec = t as { name: string; _meta?: { category?: string }; annotations?: { category?: string } };
+      // Trawl should expose `_tool_category` via MCP metadata — support a few
+      // common shapes (annotations.category, _meta.category) so we aren't
+      // brittle to the exact FastMCP wrapping.
+      const category = rec._meta?.category || rec.annotations?.category;
+      tools.push({ name: rec.name, category });
+    }
+    return tools;
+  } catch (err) {
+    log(`Trawl tools/list failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveTrawlAllowedTools(cfg: TrawlConfig): Promise<string[]> {
+  const mode: TrawlMode = cfg.mode ?? 'wildcard';
+
+  if (mode === 'explicit') {
+    return (cfg.allowedTools ?? []).map(prefixed);
+  }
+
+  const tools = await fetchTrawlTools(cfg.url ?? TRAWL_DEFAULT_URL);
+  if (!tools) {
+    log(`Trawl ${mode}: tools/list unavailable, skipping registration`);
+    return [];
+  }
+
+  let keep: (t: TrawlToolInfo) => boolean;
+  let detail: string;
+  if (mode === 'wildcard') {
+    const excluded = cfg.excludedTools ?? [];
+    keep = t => !anyPatternMatches(excluded, t.name);
+    detail = `excluded: ${excluded.join(', ') || 'none'}`;
+  } else if (mode === 'category') {
+    const cats = cfg.allowedCategories ?? [];
+    // Require an explicit non-empty category on each tool — otherwise an
+    // untagged tool would match every allowlist.
+    keep = t => typeof t.category === 'string' && cats.includes(t.category);
+    detail = `categories: ${cats.join(', ') || 'none'}`;
+  } else {
+    log(`Trawl: unknown mode "${mode}", skipping`);
+    return [];
+  }
+
+  const kept = tools.filter(keep);
+  log(`Trawl ${mode}: ${kept.length}/${tools.length} tools allowed (${detail})`);
+  return kept.map(t => prefixed(t.name));
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -427,6 +567,26 @@ async function runQuery(
     };
   }
 
+  const trawlCfg = containerInput.trawl;
+  const hasTrawl = trawlCfg?.enabled === true;
+  log(`Trawl MCP: ${hasTrawl ? `enabled (mode=${trawlCfg?.mode ?? 'wildcard'})` : 'disabled'}`);
+  let trawlAllowed: string[] = [];
+  if (hasTrawl && trawlCfg) {
+    // Register atomically: resolve the allowlist first, then only attach
+    // the MCP server if we have tools to expose. A registered server with
+    // zero allowed tools still gets connection-handshaked per turn — pure
+    // latency cost for no benefit.
+    trawlAllowed = await resolveTrawlAllowedTools(trawlCfg);
+    if (trawlAllowed.length > 0) {
+      mcpServers.trawl = {
+        type: 'http',
+        url: trawlCfg.url ?? TRAWL_DEFAULT_URL,
+      };
+    } else {
+      log('Trawl MCP: allowlist empty, skipping server registration');
+    }
+  }
+
   const allowedTools = [
     'Bash',
     'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -438,6 +598,7 @@ async function runQuery(
     'mcp__nanoclaw__*',
     'mcp__gmail__*',
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
+    ...trawlAllowed,
   ];
 
   for await (const message of query({
