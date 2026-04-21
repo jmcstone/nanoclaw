@@ -71,6 +71,32 @@ Transform Madison Inbox from a reactive email-polling agent into a unified, auto
 - [x] **4.2** `COPY inbox-mcp/` + `npm ci --omit=dev && npm run build` into `/opt/inbox-mcp/` — `container/Dockerfile` (`b530363`).
 - [x] **4.3** Madison CLAUDE.md reads via `mcp__inbox__*`, actions stay on `mcp__gmail__*` + Proton; `lode/groups.md` note added — (`5adccfb`).
 
+## Phase 1.5 — Historical backfill (P1, days, PLANNED)
+
+Fills the inbox store with pre-deploy historical mail so Madison's `mcp__inbox__search` works back through 2+ years of history, not just "from this moment forward." Asymmetric backfill cost: Proton is cheap (bridge is a full local mirror already — we just read what's already on localhost). Gmail is moderate (paginated API with quota). Both share the Phase 1 ingest layer, so no duplication.
+
+Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent container rebuilt + nanoclaw service restarted) — the scripts need `~/containers/data/NanoClaw/inbox/store.db` to exist with schema, which happens on orchestrator startup.
+
+### Acceptance criteria
+
+- [ ] **AC-1.5-1** `scripts/inbox-backfill-proton.ts` exists and, run via `tsx`, iterates all 7 Proton addresses via localhost IMAP and ingests every historical message through `ingestProtonmail`. Idempotent (second run is a no-op). Verify: `SELECT COUNT(*) FROM messages WHERE source='protonmail'` grows on first run, stays constant on second.
+- [ ] **AC-1.5-2** `scripts/inbox-backfill-gmail.ts` exists and, run via `tsx`, paginates `users.messages.list` from a configurable `--since` date (default 2 years back) and ingests every matching message through `ingestGmail`. Idempotent. Rate-limited (≤ 5 msg/sec) to stay well under Gmail daily quota. Verify: first run populates rows; second run inserts zero new rows.
+- [ ] **AC-1.5-3** Both scripts checkpoint progress at `~/containers/data/NanoClaw/inbox/backfill-cursor.json` so a mid-run crash or Ctrl-C can resume without redoing completed work. Verify: kill mid-run, re-run, it picks up from the checkpoint.
+- [ ] **AC-1.5-4** After both scripts complete, Madison's `mcp__inbox__search` can find historical threads by subject fragment (e.g. "Guardian invoice 9246") that pre-date Phase 1 deployment.
+
+### Read first
+
+- `/home/jeff/containers/nanoclaw/src/inbox-store/ingest.ts` — `ingestGmail` / `ingestProtonmail` signatures.
+- `/home/jeff/containers/nanoclaw/src/channels/protonmail.ts` — IMAP connect/search/fetch pattern to adapt; `parseReferencesHeader` helper.
+- `/home/jeff/containers/nanoclaw/src/channels/gmail.ts` — Gmail API fetch + body extraction pattern to adapt.
+- `/home/jeff/containers/nanoclaw/src/channels/email-body.ts` — `pickBody` helper for Markdown body extraction.
+- `/home/jeff/containers/nanoclaw/.env` (via `readEnvFile`) — Proton bridge password + Gmail OAuth tokens.
+
+### Wave 1.5 — Two independent backfill scripts (parallel, depends on Phase 1 deploy)
+
+- [ ] **1.5.1** Proton backfill script. Per address: IMAP connect → `SEARCH ALL` → paginated `FETCH` (batches of 50) for envelope + source + References header → construct `ProtonmailIngestInput` → `ingestProtonmail` → advance per-address cursor. Persist checkpoint to `backfill-cursor.json` (`proton.{address}.last_uid`). Short sleep between batches to let the bridge breathe. — `scripts/inbox-backfill-proton.ts` (new) — serves AC-1.5-1, 1.5-3, 1.5-4.
+- [ ] **1.5.2** Gmail backfill script. Paginate `users.messages.list({ q: "after:<since>" })` → per message-id `users.messages.get({ format: 'full' })` → reuse `extractBodyParts` + `pickBody` → `ingestGmail` → checkpoint per-page-token. Rate limit ≤ 5 msg/sec. Support `--since YYYY-MM-DD` flag (default `$(date -d '2 years ago')`). Persist checkpoint to `backfill-cursor.json` (`gmail.{account}.next_page_token`). — `scripts/inbox-backfill-gmail.ts` (new) — serves AC-1.5-2, 1.5-3, 1.5-4.
+
 ## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
 
 - [ ] 2.1 Design API surface: `list`, `read`, `search`, `reply`, `archive`, `label`, `thread`, `snooze`, `unsubscribe`, `mark_read`, `mark_unread`. Shared across all sources.
@@ -141,4 +167,4 @@ Transform Madison Inbox from a reactive email-polling agent into a unified, auto
 
 ## Current status
 
-Phase 0 + Phase 1 code-complete on `unified-inbox`. All 10 Phase 1 tasks landed across 4 waves with 11 inbox(phase1) commits. 365/365 tests pass. Next: `/lode:verify unified-inbox` to confirm each AC against the codebase, then rebuild the agent container (`./container/build.sh`) and restart nanoclaw to bring Phase 0 + 1 into production.
+Phase 0 + Phase 1 code-complete on `unified-inbox`. Phase 1.5 (historical backfill) planned with 2 tasks. 365/365 tests pass. Next: `/lode:verify unified-inbox` to confirm each Phase 1 AC against the codebase, then rebuild the agent container (`./container/build.sh`) and restart nanoclaw to bring Phase 0 + 1 into production. Phase 1.5 executes after that deploy (scripts need the live store.db).
