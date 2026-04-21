@@ -214,7 +214,9 @@ export function getRecentMessages(args: RecentArgs): RecentResult {
 
   let new_watermark: string;
   if (messages.length === 0) {
-    new_watermark = isColdStart ? strategy.coldStartEmpty(coldStartCutoff!) : watermark;
+    new_watermark = isColdStart
+      ? strategy.coldStartEmpty(coldStartCutoff!)
+      : watermark;
   } else {
     new_watermark = strategy.maxWatermark(messages);
   }
