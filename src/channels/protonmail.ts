@@ -11,12 +11,35 @@ import { readEnvFile } from '../env.js';
 import { pickBody } from './email-body.js';
 import { findEmailTargetJid } from './email-routing.js';
 import { registerChannel, ChannelOpts } from './registry.js';
+import { ingestProtonmail } from '../inbox-store/ingest.js';
 import {
   Channel,
   OnChatMetadata,
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+
+/**
+ * Parse the References header from a raw email source buffer.
+ * Handles folded headers (continuation lines with leading whitespace).
+ * Returns message-ids in original (oldest-first) order.
+ */
+export function parseReferencesHeader(sourceBuf: Buffer): string[] {
+  const source = sourceBuf.toString('utf-8');
+  // Find the end of headers (blank line)
+  const headerEnd = source.search(/\r?\n\r?\n/);
+  const headerSection = headerEnd === -1 ? source : source.slice(0, headerEnd);
+
+  // Match References: header including folded continuations
+  const match = headerSection.match(
+    /^references\s*:[^\S\r\n]*([\s\S]*?)(?=\r?\n[^\s]|\r?\n$|$)/im,
+  );
+  if (!match) return [];
+
+  const value = match[1].replace(/\r?\n[\t ]+/g, ' ');
+  const ids = value.match(/<[^>]+>/g);
+  return ids ?? [];
+}
 
 interface ProtonmailConfig {
   addresses: string[];
@@ -364,6 +387,29 @@ export class ProtonmailChannel implements Channel {
         'No email target group registered, skipping email',
       );
       return;
+    }
+
+    // Store in unified inbox (fire-and-forget, non-fatal)
+    try {
+      const references = fetchMsg.source
+        ? parseReferencesHeader(fetchMsg.source)
+        : [];
+      ingestProtonmail({
+        account_email: recipientAddress,
+        source_message_id: messageId,
+        sender_email: senderEmail,
+        sender_name: senderName || null,
+        subject: subject === '(no subject)' ? null : subject,
+        body_markdown: body,
+        received_at: date,
+        in_reply_to: envelope.inReplyTo || null,
+        references,
+      });
+    } catch (err) {
+      logger.warn(
+        { uid, recipientAddress, err },
+        'Inbox-store ingest failed (non-fatal)',
+      );
     }
 
     const preview =
