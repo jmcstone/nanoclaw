@@ -44,7 +44,8 @@ function protonMsg(
     ...rest,
     source_message_id,
     thread_id:
-      thread_id ?? deriveProtonThreadId(references, in_reply_to, source_message_id),
+      thread_id ??
+      deriveProtonThreadId(references, in_reply_to, source_message_id),
   };
 }
 
@@ -172,9 +173,9 @@ describe('deriveProtonThreadId', () => {
     );
   });
   it('in_reply_to (no references) uses in_reply_to', () => {
-    expect(deriveProtonThreadId([], '<msg-001@proton.me>', '<msg-002@proton.me>')).toBe(
-      'proton:<msg-001@proton.me>',
-    );
+    expect(
+      deriveProtonThreadId([], '<msg-001@proton.me>', '<msg-002@proton.me>'),
+    ).toBe('proton:<msg-001@proton.me>');
   });
   it('references uses the first entry', () => {
     expect(
@@ -182,9 +183,9 @@ describe('deriveProtonThreadId', () => {
     ).toBe('proton:<a>');
   });
   it('empty-string entries in references are skipped', () => {
-    expect(
-      deriveProtonThreadId(['', '<real@id>'], null, '<msg@id>'),
-    ).toBe('proton:<real@id>');
+    expect(deriveProtonThreadId(['', '<real@id>'], null, '<msg@id>')).toBe(
+      'proton:<real@id>',
+    );
   });
 });
 
