@@ -92,10 +92,12 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 - `/home/jeff/containers/nanoclaw/src/channels/email-body.ts` — `pickBody` helper for Markdown body extraction.
 - `/home/jeff/containers/nanoclaw/.env` (via `readEnvFile`) — Proton bridge password + Gmail OAuth tokens.
 
-### Wave 1.5 — Two independent backfill scripts (parallel, depends on Phase 1 deploy)
+### Wave 1.5 — Two independent backfill scripts ✅
 
-- [ ] **1.5.1** Proton backfill script. Per address: IMAP connect → `SEARCH ALL` → paginated `FETCH` (batches of 50) for envelope + source + References header → construct `ProtonmailIngestInput` → `ingestProtonmail` → advance per-address cursor. Persist checkpoint to `backfill-cursor.json` (`proton.{address}.last_uid`). Short sleep between batches to let the bridge breathe. — `scripts/inbox-backfill-proton.ts` (new) — serves AC-1.5-1, 1.5-3, 1.5-4.
-- [ ] **1.5.2** Gmail backfill script. Paginate `users.messages.list({ q: "after:<since>" })` → per message-id `users.messages.get({ format: 'full' })` → reuse `extractBodyParts` + `pickBody` → `ingestGmail` → checkpoint per-page-token. Rate limit ≤ 5 msg/sec. Support `--since YYYY-MM-DD` flag (default `$(date -d '2 years ago')`). Persist checkpoint to `backfill-cursor.json` (`gmail.{account}.next_page_token`). — `scripts/inbox-backfill-gmail.ts` (new) — serves AC-1.5-2, 1.5-3, 1.5-4.
+- [x] **1.5.1** Proton backfill script + `extractProtonmailBody` refactor + `parseReferencesHeader` export + 11 new tests — `scripts/inbox-backfill-proton.ts`, `src/channels/protonmail.ts` (`3f9df7b` for substance, `0f881de` for prettier tidy — attribution note below).
+- [x] **1.5.2** Gmail backfill script + `extractGmailBodyParts` module-level export + 5 new tests — `scripts/inbox-backfill-gmail.ts`, `src/channels/gmail.ts` (`3f9df7b`).
+
+**Attribution note**: the Gmail executor committed first and swept in the Proton executor's unstaged files from the working tree, so both substantive changes landed under `3f9df7b`. `0f881de` is a small prettier-only follow-up. All substance is in history; split attribution is noisy but not lossy. Future parallel lode-execute runs: keep executors out of overlapping file paths even at the working-tree level, or have them `git stash` before committing to avoid sweeping in sibling work.
 
 ## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
 

@@ -4,6 +4,7 @@
 
 ### 2026-04-21
 
+- **20:05 CDT** — Phase 1.5 backfill scripts complete. `3f9df7b` (Gmail) ended up containing both backfill scripts + both channel refactors because the Gmail executor swept in the Proton executor's working-tree files at commit time; `0f881de` is the Proton cleanup commit. Full suite 377/377 (+12 new unit tests across extractGmailBodyParts and extractProtonmailBody). Scripts are idempotent, checkpointable, rate-limited. Execution gated on Phase 1 deploy. Also surfaced a pending question: seed `watermarks` table with current Madison high-water values before deploy so her first sweep isn't flooded.
 - **19:40 CDT** — Wave 4 complete in parallel. Three executors landed `95740df` (container-runner gating + agent-runner MCP registration + startup init + 3 gating tests), `b530363` (Dockerfile bakes inbox-mcp), `5adccfb` (Madison CLAUDE.md reads via inbox MCP; `lode/groups.md` note). Full suite 365/365. **Phase 1 code-complete.**
 - **19:20 CDT** — Wave 3 complete in parallel. `42781ef` (Gmail ingestion wiring), `f72a528` (Protonmail ingestion wiring + References header parser), `7c516cd` (inbox MCP server scaffold — 10 files, MCP SDK 1.13.3, tools/list verified).
 - **19:05 CDT** — Wave 2 complete in parallel. Three executors landed `bb82006` (ingest), `98870ba` (watermarks), `05cad11` (queries). 31 new tests pass; full suite 362/362.

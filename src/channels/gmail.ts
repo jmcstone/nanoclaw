@@ -18,7 +18,9 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
-export function extractGmailBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): {
+export function extractGmailBodyParts(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+): {
   plain: string;
   html: string;
 } {
@@ -374,7 +376,6 @@ export class GmailChannel implements Channel {
       'Gmail email delivered',
     );
   }
-
 }
 
 registerChannel('gmail', (opts: ChannelOpts) => {
