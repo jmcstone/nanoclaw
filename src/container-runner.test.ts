@@ -233,15 +233,20 @@ describe('container-runner timeout behavior', () => {
 
 describe('inbox store mount gating', () => {
   const spawnMock = spawn as ReturnType<typeof vi.fn>;
+  const TEST_INBOX_KEY =
+    'deadbeefcafefeeddeadbeefcafefeed' +
+    'deadbeefcafefeeddeadbeefcafefeed';
 
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
     spawnMock.mockClear();
+    process.env.INBOX_DB_KEY = TEST_INBOX_KEY;
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    delete process.env.INBOX_DB_KEY;
   });
 
   function getSpawnArgs(): string[] {
@@ -324,5 +329,37 @@ describe('inbox store mount gating', () => {
       a.includes('/workspace/inbox/store.db'),
     );
     expect(hasInboxMount).toBe(false);
+  });
+
+  it('telegram_inbox group forwards INBOX_DB_KEY into container env', async () => {
+    const inboxGroup: RegisteredGroup = {
+      name: 'Madison Inbox',
+      folder: 'telegram_inbox',
+      trigger: '@Madison',
+      added_at: new Date().toISOString(),
+    };
+
+    startAndClose(inboxGroup, 'telegram_inbox');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = getSpawnArgs();
+    const keyArg = args.find((a) => a.startsWith('INBOX_DB_KEY='));
+    expect(keyArg).toBe(`INBOX_DB_KEY=${TEST_INBOX_KEY}`);
+  });
+
+  it('non-inbox group does not forward INBOX_DB_KEY', async () => {
+    const mainGroup: RegisteredGroup = {
+      name: 'Main Group',
+      folder: 'telegram_main',
+      trigger: '@Madison',
+      added_at: new Date().toISOString(),
+    };
+
+    startAndClose(mainGroup, 'telegram_main');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = getSpawnArgs();
+    const hasKey = args.some((a) => a.startsWith('INBOX_DB_KEY='));
+    expect(hasKey).toBe(false);
   });
 });

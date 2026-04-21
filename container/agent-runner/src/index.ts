@@ -713,11 +713,19 @@ async function runQuery(
     };
   }
   if (hasInbox) {
+    const inboxKey = process.env.INBOX_DB_KEY;
+    if (!inboxKey) {
+      throw new Error(
+        'INBOX_DB_KEY is required inside the container for telegram_inbox groups. ' +
+          'The host orchestrator must pass it through — check src/container-runner.ts gating.',
+      );
+    }
     mcpServers['inbox'] = {
       command: 'node',
       args: ['/opt/inbox-mcp/dist/index.js'],
       env: {
         INBOX_DB_PATH: '/workspace/inbox/store.db',
+        INBOX_DB_KEY: inboxKey,
       },
     };
   }

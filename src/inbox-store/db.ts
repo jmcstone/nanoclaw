@@ -3,8 +3,37 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from '../config.js';
+import { readEnvFile } from '../env.js';
 
 let db: Database.Database | undefined;
+
+const INBOX_DB_KEY_HEX_LENGTH = 64;
+
+export function loadInboxDbKey(): string {
+  const raw =
+    process.env.INBOX_DB_KEY ||
+    readEnvFile(['INBOX_DB_KEY']).INBOX_DB_KEY ||
+    '';
+  if (!raw) {
+    throw new Error(
+      'INBOX_DB_KEY is required for inbox store encryption. ' +
+        'Generate one via: npx tsx scripts/inbox-keygen.ts, ' +
+        'then add it to .env as INBOX_DB_KEY=<64-hex-chars>.',
+    );
+  }
+  if (!/^[0-9a-f]{64}$/i.test(raw)) {
+    throw new Error(
+      `INBOX_DB_KEY must be exactly ${INBOX_DB_KEY_HEX_LENGTH} hex chars (256-bit key). ` +
+        'Regenerate via: npx tsx scripts/inbox-keygen.ts.',
+    );
+  }
+  return raw.toLowerCase();
+}
+
+function applyCipherKey(database: Database.Database, keyHex: string): void {
+  database.pragma(`cipher = 'sqlcipher'`);
+  database.pragma(`key = "x'${keyHex}'"`);
+}
 
 function createSchema(database: Database.Database): void {
   database.exec(`
@@ -95,9 +124,11 @@ function createSchema(database: Database.Database): void {
 
 export function getInboxDb(): Database.Database {
   if (!db) {
+    const keyHex = loadInboxDbKey();
     const dbPath = path.join(DATA_DIR, 'inbox', 'store.db');
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     db = new Database(dbPath);
+    applyCipherKey(db, keyHex);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     createSchema(db);

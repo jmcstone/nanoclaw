@@ -29,6 +29,7 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { EMAIL_TARGET_FOLDER } from './channels/email-routing.js';
+import { loadInboxDbKey } from './inbox-store/db.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -270,11 +271,18 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  group: RegisteredGroup,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Inbox-group only: forward the SQLCipher key so the container's inbox-mcp
+  // can decrypt the read-only mount. Gated on the same folder check as the mount.
+  if (group.folder === EMAIL_TARGET_FOLDER) {
+    args.push('-e', `INBOX_DB_KEY=${loadInboxDbKey()}`);
+  }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
@@ -333,7 +341,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, group);
 
   logger.debug(
     {

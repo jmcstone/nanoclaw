@@ -65,8 +65,10 @@ RUN python3 -m venv /opt/a-mem/.venv \
 # at runtime. COPY busts the layer cache whenever files under inbox-mcp/ change.
 COPY inbox-mcp/ /opt/inbox-mcp/
 RUN cd /opt/inbox-mcp \
-    && npm ci --omit=dev --ignore-scripts \
+    && npm ci --ignore-scripts \
+    && npm rebuild better-sqlite3 \
     && npm run build \
+    && npm prune --omit=dev \
     && chmod -R a+rX /opt/inbox-mcp
 
 # context-mode MCP plugin (path resolved at runtime via createRequire).

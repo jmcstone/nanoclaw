@@ -99,6 +99,44 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 
 **Attribution note**: the Gmail executor committed first and swept in the Proton executor's unstaged files from the working tree, so both substantive changes landed under `3f9df7b`. `0f881de` is a small prettier-only follow-up. All substance is in history; split attribution is noisy but not lossy. Future parallel lode-execute runs: keep executors out of overlapping file paths even at the working-tree level, or have them `git stash` before committing to avoid sweeping in sibling work.
 
+## Phase 1.6 — Encryption at rest (SQLCipher) (P1, ~2 hours, PLANNED)
+
+Encrypts `~/containers/data/NanoClaw/inbox/store.db` at the SQLite page layer via SQLCipher. Threat model: drive-theft / disk-image seizure on the jarvis btrfs subvolume (no LUKS, no fscrypt). FTS5 keeps working because encryption is below the VFS.
+
+Scope is deliberately narrow: **inbox store only**. Main `nanoclaw.db` stays plain — per project convention, secrets live in OneCLI, not in `nanoclaw.db`. a-mem per-group ChromaDBs are Python/LanceDB and out of scope for this phase.
+
+Gating: Phase 1.6 lands **before** Phase 1 deploy. `store.db` does not yet exist on this machine, so no migration step is needed — the service creates it encrypted on first start.
+
+### Acceptance criteria
+
+- [ ] **AC-1.6-1** Root and `container/inbox-mcp/` `package.json` alias `better-sqlite3` to `better-sqlite3-multiple-ciphers` (drop-in API-compatible). Verify: `npm ls better-sqlite3` shows the multiple-ciphers resolution; `import Database from 'better-sqlite3'` call sites unchanged.
+- [ ] **AC-1.6-2** `src/inbox-store/db.ts` reads `INBOX_DB_KEY` env var at first `getInboxDb()` call; applies `PRAGMA cipher='sqlcipher'` + `PRAGMA key='<hex>'` before any schema op. Missing or short key → explicit thrown `Error` naming the env var (not a cryptic SQL error). Verify: unit test for each failure mode.
+- [ ] **AC-1.6-3** `container/inbox-mcp/src/db.ts` does the same on its read-only open, reading `INBOX_DB_KEY` from the container's env. Verify: `tools/list` on the MCP server succeeds with the key set; fails with clear error when unset or wrong.
+- [ ] **AC-1.6-4** `src/container-runner.ts` passes `INBOX_DB_KEY` from host env into the Madison container's env, gated on `folder === 'telegram_inbox'` (same gate as the bind mount). Verify: `docker inspect` on spawned Madison container shows the env; other group containers do not.
+- [ ] **AC-1.6-5** `scripts/inbox-keygen.ts` emits 32 bytes of `crypto.randomBytes` as hex (64 chars) to stdout. One-time run; output pasted into `.env` as `INBOX_DB_KEY=`. Documented in `lode/tmp/handover-2026-04-21.md` and `CLAUDE.md`.
+- [ ] **AC-1.6-6** On-disk `store.db` is unreadable by vanilla `sqlite3` CLI. Verify: `sqlite3 ~/containers/data/NanoClaw/inbox/store.db ".tables"` exits non-zero with "file is not a database" or equivalent.
+- [ ] **AC-1.6-7** Full vitest suite (384/384 as of `cd4f1bf`) continues to pass, plus a new encryption round-trip test: open with key → write → close → reopen with same key succeeds, reopen with wrong key throws. FTS5 search test verifies encryption is transparent to indexing.
+
+### Read first
+
+- `src/inbox-store/db.ts` — current `getInboxDb()` + `_initTestInboxDb` surface; must preserve the in-memory test path (use an in-memory key for uniformity).
+- `container/inbox-mcp/src/db.ts` — read-only open path; same key wiring on the container side.
+- `src/container-runner.ts` — `buildEnvironment` (or equivalent) where env is composed for the spawned container; the `folder === 'telegram_inbox'` branch that already gates the bind mount.
+- `container/Dockerfile` — `npm ci` step for inbox-mcp already compiles native addons; `better-sqlite3-multiple-ciphers` builds the same way but requires openssl headers (already present in the base image).
+- `package.json` root — existing `better-sqlite3` pin; the alias syntax keeps the import path identical.
+
+### Wave 1.6 — Single executor (small, tightly coupled)
+
+This phase is too cross-cutting for parallel executors (native-binding swap + env plumbing + tests all touch overlapping invariants). Run as one sequential change:
+
+- [ ] **1.6.1** Alias `better-sqlite3` → `better-sqlite3-multiple-ciphers` in root `package.json` and `container/inbox-mcp/package.json`; `npm install` in both; verify native rebuild succeeds.
+- [ ] **1.6.2** Add `loadInboxDbKey()` helper in `src/inbox-store/db.ts` (throws with actionable message if unset / too short); wire into `getInboxDb()` and `_initTestInboxDb` (the latter accepts an override for test scenarios).
+- [ ] **1.6.3** Mirror the key-load in `container/inbox-mcp/src/db.ts`.
+- [ ] **1.6.4** Wire `INBOX_DB_KEY` passthrough in `src/container-runner.ts` behind the existing `folder === 'telegram_inbox'` gate.
+- [ ] **1.6.5** Add `scripts/inbox-keygen.ts`; generate the real key; write to `.env`; update handover + CLAUDE.md.
+- [ ] **1.6.6** Add encryption round-trip test + update existing tests to provide a test key.
+- [ ] **1.6.7** Rebuild container (`./container/build.sh` — already pruned), verify `sqlite3 store.db` path confirms encryption on first service start.
+
 ## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
 
 - [ ] 2.1 Design API surface: `list`, `read`, `search`, `reply`, `archive`, `label`, `thread`, `snooze`, `unsubscribe`, `mark_read`, `mark_unread`. Shared across all sources.
@@ -163,6 +201,10 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 | Cold-start default = NOW - 24h, env-overridable via `INBOX_COLD_START_LOOKBACK_MS` | Eliminates the need for a manual watermark-seed step after Phase 1.5 backfill. `getRecentMessages` with no watermark returns the last 24h of mail; second call self-heals into native per-source semantics via the `new_watermark` it emitted on the first call. Env override lets Jeff widen the window after a long weekend without code change. |
 | Generic `ingestMessage` replaces per-source `ingestGmail`/`ingestProtonmail` | Caller derives its own `thread_id` and passes it in. Adding a source no longer requires a new exported function in the ingest layer — just a Channel implementation that calls `ingestMessage`. Proton-specific thread-root derivation lives in `deriveProtonThreadId` in the Proton channel module. |
 | Per-source watermark strategies in `getRecentMessages` | `Record<InboxSource, WatermarkStrategy>` replaces hardcoded `isGmail ? ... : proton` branches. Each strategy owns a prepared SELECT, a max-watermark reducer, and a cold-start-empty fallback. TypeScript rejects an incomplete strategies map so forgetting a source when adding one fails at compile time. |
+| Encrypt inbox `store.db` via SQLCipher before first-ever service start | Drive-theft / disk-image threat model: data dir is a btrfs subvolume with no LUKS or fscrypt. SQLCipher encrypts at the page layer so FTS5 keeps working. Migration cost is zero because `store.db` does not exist yet — deferring past deploy means migrating a backfilled multi-hundred-MB store later. Narrow scope (inbox only) because `nanoclaw.db` holds no secrets (OneCLI owns auth tokens). |
+| `better-sqlite3-multiple-ciphers` over `@journeyapps/sqlcipher` | Drop-in API parity with `better-sqlite3` (sync, prepared-stmt cache, WAL) — zero changes to call sites. The alternative uses the async `node-sqlite3` API and would require rewriting ingest / queries. |
+| `INBOX_DB_KEY` env var (not OneCLI) for the SQLCipher key | `getInboxDb()` fires at orchestrator startup, before any request-time injection path OneCLI covers. Systemd already sources `.env`; container-runner passes the env through to Madison's container behind the `telegram_inbox` folder gate (same gate as the bind mount). OneCLI layering can be added later if the broader secrets story consolidates. |
+| **Pivot 2026-04-21**: extract mail ingestion + store + MCP + backfill out of nanoclaw into a standalone "mailroom" Docker stack | Diagnosis of the host-side Protonmail `ENOTFOUND` bug (dark since 2026-03-30) surfaced a deeper mis-location: ingestion logic (IMAP, Gmail API, HTML parsing, SQLCipher writer) shouldn't live inside the agent orchestrator. Jeff's architectural principle is "everything in Docker, nothing on the host" — current structure violates this. Extracting to a dedicated stack lets the bridge drop its `0.0.0.0` port publishing (reachable only on `protonmail_default`), makes backfill a `docker compose run --rm` service, and leaves nanoclaw lean enough to containerize cleanly as a later follow-up. SQLCipher Phase 1.6 work transplants intact (same package, same PRAGMA, same env). Phase 2–7 of this tracker reincarnate as mailroom phases. |
 
 ## Errors
 
@@ -173,4 +215,31 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 
 ## Current status
 
-Phase 0 + Phase 1 + Phase 1.5 all code-complete on `unified-inbox`. Two follow-on modularity refactors (generic `ingestMessage`, per-source watermark strategies) landed so Outlook/Slack/SMS additions in Phases 4–5 stay plugin-shaped. **31 commits on branch, 384/384 tests passing.** Pending: deploy (`./container/build.sh` + restart `nanoclaw`) + run the two backfill scripts + watch Madison's first post-deploy sweep. See `lode/tmp/handover-2026-04-21.md` for the session-handover playbook.
+**Architectural pivot 2026-04-21**: further work on this tracker is suspended. Ingestion, storage, MCP, and backfill are being extracted into a standalone Docker stack (the "mailroom") rather than deepening their co-location inside the nanoclaw process. See `lode/plans/active/2026-04-mailroom-extraction/` once created. Phase 2 (unified API), Phase 3 (push), Phase 4 (Slack), Phase 5 (Google Messages), Phase 6 (semantic), Phase 7 (trust) will reincarnate as mailroom phases.
+
+What shipped on `unified-inbox` and is **running** in production:
+
+- Phase 0 (stabilization) — digest schema + HTML→Markdown + Proton cooldown (commits `910c15f` → `2d67da7`).
+- Phase 1 (durable store) — SQLite + FTS5 + host-side ingest + inbox MCP stdio server + Madison CLAUDE.md rewrite (4 waves, commits `b4fe57c` → `5adccfb`).
+- Phase 1.5 (backfill) — Proton + Gmail scripts, newest-first, idempotent, checkpointed (commits `3f9df7b` + `0f881de`).
+- Phase 1.6 (at-rest encryption) — SQLCipher via `better-sqlite3-multiple-ciphers`; `INBOX_DB_KEY` plumbed through host + container; Dockerfile `tsc` bug fixed; encrypted `store.db` live and ingesting.
+
+Known state of live services:
+
+- `nanoclaw` systemd service: up, Gmail ingesting into encrypted `store.db`, Protonmail host-side channel ENOTFOUND-dark (has been since 2026-03-30 20:21 — unrelated to today's work; fixed by mailroom extraction, see diagnosis in progress.md).
+- Madison's container-side Protonmail access (`fetch-protonmail.js`): still working via `host.docker.internal` + `--add-host`.
+- Backfill scripts: **not** run on this branch; will run as mailroom compose services after extraction.
+
+What transfers to mailroom (code already written here, will be relocated):
+
+- `src/channels/protonmail.ts`, `src/channels/gmail.ts` (poll loops)
+- `src/inbox-store/*` (db, ingest, queries, watermarks, types)
+- `container/inbox-mcp/*` (MCP server — will become Streamable HTTP instead of stdio)
+- `scripts/inbox-backfill-{proton,gmail}.ts` (one-shot scripts → compose services)
+- Phase 1.6 SQLCipher wiring (the `loadInboxDbKey` + PRAGMA + key-plumbing) — drop-in transplant
+
+What stays in nanoclaw after extraction:
+
+- Chat channels (Telegram, WhatsApp, Slack-as-chat)
+- Router + group queue + credential proxy + container spawner
+- A thin "mailroom-subscriber" channel that listens for `inbox:new` events and routes them to Telegram groups for Madison
