@@ -125,17 +125,17 @@ Gating: Phase 1.6 lands **before** Phase 1 deploy. `store.db` does not yet exist
 - `container/Dockerfile` — `npm ci` step for inbox-mcp already compiles native addons; `better-sqlite3-multiple-ciphers` builds the same way but requires openssl headers (already present in the base image).
 - `package.json` root — existing `better-sqlite3` pin; the alias syntax keeps the import path identical.
 
-### Wave 1.6 — Single executor (small, tightly coupled)
+### Wave 1.6 — Single executor (small, tightly coupled) ✅
 
-This phase is too cross-cutting for parallel executors (native-binding swap + env plumbing + tests all touch overlapping invariants). Run as one sequential change:
+This phase is too cross-cutting for parallel executors (native-binding swap + env plumbing + tests all touch overlapping invariants). Ran as one sequential change, all landed in `0fd4081`:
 
-- [ ] **1.6.1** Alias `better-sqlite3` → `better-sqlite3-multiple-ciphers` in root `package.json` and `container/inbox-mcp/package.json`; `npm install` in both; verify native rebuild succeeds.
-- [ ] **1.6.2** Add `loadInboxDbKey()` helper in `src/inbox-store/db.ts` (throws with actionable message if unset / too short); wire into `getInboxDb()` and `_initTestInboxDb` (the latter accepts an override for test scenarios).
-- [ ] **1.6.3** Mirror the key-load in `container/inbox-mcp/src/db.ts`.
-- [ ] **1.6.4** Wire `INBOX_DB_KEY` passthrough in `src/container-runner.ts` behind the existing `folder === 'telegram_inbox'` gate.
-- [ ] **1.6.5** Add `scripts/inbox-keygen.ts`; generate the real key; write to `.env`; update handover + CLAUDE.md.
-- [ ] **1.6.6** Add encryption round-trip test + update existing tests to provide a test key.
-- [ ] **1.6.7** Rebuild container (`./container/build.sh` — already pruned), verify `sqlite3 store.db` path confirms encryption on first service start.
+- [x] **1.6.1** Alias `better-sqlite3` → `better-sqlite3-multiple-ciphers@11.10.0` in root `package.json` and `container/inbox-mcp/package.json` (`0fd4081`).
+- [x] **1.6.2** `loadInboxDbKey()` helper in `src/inbox-store/db.ts` (throws with actionable message if unset / short / non-hex); wired into `getInboxDb()` (`0fd4081`).
+- [x] **1.6.3** Mirrored key-load in `container/inbox-mcp/src/db.ts` (`0fd4081`).
+- [x] **1.6.4** `INBOX_DB_KEY` passthrough in `src/container-runner.ts` behind the `folder === EMAIL_TARGET_FOLDER` gate; agent-runner MCP registration plumbs it through (`0fd4081`).
+- [x] **1.6.5** `scripts/inbox-keygen.ts` emits 32-byte hex; real key generated and pasted into `.env` (`0fd4081`).
+- [x] **1.6.6** `src/inbox-store/db.encryption.test.ts` covers round-trip, wrong-key, no-key, FTS5-through-cipher, and key-validation edge cases. Full suite 394/394 (`0fd4081`).
+- [x] **1.6.7** Container rebuilt with Dockerfile fix (`tsc` + `npm rebuild better-sqlite3`). Service restarted; encrypted `store.db` created; plain `sqlite3 .tables` fails with "file is not a database"; keyed open lists full schema and live Gmail ingestion rows (`0fd4081`).
 
 ## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
 

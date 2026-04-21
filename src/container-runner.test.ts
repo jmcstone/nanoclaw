@@ -234,8 +234,7 @@ describe('container-runner timeout behavior', () => {
 describe('inbox store mount gating', () => {
   const spawnMock = spawn as ReturnType<typeof vi.fn>;
   const TEST_INBOX_KEY =
-    'deadbeefcafefeeddeadbeefcafefeed' +
-    'deadbeefcafefeeddeadbeefcafefeed';
+    'deadbeefcafefeeddeadbeefcafefeed' + 'deadbeefcafefeeddeadbeefcafefeed';
 
   beforeEach(() => {
     vi.useFakeTimers();

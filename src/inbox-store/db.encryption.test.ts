@@ -15,11 +15,9 @@ vi.mock('../env.js', () => ({
 import { loadInboxDbKey } from './db.js';
 
 const VALID_KEY_A =
-  'deadbeefcafefeeddeadbeefcafefeed' +
-  'deadbeefcafefeeddeadbeefcafefeed';
+  'deadbeefcafefeeddeadbeefcafefeed' + 'deadbeefcafefeeddeadbeefcafefeed';
 const VALID_KEY_B =
-  '0123456789abcdef0123456789abcdef' +
-  '0123456789abcdef0123456789abcdef';
+  '0123456789abcdef0123456789abcdef' + '0123456789abcdef0123456789abcdef';
 
 const tempFiles: string[] = [];
 function tempDbPath(): string {
