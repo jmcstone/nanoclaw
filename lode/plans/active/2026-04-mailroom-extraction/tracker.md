@@ -133,12 +133,27 @@ All items landed in ConfigFiles commit `6e2ad9d` (2026-04-21). Ported by 2 paral
 
 Cursor race note from the Gmail agent's port: both backfills write the same `backfill-cursor.json`; atomic rename prevents torn writes but not lost updates if both run simultaneously (last writer wins for the other source's top-level key). In practice one page re-list on the next run; dedup absorbs. Could split into `backfill-cursor.{gmail,proton}.json` later if it matters.
 
-### Phase M4 — Nanoclaw-side wiring (on `unified-inbox` branch)
+### Phase M4 — Nanoclaw-side wiring ✅
 
-- [ ] **M4.1** Add `src/channels/mailroom-subscriber.ts` — watches `~/containers/data/mailroom/ipc-out/` with chokidar, reads event JSON, calls `onMessage(targetJid, ...)` via existing router flow. Routes inbox events to Madison's Telegram group.
-- [ ] **M4.2** Update `src/container-runner.ts` — when `folder === EMAIL_TARGET_FOLDER`, attach to `mailroom_shared` network so Madison can reach `http://inbox-mcp:8080/mcp`.
-- [ ] **M4.3** Update `container/agent-runner/src/index.ts` — replace the stdio inbox MCP registration with HTTP: `{ type: 'http', url: 'http://inbox-mcp:8080/mcp' }` (same shape trawl uses).
-- [ ] **M4.4** Update Madison's `groups/telegram_inbox/CLAUDE.md` if any behavior details reference the stdio path (probably nothing user-visible, but verify).
+Landed on `unified-inbox`, hash pending commit. Implemented inline (4 small edits across 3 files + 1 new file). 394/394 tests pass; agent container rebuilt; nanoclaw service restarted; end-to-end verified (subscriber dispatched 9 queued events + spawned Madison's container on the `mailroom_shared` network).
+
+- [x] **M4.1** `src/channels/mailroom-subscriber.ts` — Channel implementation watching `~/containers/data/mailroom/ipc-out/` via `setTimeout` polling (1000ms; matches the existing `src/ipc.ts` pattern, avoids adding chokidar dep). On each `inbox-new-*.json`: reads, validates shape, dispatches to the email target group via `findEmailTargetJid` + `opts.onMessage`, unlinks the file. Bad events move to `../ipc-errors/` to avoid retry loops. Dispatched content is a `[Gmail|Proton email from …]` block with sender + subject + body_preview, closing with a pointer to `mcp__inbox__search|thread|recent`. `ownsJid` returns false (it's a feeder, not an outbound channel); `sendMessage` throws. Registered via `registerChannel('mailroom-subscriber', …)`, imported from `src/channels/index.ts`.
+- [x] **M4.2** `src/container-runner.ts` — gates `args.push('--network', 'mailroom_shared')` on `group.folder === EMAIL_TARGET_FOLDER`, placed immediately after `hostGatewayArgs()`. Default bridge → user-defined `mailroom_shared` is a safe swap because (a) `--add-host=host.docker.internal:host-gateway` is orthogonal to network driver, so the credential proxy + ollama + host.docker.internal all keep working, and (b) user-defined bridges forward non-container DNS queries to host DNS exactly like the default bridge.
+- [x] **M4.3** `container/agent-runner/src/index.ts` — two changes: (i) `hasInbox` sentinel switched from `fs.existsSync('/workspace/inbox/store.db')` to `containerInput.groupFolder === 'telegram_inbox'` (the bind mount is vestigial until M5 removes it, but we stop gating on it now); (ii) inbox MCP registration swapped from `{command: 'node', args: ['/opt/inbox-mcp/dist/index.js'], env: {INBOX_DB_PATH, INBOX_DB_KEY}}` to `{type: 'http', url: 'http://inbox-mcp:8080/mcp'}` (same shape trawl uses).
+- [x] **M4.4** Audit of Madison's `/home/jeff/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`: tool surface is already `mcp__inbox__{search,thread,recent}` — identical across stdio and HTTP backends. **No change required** — the tool names are preserved; only the transport changed underneath her.
+
+### End-to-end verification
+
+After restart (18:22:55 CDT, seconds after rebuild + `systemctl --user restart nanoclaw`):
+1. `Mailroom subscriber watching` log at `~/containers/data/mailroom/ipc-out`.
+2. Subscriber drained **9 backlogged `inbox:new` events** in the first second (Protonmail arrivals that had queued up since Phase M1 first went live).
+3. `nanoclaw-telegram-inbox-1776813778757` container spawned in response — Madison processing the triaged events.
+4. `docker inspect` on Madison's container: `NetworkSettings.Networks` contains `mailroom_shared` (exclusively). `mailroom-inbox-mcp-1` is reachable from that container by service DNS.
+5. Zero inbox-/mailroom-/mcp-related errors in `logs/nanoclaw.error.log`.
+
+### Out-of-scope finding (flagged for separate fix)
+
+Noticed during log review: the startup log line `NanoClaw running (default trigger: @"Madison"INBOX_DB_KEY=<hex>)` shows `ASSISTANT_NAME` concatenated with `INBOX_DB_KEY` — likely a `.env` parsing bug around quoted-value continuation. Not caused by M4, and the log file is local-only (no external shipping). **Flag, not fix** — separate lode entry appropriate.
 
 ### Phase M5 — Cutover and cleanup (sequential, after M1–M4 verified)
 
@@ -191,8 +206,15 @@ Cursor race note from the Gmail agent's port: both backfills write the same `bac
 
 ## Current status
 
-**Phases M0 + M1 + M2 + M3 complete (ConfigFiles `421c97e`, `a74e8c7`, `d5d79a6`, `6e2ad9d`). Phase M4 (nanoclaw wiring) next.** Mailroom stack is self-sufficient — ingestion, encrypted storage, MCP query API, idempotent backfill all working end-to-end. Remaining work is on the nanoclaw side: wire Madison's agent container to reach mailroom's MCP, plus a `mailroom-subscriber` channel that drains `ipc-out/` events into the existing router/group-queue so fresh inbox arrivals surface in Madison's Telegram group.
+**Phases M0 + M1 + M2 + M3 + M4 complete. Phase M5 (cutover + cleanup) next.** End-to-end inbox flow is now working through mailroom:
 
-Running on jarvis: `mailroom-ingestor-1` (up) + `mailroom-inbox-mcp-1` (healthy). Parallel-operation caveat unchanged — nanoclaw's host-side Gmail poller still racing with mailroom's until M5.
+```
+Proton/Gmail → mailroom ingestor → SQLCipher store.db → (a) mcp__inbox__* via HTTP for Madison's reads
+                                                      → (b) inbox:new event JSON → nanoclaw subscriber → Madison's Telegram group
+```
 
-Known blockers: none. Next is M4 — 4 tasks: (1) `src/channels/mailroom-subscriber.ts` watching `~/containers/data/mailroom/ipc-out/`, (2) `--network mailroom_shared` on Madison's container at spawn (container-runner), (3) swap inbox MCP registration in agent-runner from stdio to `{type: 'http', url: 'http://inbox-mcp:8080/mcp'}`, (4) verify Madison's CLAUDE.md if any user-visible strings reference the stdio path.
+Running on jarvis: `mailroom-ingestor-1` (up), `mailroom-inbox-mcp-1` (healthy), `nanoclaw.service` (restarted), `nanoclaw-telegram-inbox-*` containers spawning on `mailroom_shared` when Madison is triggered. 9 backlogged events dispatched at restart.
+
+**Parallel-operation caveat** still applies until M5: nanoclaw's host-side Gmail + Protonmail channels are still imported and running in `src/channels/index.ts`. For each arrival, exactly one of nanoclaw / mailroom wins the unread-race; mailroom wins dispatch via the subscriber, nanoclaw wins dispatch via its legacy `onMessage` path. Formatting differs slightly (old Gmail channel references `mcp__gmail__*`; subscriber references `mcp__inbox__*`). M5 eliminates the split.
+
+Known blockers: none. Next is M5 — drain nanoclaw's host-side mail channels, remove `src/channels/{gmail,protonmail,email-body,email-routing}.ts` + tests, drop `src/inbox-store/` entirely, drop `container/inbox-mcp/` + its Dockerfile stanza, delete the backfill scripts, uninstall the retired npm deps, remove the `INBOX_DB_KEY` from nanoclaw `.env`, remove the inbox store.db bind mount from container-runner, archive the old nanoclaw store.db. 11 sub-tasks.
