@@ -74,16 +74,20 @@ Extract mail ingestion, storage, MCP query API, and backfill out of the `nanocla
 
 ## Phases
 
-### Phase M0 — Scaffolding (setup)
+### Phase M0 — Scaffolding (setup) ✅
 
-- [ ] **M0.1** Create `~/Projects/ConfigFiles/containers/mailroom/mailroom/` directory tree; run `bin/stow/stow-all.sh` (or equivalent) to symlink into `~/containers/mailroom/`.
-- [ ] **M0.2** Initialize BTRFS subvolume at `~/containers/data/mailroom/` matching the other stacks (permissions `jeff:jeff 2775`, hourly snapshot policy).
-- [ ] **M0.3** Scaffold `Dockerfile` (FROM node:22-slim, single build stage, `npm ci --ignore-scripts && npm rebuild better-sqlite3 && npm run build && npm prune --omit=dev` — same pattern as the Phase 1.6 fix).
-- [ ] **M0.4** Scaffold `package.json` — deps: `better-sqlite3` (aliased to `better-sqlite3-multiple-ciphers@11.10.0`), `imapflow`, `googleapis`, `google-auth-library`, `turndown`, `nodemailer`, `pino`, `pino-pretty`, `@modelcontextprotocol/sdk`, `chokidar`. Dev deps: typescript, types, vitest.
-- [ ] **M0.5** Scaffold `docker-compose.yml` with the 4 services (ingestor, inbox-mcp, backfill-proton, backfill-gmail), two external networks (`protonmail_default`, `mailroom_shared`), `.env`-passthrough pattern.
-- [ ] **M0.6** Create `env.vault` via `env-vault edit env.vault` with `INBOX_DB_KEY`, `PROTONMAIL_BRIDGE_PASSWORD` (copied from nanoclaw's `.env`).
-- [ ] **M0.7** Migrate Gmail credentials: `cp -r ~/.gmail-mcp/ ~/containers/data/mailroom/gmail-mcp/`.
-- [ ] **M0.8** Commit the new ConfigFiles directory to the ConfigFiles repo.
+All items landed in ConfigFiles commit `421c97e` (2026-04-21). Executed as three waves: A (filesystem) → B (files) → C (stow + vault + commit).
+
+- [x] **M0.1** `~/Projects/ConfigFiles/containers/mailroom/mailroom/` created; stowed directly via `stow --target=~/containers mailroom` (not `stow-all.sh` — the wrapper does `git pull` first which would interact with Jeff's pre-existing uncommitted CF changes). Symlink: `~/containers/mailroom → ../Projects/ConfigFiles/containers/mailroom/mailroom` — matches the trawl pattern exactly (`421c97e`).
+- [x] **M0.2** `btrfs subvolume create ~/containers/data/mailroom` + `chown jeff:jeff` + `chmod 2775` (sudo required — the `~/containers/data` parent is root-owned). UUID `d0fd176c-eaff-044e-937b-4810f3657215`. Hourly snapshot policy NOT wired in this phase — flag for follow-up if Jeff's standard snapshot setup needs explicit per-subvol inclusion.
+- [x] **M0.3** `Dockerfile` scaffolded with the Phase 1.6 recipe: `npm ci --ignore-scripts && npm rebuild better-sqlite3 && npm run build && npm prune --omit=dev`. Build deps: python3/make/g++/libssl-dev for better-sqlite3-multiple-ciphers native compile (`421c97e`).
+- [x] **M0.4** `package.json` with all listed deps + devDeps; `"type": "module"` + `"build": "tsc"`; scripts for start / start:mcp / backfill:{proton,gmail} / test (`421c97e`).
+- [x] **M0.5** `docker-compose.yml` with 4 services (ingestor default, inbox-mcp, backfill-{proton,gmail} under `profiles: [backfill]`). Networks: `protonmail_default` declared external (bridge-owned); `mailroom_shared` owned here via `name: mailroom_shared` so Madison's container can attach by literal name. Env pass-through: INBOX_DB_KEY, PROTONMAIL_BRIDGE_PASSWORD, PROTONMAIL_ADDRESSES (`421c97e`).
+- [x] **M0.6** `env.vault` created by Jeff via `env-vault edit env.vault`. 505B AES-256 ciphertext, mode 700. Holds INBOX_DB_KEY (same hex as nanoclaw `.env` — will be removed from nanoclaw at M5.7 cutover), PROTONMAIL_BRIDGE_PASSWORD, PROTONMAIL_ADDRESSES (`421c97e`).
+- [x] **M0.7** Gmail creds migrated: `cp -r ~/.gmail-mcp/ ~/containers/data/mailroom/gmail-mcp/` — copy, not move, so nanoclaw's host-side Gmail channel keeps working during parallel operation until M5 cutover. Both files (`gcp-oauth.keys.json`, `credentials.json`) landed. RW perms preserved for token-refresh rewrite.
+- [x] **M0.8** Committed to ConfigFiles as `421c97e` "mailroom: scaffold stow-managed stack (Phase M0)". Only `containers/mailroom/` staged; Jeff's pre-existing uncommitted files (`claude-code-url-handler.desktop` + `ollama-nvidia/cleanup-nvidia-symlinks.sh`) left untouched. Not pushed.
+
+Out-of-band: `~/containers/data/mailroom/ipc-out/` created (dir for inbox event JSON files — referenced by M1.4 event schema).
 
 ### Phase M1 — Port ingestion code
 
@@ -166,6 +170,6 @@ Extract mail ingestion, storage, MCP query API, and backfill out of the `nanocla
 
 ## Current status
 
-**Phase M0 pending.** All design decisions locked. Ready to begin scaffolding the ConfigFiles mailroom directory. Running nanoclaw service continues to ingest Gmail into its own encrypted `store.db` (Phase 1.6 deployed on `unified-inbox`) — unaffected by mailroom work until M5 cutover.
+**Phase M0 complete (ConfigFiles `421c97e`). Phase M1 next.** Scaffold is in place: stow-linked ConfigFiles package, btrfs subvolume, Dockerfile + package.json + docker-compose.yml, encrypted env.vault, Gmail creds staged. `docker compose build` has NOT been run yet — expected to fail until M1 puts source files under `src/` (Dockerfile's `COPY src/` step has nothing to copy). Running nanoclaw service continues to ingest Gmail into its own encrypted `store.db` — unaffected until M5 cutover.
 
 Known blockers: none. The bridge's `host: "host.docker.internal"` in `~/.protonmail-bridge/config.json` stays in place until M5 (nanoclaw no longer reads it); mailroom's ingestor reads its own config with `host: "protonmail-bridge"`.
