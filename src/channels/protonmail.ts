@@ -8,6 +8,7 @@ import nodemailer from 'nodemailer';
 import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
+import { findEmailTargetJid } from './email-routing.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -328,19 +329,16 @@ export class ProtonmailChannel implements Channel {
     // Store chat metadata
     this.opts.onChatMetadata(chatJid, date, subject, 'protonmail', false);
 
-    // Find the main group
-    const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
+    const targetJid = findEmailTargetJid(this.opts.registeredGroups());
 
-    if (!mainEntry) {
+    if (!targetJid) {
       logger.debug(
         { chatJid, subject },
-        'No main group registered, skipping email',
+        'No email target group registered, skipping email',
       );
       return;
     }
 
-    const mainJid = mainEntry[0];
     const preview =
       MAX_EMAIL_PREVIEW_CHARS > 0 && body.length > MAX_EMAIL_PREVIEW_CHARS
         ? body.slice(0, MAX_EMAIL_PREVIEW_CHARS) + '\u2026'
@@ -353,9 +351,9 @@ export class ProtonmailChannel implements Channel {
       `To read the full email, run: node /app/src/fetch-protonmail.js ${uid} ${recipientAddress}`,
     ].join('\n');
 
-    this.opts.onMessage(mainJid, {
+    this.opts.onMessage(targetJid, {
       id: `proton-${recipientAddress}-${uid}`,
-      chat_jid: mainJid,
+      chat_jid: targetJid,
       sender: senderEmail,
       sender_name: senderName,
       content,
@@ -371,8 +369,8 @@ export class ProtonmailChannel implements Channel {
     }
 
     logger.info(
-      { mainJid, from: senderName, subject, to: recipientAddress },
-      'Protonmail email delivered to main group',
+      { targetJid, from: senderName, subject, to: recipientAddress },
+      'Protonmail email delivered',
     );
   }
 

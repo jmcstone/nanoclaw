@@ -7,6 +7,7 @@ import { OAuth2Client } from 'google-auth-library';
 
 import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
 import { logger } from '../logger.js';
+import { findEmailTargetJid } from './email-routing.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -280,19 +281,16 @@ export class GmailChannel implements Channel {
     // Store chat metadata for group discovery
     this.opts.onChatMetadata(chatJid, timestamp, subject, 'gmail', false);
 
-    // Find the main group to deliver the email notification
-    const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
+    const targetJid = findEmailTargetJid(this.opts.registeredGroups());
 
-    if (!mainEntry) {
+    if (!targetJid) {
       logger.debug(
         { chatJid, subject },
-        'No main group registered, skipping email',
+        'No email target group registered, skipping email',
       );
       return;
     }
 
-    const mainJid = mainEntry[0];
     const preview =
       MAX_EMAIL_PREVIEW_CHARS > 0 && body.length > MAX_EMAIL_PREVIEW_CHARS
         ? body.slice(0, MAX_EMAIL_PREVIEW_CHARS) + '…'
@@ -305,9 +303,9 @@ export class GmailChannel implements Channel {
       `Use mcp__gmail__search_emails or mcp__gmail__read_email to read the full email.`,
     ].join('\n');
 
-    this.opts.onMessage(mainJid, {
+    this.opts.onMessage(targetJid, {
       id: messageId,
-      chat_jid: mainJid,
+      chat_jid: targetJid,
       sender: senderEmail,
       sender_name: senderName,
       content,
@@ -327,8 +325,8 @@ export class GmailChannel implements Channel {
     }
 
     logger.info(
-      { mainJid, from: senderName, subject },
-      'Gmail email delivered to main group',
+      { targetJid, from: senderName, subject },
+      'Gmail email delivered',
     );
   }
 

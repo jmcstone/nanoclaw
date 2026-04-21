@@ -13,6 +13,16 @@ All Obsidian host paths are under `~/Documents/Obsidian/Main/` and mount into ea
 
 All a-mem ChromaDBs live under `~/containers/data/NanoClaw/a-mem/<folder>/` (BTRFS subvolume, hourly snapshots). Per-group isolation — no cross-group memory visibility.
 
+## Email delivery target
+
+Gmail and Protonmail channels deliver inbound emails via `findEmailTargetJid` in `src/channels/email-routing.ts`. Resolution order:
+
+1. The group whose folder is `telegram_inbox` (the dedicated email-triage group — Madison Inbox).
+2. Fallback: the first group flagged `isMain`.
+3. If neither exists, the email is dropped with a debug log.
+
+This exists because multiple groups can carry `is_main=1` (elevated-privilege flag), so picking "the main" is ambiguous for email delivery. The inbox folder is the unambiguous target.
+
 ## Base persona + specializations
 
 All four groups share a common `@Madison` trigger and a base "Madison" persona. Each adds a specialization on top via its per-group CLAUDE.md:
