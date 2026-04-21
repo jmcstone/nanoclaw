@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type Database from 'better-sqlite3';
 import { getInboxDb } from './db.js';
 
 export interface GmailIngestInput {
@@ -26,6 +27,56 @@ export interface ProtonmailIngestInput {
   raw_headers_json?: string | null;
 }
 
+interface PreparedIngestStmts {
+  upsertAccount: Database.Statement;
+  upsertSender: Database.Statement;
+  upsertThread: Database.Statement;
+  insertMessage: Database.Statement;
+  bumpThread: Database.Statement;
+}
+
+let cached: { db: Database.Database; stmts: PreparedIngestStmts } | null = null;
+
+function stmts(): PreparedIngestStmts {
+  const db = getInboxDb();
+  if (cached && cached.db === db) return cached.stmts;
+  cached = {
+    db,
+    stmts: {
+      upsertAccount: db.prepare(
+        `INSERT INTO accounts (account_id, source, email_address)
+         VALUES (?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+      ),
+      upsertSender: db.prepare(
+        `INSERT INTO senders (sender_id, email_address, display_name)
+         VALUES (?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+      ),
+      upsertThread: db.prepare(
+        `INSERT INTO threads (thread_id, source, subject, last_message_at, message_count)
+         VALUES (?, ?, ?, ?, 0)
+         ON CONFLICT DO NOTHING`,
+      ),
+      insertMessage: db.prepare(
+        `INSERT INTO messages
+           (message_id, source, account_id, source_message_id, thread_id, sender_id,
+            subject, body_markdown, received_at, raw_headers_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+      ),
+      bumpThread: db.prepare(
+        `UPDATE threads
+         SET
+           last_message_at = CASE WHEN last_message_at < ? THEN ? ELSE last_message_at END,
+           message_count   = message_count + 1
+         WHERE thread_id = ?`,
+      ),
+    },
+  };
+  return cached.stmts;
+}
+
 function makeSenderId(email: string): string {
   return crypto
     .createHash('sha1')
@@ -34,188 +85,95 @@ function makeSenderId(email: string): string {
     .slice(0, 16);
 }
 
+interface Common {
+  source: 'gmail' | 'protonmail';
+  account_email: string;
+  thread_id: string;
+  source_message_id: string;
+  sender_email: string;
+  sender_name: string | null;
+  subject: string | null;
+  body_markdown: string;
+  received_at: string;
+  raw_headers_json: string | null;
+}
+
+function ingestCommon(input: Common): {
+  message_id: string;
+  inserted: boolean;
+} {
+  const account_email = input.account_email.toLowerCase();
+  const sender_email = input.sender_email.toLowerCase();
+  const account_id = `${input.source}:${account_email}`;
+  const sender_id = makeSenderId(sender_email);
+  const message_id = `${input.source}:${input.source_message_id}`;
+
+  const s = stmts();
+  return getInboxDb().transaction(() => {
+    s.upsertAccount.run(account_id, input.source, account_email);
+    s.upsertSender.run(sender_id, sender_email, input.sender_name);
+    s.upsertThread.run(
+      input.thread_id,
+      input.source,
+      input.subject,
+      input.received_at,
+    );
+    const res = s.insertMessage.run(
+      message_id,
+      input.source,
+      account_id,
+      input.source_message_id,
+      input.thread_id,
+      sender_id,
+      input.subject,
+      input.body_markdown,
+      input.received_at,
+      input.raw_headers_json,
+    );
+    const inserted = res.changes === 1;
+    if (inserted) {
+      s.bumpThread.run(input.received_at, input.received_at, input.thread_id);
+    }
+    return { message_id, inserted };
+  })();
+}
+
 export function ingestGmail(input: GmailIngestInput): {
   message_id: string;
   inserted: boolean;
 } {
-  const db = getInboxDb();
-
-  const source = 'gmail';
-  const account_id = `${source}:${input.account_email.toLowerCase()}`;
-  const sender_id = makeSenderId(input.sender_email);
-  const message_id = `${source}:${input.source_message_id}`;
-  const thread_id = `gmail:${input.thread_id}`;
-
-  const run = db.transaction(() => {
-    // 1. accounts
-    db.prepare(
-      `
-      INSERT INTO accounts (account_id, source, email_address)
-      VALUES (?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `,
-    ).run(account_id, source, input.account_email.toLowerCase());
-
-    // 2. senders
-    db.prepare(
-      `
-      INSERT INTO senders (sender_id, email_address, display_name)
-      VALUES (?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `,
-    ).run(
-      sender_id,
-      input.sender_email.toLowerCase(),
-      input.sender_name ?? null,
-    );
-
-    // 3. threads
-    db.prepare(
-      `
-      INSERT INTO threads (thread_id, source, subject, last_message_at, message_count)
-      VALUES (?, ?, ?, ?, 0)
-      ON CONFLICT DO NOTHING
-    `,
-    ).run(thread_id, source, input.subject ?? null, input.received_at);
-
-    // 4. messages — honour UNIQUE(source, source_message_id) for idempotency
-    const result = db
-      .prepare(
-        `
-      INSERT INTO messages
-        (message_id, source, account_id, source_message_id, thread_id, sender_id,
-         subject, body_markdown, received_at, raw_headers_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `,
-      )
-      .run(
-        message_id,
-        source,
-        account_id,
-        input.source_message_id,
-        thread_id,
-        sender_id,
-        input.subject ?? null,
-        input.body_markdown,
-        input.received_at,
-        input.raw_headers_json ?? null,
-      );
-
-    const inserted = result.changes === 1;
-
-    if (inserted) {
-      db.prepare(
-        `
-        UPDATE threads
-        SET
-          last_message_at = CASE WHEN last_message_at < ? THEN ? ELSE last_message_at END,
-          message_count   = message_count + 1
-        WHERE thread_id = ?
-      `,
-      ).run(input.received_at, input.received_at, thread_id);
-    }
-
-    return { message_id, inserted };
+  return ingestCommon({
+    source: 'gmail',
+    account_email: input.account_email,
+    thread_id: `gmail:${input.thread_id}`,
+    source_message_id: input.source_message_id,
+    sender_email: input.sender_email,
+    sender_name: input.sender_name,
+    subject: input.subject,
+    body_markdown: input.body_markdown,
+    received_at: input.received_at,
+    raw_headers_json: input.raw_headers_json ?? null,
   });
-
-  return run();
 }
 
 export function ingestProtonmail(input: ProtonmailIngestInput): {
   message_id: string;
   inserted: boolean;
 } {
-  const db = getInboxDb();
+  // Thread root: first non-empty References entry, then In-Reply-To, else own id.
+  const firstRef = input.references.find((r) => r.length > 0);
+  const threadRoot = firstRef ?? input.in_reply_to ?? input.source_message_id;
 
-  const source = 'protonmail';
-  const account_id = `${source}:${input.account_email.toLowerCase()}`;
-  const sender_id = makeSenderId(input.sender_email);
-  const message_id = `${source}:${input.source_message_id}`;
-
-  // Derive thread root: first of references[], then in_reply_to, then own id
-  let threadRoot: string;
-  if (input.references.length > 0) {
-    threadRoot = input.references[0];
-  } else if (input.in_reply_to) {
-    threadRoot = input.in_reply_to;
-  } else {
-    threadRoot = input.source_message_id;
-  }
-  const thread_id = `proton:${threadRoot}`;
-
-  const run = db.transaction(() => {
-    // 1. accounts
-    db.prepare(
-      `
-      INSERT INTO accounts (account_id, source, email_address)
-      VALUES (?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `,
-    ).run(account_id, source, input.account_email.toLowerCase());
-
-    // 2. senders
-    db.prepare(
-      `
-      INSERT INTO senders (sender_id, email_address, display_name)
-      VALUES (?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `,
-    ).run(
-      sender_id,
-      input.sender_email.toLowerCase(),
-      input.sender_name ?? null,
-    );
-
-    // 3. threads
-    db.prepare(
-      `
-      INSERT INTO threads (thread_id, source, subject, last_message_at, message_count)
-      VALUES (?, ?, ?, ?, 0)
-      ON CONFLICT DO NOTHING
-    `,
-    ).run(thread_id, source, input.subject ?? null, input.received_at);
-
-    // 4. messages
-    const result = db
-      .prepare(
-        `
-      INSERT INTO messages
-        (message_id, source, account_id, source_message_id, thread_id, sender_id,
-         subject, body_markdown, received_at, raw_headers_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `,
-      )
-      .run(
-        message_id,
-        source,
-        account_id,
-        input.source_message_id,
-        thread_id,
-        sender_id,
-        input.subject ?? null,
-        input.body_markdown,
-        input.received_at,
-        input.raw_headers_json ?? null,
-      );
-
-    const inserted = result.changes === 1;
-
-    if (inserted) {
-      db.prepare(
-        `
-        UPDATE threads
-        SET
-          last_message_at = CASE WHEN last_message_at < ? THEN ? ELSE last_message_at END,
-          message_count   = message_count + 1
-        WHERE thread_id = ?
-      `,
-      ).run(input.received_at, input.received_at, thread_id);
-    }
-
-    return { message_id, inserted };
+  return ingestCommon({
+    source: 'protonmail',
+    account_email: input.account_email,
+    thread_id: `proton:${threadRoot}`,
+    source_message_id: input.source_message_id,
+    sender_email: input.sender_email,
+    sender_name: input.sender_name,
+    subject: input.subject,
+    body_markdown: input.body_markdown,
+    received_at: input.received_at,
+    raw_headers_json: input.raw_headers_json ?? null,
   });
-
-  return run();
 }

@@ -1,6 +1,7 @@
 // Vendored from src/inbox-store/queries.ts — keep in sync until Phase 2 shared package.
-// Watermark resolution is inlined here (no dependency on watermarks.ts).
+// Kept byte-for-byte identical to the host module below the banner.
 
+import type Database from 'better-sqlite3';
 import {
   InboxMessage,
   InboxThread,
@@ -25,29 +26,27 @@ export function getColdStartLookbackMs(): number {
   return parsed;
 }
 
-function rowToMessage(row: unknown): InboxMessage {
-  return row as InboxMessage;
+interface PreparedQueryStmts {
+  searchFiltered: Database.Statement;
+  searchAll: Database.Statement;
+  threadRow: Database.Statement;
+  threadMessages: Database.Statement;
+  accountSource: Database.Statement;
+  storedWatermark: Database.Statement;
+  recentColdStart: Database.Statement;
+  recentGmail: Database.Statement;
+  recentProton: Database.Statement;
 }
 
-function rowToThread(row: unknown): InboxThread {
-  return row as InboxThread;
-}
+let cached: { db: Database.Database; stmts: PreparedQueryStmts } | null = null;
 
-function getStoredWatermark(account_id: string): string | null {
-  const row = getInboxDb()
-    .prepare('SELECT watermark_value FROM watermarks WHERE account_id = ?')
-    .get(account_id) as { watermark_value: string } | undefined;
-  return row?.watermark_value ?? null;
-}
-
-export function searchMessages(args: SearchArgs): SearchResult {
+function stmts(): PreparedQueryStmts {
   const db = getInboxDb();
-  const limit = Math.min(args.limit ?? 20, 100);
-
-  let rows: unknown[];
-  if (args.source) {
-    rows = db
-      .prepare(
+  if (cached && cached.db === db) return cached.stmts;
+  cached = {
+    db,
+    stmts: {
+      searchFiltered: db.prepare(
         `SELECT m.*
          FROM messages_fts fts
          INNER JOIN messages m ON m.message_id = fts.message_id
@@ -55,61 +54,92 @@ export function searchMessages(args: SearchArgs): SearchResult {
            AND m.source = ?
          ORDER BY m.received_at DESC
          LIMIT ?`,
-      )
-      .all(args.query, args.source, limit);
-  } else {
-    rows = db
-      .prepare(
+      ),
+      searchAll: db.prepare(
         `SELECT m.*
          FROM messages_fts fts
          INNER JOIN messages m ON m.message_id = fts.message_id
          WHERE messages_fts MATCH ?
          ORDER BY m.received_at DESC
          LIMIT ?`,
-      )
-      .all(args.query, limit);
-  }
+      ),
+      threadRow: db.prepare(`SELECT * FROM threads WHERE thread_id = ?`),
+      threadMessages: db.prepare(
+        `SELECT * FROM messages WHERE thread_id = ? ORDER BY received_at ASC`,
+      ),
+      accountSource: db.prepare(
+        `SELECT source FROM accounts WHERE account_id = ?`,
+      ),
+      storedWatermark: db.prepare(
+        `SELECT watermark_value FROM watermarks WHERE account_id = ?`,
+      ),
+      recentColdStart: db.prepare(
+        `SELECT * FROM messages
+         WHERE account_id = ?
+           AND received_at > ?
+         ORDER BY received_at ASC
+         LIMIT ?`,
+      ),
+      recentGmail: db.prepare(
+        `SELECT * FROM messages
+         WHERE source = 'gmail'
+           AND account_id = ?
+           AND received_at > ?
+         ORDER BY received_at ASC
+         LIMIT ?`,
+      ),
+      recentProton: db.prepare(
+        `SELECT * FROM messages
+         WHERE source = 'protonmail'
+           AND account_id = ?
+           AND CAST(source_message_id AS INTEGER) > CAST(? AS INTEGER)
+         ORDER BY received_at ASC
+         LIMIT ?`,
+      ),
+    },
+  };
+  return cached.stmts;
+}
 
-  return { matches: rows.map(rowToMessage) };
+function getStoredWatermark(account_id: string): string | null {
+  const row = stmts().storedWatermark.get(account_id) as
+    | { watermark_value: string }
+    | undefined;
+  return row?.watermark_value ?? null;
+}
+
+export function searchMessages(args: SearchArgs): SearchResult {
+  const limit = Math.min(args.limit ?? 20, 100);
+  const s = stmts();
+  const rows = args.source
+    ? s.searchFiltered.all(args.query, args.source, limit)
+    : s.searchAll.all(args.query, limit);
+  return { matches: rows as InboxMessage[] };
 }
 
 export function getThread(args: ThreadArgs): ThreadResult | null {
-  const db = getInboxDb();
-
-  const threadRow = db
-    .prepare(`SELECT * FROM threads WHERE thread_id = ?`)
-    .get(args.thread_id);
-
+  const s = stmts();
+  const threadRow = s.threadRow.get(args.thread_id);
   if (!threadRow) return null;
-
-  const messageRows = db
-    .prepare(
-      `SELECT * FROM messages WHERE thread_id = ? ORDER BY received_at ASC`,
-    )
-    .all(args.thread_id);
-
+  const messageRows = s.threadMessages.all(args.thread_id);
   return {
-    thread: rowToThread(threadRow),
-    messages: messageRows.map(rowToMessage),
+    thread: threadRow as InboxThread,
+    messages: messageRows as InboxMessage[],
   };
 }
 
 export function getRecentMessages(args: RecentArgs): RecentResult {
-  const db = getInboxDb();
   const limit = Math.min(args.limit ?? 50, 200);
+  const s = stmts();
 
-  // Look up account source
-  const accountRow = db
-    .prepare(`SELECT source FROM accounts WHERE account_id = ?`)
-    .get(args.account_id) as { source: string } | undefined;
-
+  const accountRow = s.accountSource.get(args.account_id) as
+    | { source: string }
+    | undefined;
   if (!accountRow) {
     return { messages: [], new_watermark: args.since_watermark ?? '' };
   }
-
   const isGmail = accountRow.source === 'gmail';
 
-  // Resolve watermark
   let watermark: string;
   let isColdStart = false;
   let coldStartCutoff: string | undefined;
@@ -120,67 +150,34 @@ export function getRecentMessages(args: RecentArgs): RecentResult {
     if (stored !== null) {
       watermark = stored;
     } else {
-      // Cold start: no stored watermark and no explicit since_watermark.
-      // Return only messages within the lookback window instead of epoch.
       isColdStart = true;
-      coldStartCutoff = new Date(Date.now() - getColdStartLookbackMs()).toISOString();
+      coldStartCutoff = new Date(
+        Date.now() - getColdStartLookbackMs(),
+      ).toISOString();
       watermark = coldStartCutoff;
     }
   }
 
   let rows: unknown[];
   if (isColdStart) {
-    // Cold start: filter by received_at regardless of source (both Gmail and Proton use ISO timestamps).
-    rows = db
-      .prepare(
-        `SELECT * FROM messages
-         WHERE account_id = ?
-           AND received_at > ?
-         ORDER BY received_at ASC
-         LIMIT ?`,
-      )
-      .all(args.account_id, coldStartCutoff, limit);
+    rows = s.recentColdStart.all(args.account_id, coldStartCutoff, limit);
   } else if (isGmail) {
-    rows = db
-      .prepare(
-        `SELECT * FROM messages
-         WHERE source = 'gmail'
-           AND account_id = ?
-           AND received_at > ?
-         ORDER BY received_at ASC
-         LIMIT ?`,
-      )
-      .all(args.account_id, watermark, limit);
+    rows = s.recentGmail.all(args.account_id, watermark, limit);
   } else {
-    // Proton: compare integer UIDs stored as source_message_id
-    rows = db
-      .prepare(
-        `SELECT * FROM messages
-         WHERE source = 'protonmail'
-           AND account_id = ?
-           AND CAST(source_message_id AS INTEGER) > CAST(? AS INTEGER)
-         ORDER BY received_at ASC
-         LIMIT ?`,
-      )
-      .all(args.account_id, watermark, limit);
+    rows = s.recentProton.all(args.account_id, watermark, limit);
   }
 
-  const messages = rows.map(rowToMessage);
+  const messages = rows as InboxMessage[];
 
   let new_watermark: string;
   if (messages.length === 0) {
-    if (isColdStart) {
-      new_watermark = isGmail ? coldStartCutoff! : '0';
-    } else {
-      new_watermark = watermark;
-    }
+    new_watermark = isColdStart ? (isGmail ? coldStartCutoff! : '0') : watermark;
   } else if (isGmail) {
     new_watermark = messages.reduce(
       (max, m) => (m.received_at > max ? m.received_at : max),
       messages[0].received_at,
     );
   } else {
-    // Proton: max numeric source_message_id
     const maxUid = messages.reduce(
       (max, m) => {
         const uid = parseInt(m.source_message_id, 10);

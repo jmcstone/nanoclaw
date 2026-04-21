@@ -9,13 +9,13 @@
  */
 
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import { google, gmail_v1 } from 'googleapis';
 
 import { extractGmailBodyParts } from '../src/channels/gmail.js';
 import { pickBody } from '../src/channels/email-body.js';
+import { DATA_DIR } from '../src/config.js';
 import { ingestGmail } from '../src/inbox-store/ingest.js';
 
 // ---------------------------------------------------------------------------
@@ -63,10 +63,7 @@ function parseArgs(argv: string[]): CliArgs {
 // Cursor persistence
 // ---------------------------------------------------------------------------
 
-const CURSOR_PATH = path.join(
-  os.homedir(),
-  'containers/data/NanoClaw/inbox/backfill-cursor.json',
-);
+const CURSOR_PATH = path.join(DATA_DIR, 'inbox', 'backfill-cursor.json');
 
 interface Cursor {
   gmail: Record<

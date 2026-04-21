@@ -28,6 +28,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { EMAIL_TARGET_FOLDER } from './channels/email-routing.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -244,13 +245,10 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Inbox store DB (read-only) — Madison Inbox group only.
-  // The DB is initialized at host startup (getInboxDb()); this mount makes it
-  // available inside the container so the inbox MCP server can query it.
-  if (group.folder === 'telegram_inbox') {
-    const inboxDbPath = path.join(DATA_DIR, 'inbox', 'store.db');
+  // Read-only: writes happen on the host via channel ingest.
+  if (group.folder === EMAIL_TARGET_FOLDER) {
     mounts.push({
-      hostPath: inboxDbPath,
+      hostPath: path.join(DATA_DIR, 'inbox', 'store.db'),
       containerPath: '/workspace/inbox/store.db',
       readonly: true,
     });

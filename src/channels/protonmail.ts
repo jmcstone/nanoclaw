@@ -41,6 +41,11 @@ export function parseReferencesHeader(sourceBuf: Buffer): string[] {
   return ids ?? [];
 }
 
+const POLL_STAGGER_MS = 2000;
+const COOLDOWN_BASE_MS = 60_000;
+const COOLDOWN_MAX_MS = 15 * 60_000;
+const CHANNEL_BACKOFF_MAX_MS = 30 * 60_000;
+
 interface ProtonmailConfig {
   addresses: string[];
   host: string;
@@ -214,7 +219,7 @@ export class ProtonmailChannel implements Channel {
       this.consecutiveErrors > 0
         ? Math.min(
             this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
-            30 * 60 * 1000,
+            CHANNEL_BACKOFF_MAX_MS,
           )
         : this.pollIntervalMs;
 
@@ -230,7 +235,6 @@ export class ProtonmailChannel implements Channel {
   private async pollAllAddresses(): Promise<void> {
     if (!this.config) return;
 
-    const stagger = 2000;
     let attempted = 0;
     let succeeded = 0;
 
@@ -254,7 +258,10 @@ export class ProtonmailChannel implements Channel {
       } catch (err) {
         const n = (this.addressErrorCount.get(address) ?? 0) + 1;
         this.addressErrorCount.set(address, n);
-        const cooldownMs = Math.min(60_000 * Math.pow(2, n - 1), 15 * 60_000);
+        const cooldownMs = Math.min(
+          COOLDOWN_BASE_MS * Math.pow(2, n - 1),
+          COOLDOWN_MAX_MS,
+        );
         this.addressCooldownUntil.set(address, Date.now() + cooldownMs);
         logger.warn(
           { address, errorCount: n, cooldownMs, err },
@@ -263,7 +270,7 @@ export class ProtonmailChannel implements Channel {
       }
 
       if (i < this.config.addresses.length - 1) {
-        await new Promise((r) => setTimeout(r, stagger));
+        await new Promise((r) => setTimeout(r, POLL_STAGGER_MS));
       }
     }
 
