@@ -157,9 +157,7 @@ describe('parseReferencesHeader', () => {
   });
 
   it('parses single message-id', () => {
-    const raw = Buffer.from(
-      'References: <abc@example.com>\r\n\r\nBody',
-    );
+    const raw = Buffer.from('References: <abc@example.com>\r\n\r\nBody');
     const refs = parseReferencesHeader(raw);
     expect(refs).toEqual(['<abc@example.com>']);
   });
