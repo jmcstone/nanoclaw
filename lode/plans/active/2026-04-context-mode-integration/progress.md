@@ -8,6 +8,7 @@
 - **22:15** — Next action: run `/lode:discuss` to work through open questions.
 - **22:40** — `/lode:discuss` complete. Five gray areas presented, user locked all five: npm+env install, mount-sentinel opt-in, two-hook PreCompact, Node+Python+shell sandbox, all-four-groups rollout. Phase 0 done. Next: `/lode:plan`.
 - **23:05** — `/lode:plan` complete. Planner decomposed the remaining 7 phases into 8 acceptance criteria + ~15 wave-grouped tasks. Verification flagged three gaps: (a) Phase 4 Wave 2 target under-specified → tightened to name `scripts/group-config.ts` DB-edit mechanism; (b) Phase 6 was a no-op → replaced with per-group smoke test (send test message from each of the 4 groups); (c) Phase 7 missing tech-debt + trawl tracker cleanup → added. Next: `/lode:execute`.
+- **23:30** — Reviewed the `CLAUDE_PLUGIN_ROOT` plumbing decision with user. Replaced original "set env var + hardcode path in index.ts" with "resolve path at runtime via `createRequire` + `require.resolve('context-mode/package.json')`, wrapped in a `createContextModeHook(scriptName)` factory that returns `HookCallback` functions." Rationale: Agent SDK takes HookCallback functions anyway (not shell-command strings), so we're wrapping `spawn` either way — asking Node's module resolver for the path is more robust than hardcoding. Updated tracker Decisions table, AC-1 and AC-3, Phase 1 task, Phase 2 task (added new factory task); updated findings.md Locked Decisions + Area 1 Gray Area Explored.
 
 ## 5-question reboot check
 

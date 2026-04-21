@@ -95,7 +95,7 @@ Madison container
 | Decision | Context | Locked By |
 |----------|---------|-----------|
 | **Install**: `npm install -g context-mode` in `container/Dockerfile` | Matches existing pattern (a-mem pip-installs to `/opt/a-mem/.venv/bin`). Upgrades = Dockerfile version bump. | user |
-| **Env**: set `CLAUDE_PLUGIN_ROOT` in container to the npm-global install path | Plugin hook scripts reference `${CLAUDE_PLUGIN_ROOT}/hooks/*.mjs`; setting this lets shipped scripts run unmodified. | user |
+| **Path resolution**: use `createRequire(import.meta.url)` + `require.resolve('context-mode/package.json')` at runtime — no hardcoded path, no `CLAUDE_PLUGIN_ROOT` env var | The Agent SDK's `hooks:` option takes `HookCallback` functions (not shell-command strings), so we wrap `spawn(...)` in JS anyway. Asking Node's module resolver for the path is robust to npm prefix changes (base image, user scope, custom `npm config prefix`). Single source of truth lives in a `createContextModeHook` factory. | user |
 | **Per-group opt-in**: mount sentinel at `/workspace/extra/context-mode/<group>/` | Mirrors a-mem. Data-bearing per-group resource, not a network service — mount-sentinel is the right pattern. | user |
 | **PreCompact**: keep existing `createPreCompactHook` + add context-mode's `precompact.mjs` as a second entry in the same hook array | Both are independent transcript observers; SDK supports multiple hook entries natively. | user |
 | **Sandbox runtimes**: Node + Python + shell only (no Bun) | All already present in container. Bun adds 90 MB for 3-5× JS speedup — defer until `ctx_stats` shows need. | user |
@@ -111,9 +111,9 @@ Madison container
 ## Gray Areas Explored
 
 ### Area 1 — Hook plumbing
-- **Options considered**: npm + env var (A); vendored plugin copy (B); inline HookCallback wrappers (C)
-- **Decision**: A (npm install + `CLAUDE_PLUGIN_ROOT` env)
-- **Rationale**: Consistency with a-mem pattern, cleanest upgrade path, minimal divergence from upstream plugin
+- **Options considered**: npm + env var (A); vendored plugin copy (B); inline HookCallback wrappers (C); build-time-computed path (D); **runtime Node resolution (E)**; direct function import (F)
+- **Decision**: E — npm install + `createRequire` / `require.resolve` at runtime, wrapped in a `createContextModeHook` factory that returns `HookCallback` functions
+- **Rationale**: Initial pick was A (env var). On second look, realized the Agent SDK takes `HookCallback` functions rather than shell-command strings — so we're wrapping `spawn` in JS either way. Given that, `require.resolve` lets Node's module resolver find the install location with zero hardcoding, zero env plumbing, and automatic immunity to base-image changes. F (direct import) was rejected because context-mode's hook scripts have CLI-style top-level code (stdin read, self-heal logic) that doesn't survive being imported as a library. This is a supersede of the original decision documented in the same session.
 
 ### Area 2 — Per-group opt-in
 - **Options considered**: mount sentinel (mirror a-mem); explicit `containerConfig.contextMode.enabled` flag (mirror Trawl)

@@ -79,16 +79,16 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 | Decision | Rationale |
 |----------|-----------|
 | Install via `npm install -g context-mode` in container Dockerfile | Matches a-mem's absolute-path install pattern (`/opt/a-mem/.venv/bin/...`). Clean version pinning through npm; upgrade path is a Dockerfile version bump. |
-| Set `CLAUDE_PLUGIN_ROOT` env var in container to npm-global install path | Context-mode's hook scripts reference `${CLAUDE_PLUGIN_ROOT}/hooks/*.mjs`. Pointing this at the npm install location lets hook commands resolve as-shipped without forking the plugin. |
+| Resolve context-mode's install path at runtime via Node's `createRequire` + `require.resolve('context-mode/package.json')` — no env var, no hardcoded path | The Agent SDK's `hooks:` option takes `HookCallback` functions (not shell-command strings like Claude Code does), so path resolution happens in JavaScript. `require.resolve` asks Node's module resolver — it adapts automatically to whatever npm prefix the base image uses. No Dockerfile `ENV`, no string sync between Dockerfile and `index.ts`. Immune to base-image changes. |
 | Per-group opt-in via mount sentinel at `/workspace/extra/context-mode/<group>/` | Mirrors a-mem's opt-in pattern (`fs.existsSync('/workspace/extra/a-mem')`). Appropriate because context-mode is data-bearing (per-group FTS5 DB) like a-mem, unlike Trawl which is a network service. |
 | PreCompact runs both existing `createPreCompactHook` + context-mode's `precompact.mjs` as separate entries in the same array | Both are transcript observers; neither depends on the other's output. SDK hook array supports this natively. Order probably doesn't matter — if we see interference, revisit. |
 | Sandbox runtimes: Node + Python + shell only | All three already present in the container (Node 22, python3, bash). Bun would give 3-5× JS sandbox speedup per `ctx_doctor` but adds ~90 MB and isn't required. Defer until `ctx_stats` shows a perf problem. |
 | Rollout to all four groups (AVP + Main + Trading + Inbox) at once, after plumbing validation | Consistent with how a-mem and Trawl rolled out. Trading is low-activity so it's low-risk; Inbox is a natural fit since email threads are high-context-cost reads. Per-group opt-in is via mount, so rollout is just creating the four subvolumes. |
 
 ## Acceptance Criteria
-- [ ] AC-1: `container/Dockerfile` installs `context-mode` via `npm install -g context-mode` and sets `CLAUDE_PLUGIN_ROOT` to the npm global prefix hooks path (e.g. `/usr/local/lib/node_modules/context-mode`)
+- [ ] AC-1: `container/Dockerfile` installs `context-mode` via `npm install -g context-mode` (no `CLAUDE_PLUGIN_ROOT` env directive needed — path is resolved at runtime)
 - [ ] AC-2: `container/agent-runner/src/index.ts` registers a `context-mode` MCP server entry in `mcpServers` when `/workspace/extra/context-mode` sentinel exists, using the stdio transport with the `context-mode` binary
-- [ ] AC-3: `container/agent-runner/src/index.ts` wires all 5 hook types (PreToolUse with 8 matchers, PostToolUse, PreCompact with 2 entries, SessionStart, UserPromptSubmit) in the `hooks:` option block, with `CLAUDE_PLUGIN_ROOT` resolved to the fixed install path
+- [ ] AC-3: `container/agent-runner/src/index.ts` wires all 5 hook types (PreToolUse with 8 matchers, PostToolUse, PreCompact with 2 entries, SessionStart, UserPromptSubmit) in the `hooks:` option block via a `createContextModeHook(scriptName)` factory that uses `createRequire(import.meta.url)` + `require.resolve('context-mode/package.json')` to locate hook scripts — no hardcoded paths
 - [ ] AC-4: `mcp__context-mode__*` tools appear in `allowedTools` when the sentinel exists, and are absent when it does not
 - [ ] AC-5: 4 BTRFS subvolumes exist at `~/containers/data/NanoClaw/extra/context-mode/{avp,main,trading,inbox}/` with `jeff:jeff` ownership and `2775` mode
 - [ ] AC-6: 4 per-group mount-allowlist entries bind-mount each subvolume to `/workspace/extra/context-mode/` inside the respective group's container
@@ -104,13 +104,14 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 
 ## Phase 1: Container Install — PLANNED
 ### Wave 1 (parallel)
-- [ ] Add `npm install -g context-mode` RUN step and `ENV CLAUDE_PLUGIN_ROOT=/usr/local/lib/node_modules/context-mode` after the existing a-mem block — `/home/jeff/containers/nanoclaw/container/Dockerfile`
+- [ ] Add `RUN npm install -g context-mode` after the existing a-mem block (no `ENV` directive — path is resolved at runtime via `require.resolve`) — `/home/jeff/containers/nanoclaw/container/Dockerfile`
 
 ## Phase 2: Agent-Runner Wiring — PLANNED
 ### Wave 1 (parallel — all edits to same file, but logically independent; executor may batch)
 - [ ] Add `hasContextMode` sentinel check (`fs.existsSync('/workspace/extra/context-mode')`) below the `hasAmem` check, and add the `context-mode` MCP server entry to `mcpServers` when true — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
 - [ ] Add `mcp__context-mode__*` to `allowedTools` array (conditional on `hasContextMode`) — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
-- [ ] Replace the `hooks:` block in the `query()` options to add PreToolUse (8 matchers from hooks.json), PostToolUse (broad matcher), SessionStart, UserPromptSubmit, and the second PreCompact entry (context-mode's `precompact.mjs`) alongside the existing `createPreCompactHook` — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
+- [ ] Add a `createContextModeHook(scriptName)` factory near the existing `createPreCompactHook`: uses `createRequire(import.meta.url)` + `require.resolve('context-mode/package.json')` to locate the install dir, then returns a `HookCallback` that spawns `node <ctxModeRoot>/hooks/<scriptName>.mjs`, pipes the JSON input on stdin, and parses the JSON decision from stdout — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
+- [ ] Replace the `hooks:` block in the `query()` options to add PreToolUse (8 matchers from hooks.json), PostToolUse (broad matcher), SessionStart, UserPromptSubmit, and the second PreCompact entry (context-mode's `precompact.mjs`) alongside the existing `createPreCompactHook`, using `createContextModeHook(...)` for all context-mode entries — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
 
 ## Phase 3: Container Rebuild — PLANNED
 ### Wave 1
