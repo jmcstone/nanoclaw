@@ -16,9 +16,10 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'node:module';
 
 interface ContainerInput {
   prompt: string;
@@ -200,6 +201,78 @@ function createPreCompactHook(assistantName?: string): HookCallback {
     }
 
     return {};
+  };
+}
+
+/**
+ * Locate the context-mode npm package root via Node's module resolver.
+ * Returns null on failure (e.g. package not installed) — callers should
+ * degrade gracefully. Cached after first successful resolve.
+ */
+let _ctxModeRootCache: string | null | undefined = undefined;
+function resolveCtxModeRoot(): string | null {
+  if (_ctxModeRootCache !== undefined) return _ctxModeRootCache;
+  try {
+    const req = createRequire(import.meta.url);
+    const pkgJson = req.resolve('context-mode/package.json');
+    _ctxModeRootCache = path.dirname(pkgJson);
+  } catch (err) {
+    log(`context-mode: cannot resolve install dir — ${err instanceof Error ? err.message : String(err)}`);
+    _ctxModeRootCache = null;
+  }
+  return _ctxModeRootCache;
+}
+
+/**
+ * Spawn a context-mode hook script and pipe hook input/output over stdio.
+ * Path is resolved at runtime via resolveCtxModeRoot() — no hardcoded location.
+ */
+function createContextModeHook(scriptName: string): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    const root = resolveCtxModeRoot();
+    if (!root) return {};
+
+    const hookScript = path.join(root, 'hooks', `${scriptName}.mjs`);
+    if (!fs.existsSync(hookScript)) {
+      log(`context-mode hook: script not found: ${hookScript}`);
+      return {};
+    }
+
+    return new Promise<Record<string, unknown>>((resolve) => {
+      const child = spawn('node', [hookScript], {
+        stdio: ['pipe', 'pipe', 'inherit'],
+      });
+
+      let stdout = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+
+      const timer = setTimeout(() => {
+        child.kill();
+        log(`context-mode hook: ${scriptName} timed out — continuing`);
+        resolve({});
+      }, 60_000);
+
+      child.on('close', () => {
+        clearTimeout(timer);
+        try {
+          resolve(stdout.trim() ? JSON.parse(stdout) : {});
+        } catch {
+          log(`context-mode hook: ${scriptName} returned non-JSON stdout — ignoring`);
+          resolve({});
+        }
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        log(`context-mode hook: ${scriptName} spawn error — ${err.message}`);
+        resolve({});
+      });
+
+      try {
+        child.stdin.write(JSON.stringify(input));
+      } catch { /* ignore write errors */ }
+      child.stdin.end();
+    });
   };
 }
 
@@ -578,6 +651,8 @@ async function runQuery(
   // container_config; groups without it get no a-mem tools.
   const hasAmem = fs.existsSync('/workspace/extra/a-mem');
   log(`a-mem MCP: ${hasAmem ? 'enabled' : 'disabled'}`);
+  const hasContextMode = fs.existsSync('/workspace/extra/context-mode');
+  log(`context-mode: ${hasContextMode ? 'enabled' : 'disabled'}`);
 
   const mcpServers: Record<string, any> = {
     nanoclaw: {
@@ -594,6 +669,18 @@ async function runQuery(
       args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
     },
   };
+  if (hasContextMode) {
+    const ctxRoot = resolveCtxModeRoot();
+    if (ctxRoot) {
+      mcpServers['context-mode'] = {
+        type: 'stdio',
+        command: 'node',
+        args: [path.join(ctxRoot, 'start.mjs')],
+      };
+    } else {
+      log('context-mode: sentinel present but package not resolvable — skipping MCP registration');
+    }
+  }
   if (hasAmem) {
     mcpServers['a-mem'] = {
       command: 'a-mem-mcp',
@@ -640,6 +727,7 @@ async function runQuery(
     'mcp__nanoclaw__*',
     'mcp__gmail__*',
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
+    ...(hasContextMode ? ['mcp__context-mode__*'] : []),
     ...trawlAllowed,
   ];
 
@@ -660,7 +748,29 @@ async function runQuery(
       settingSources: ['project', 'user'],
       mcpServers,
       hooks: {
-        PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+        PreToolUse: hasContextMode
+          ? [{
+              matcher: 'Bash|Read|Grep|WebFetch|Agent|mcp__context-mode__ctx_execute|mcp__context-mode__ctx_execute_file|mcp__context-mode__ctx_batch_execute',
+              hooks: [createContextModeHook('pretooluse')],
+            }]
+          : [],
+        PostToolUse: hasContextMode
+          ? [{
+              matcher: 'Bash|Read|Write|Edit|NotebookEdit|Glob|Grep|TodoWrite|TaskCreate|TaskUpdate|EnterPlanMode|ExitPlanMode|Skill|Agent|AskUserQuestion|EnterWorktree|mcp__',
+              hooks: [createContextModeHook('posttooluse')],
+            }]
+          : [],
+        PreCompact: [{
+          hooks: hasContextMode
+            ? [createPreCompactHook(containerInput.assistantName), createContextModeHook('precompact')]
+            : [createPreCompactHook(containerInput.assistantName)],
+        }],
+        SessionStart: hasContextMode
+          ? [{ hooks: [createContextModeHook('sessionstart')] }]
+          : [],
+        UserPromptSubmit: hasContextMode
+          ? [{ hooks: [createContextModeHook('userpromptsubmit')] }]
+          : [],
       },
     }
   })) {
