@@ -25,15 +25,51 @@ Transform Madison Inbox from a reactive email-polling agent into a unified, auto
 - [ ] 0.5 Implement priority-gated per-email-arrival policy: on arrival, Madison performs a fast classification (sender-preferences.md + a-mem fuzzy match; LLM fallback if novel). If classified `urgent` / `needs-reply` or any action is required → post immediately to the group with `proposed_action`. Otherwise stay silent and let the `:07` sweep absorb it into the next digest. Update CLAUDE.md triage workflow to codify this.
 - [ ] 0.6 Monitor bridge auth-cascade for 24h after 0.3 lands. Expect zero "no such user" entries attributable to login budget exhaustion.
 
-## Phase 1 — Durable message store (P1, 1–2 weeks)
+## Phase 1 — Durable message store (P1, PLANNED)
 
-- [ ] 1.1 Schema design: `messages`, `threads`, `senders`, `accounts`, `sources` (gmail/proton/slack/sms), `classifications`, `actions`, `audit_log`, `labels`, `attachments`, `digest_refs`.
-- [ ] 1.2 Create SQLite DB at `~/containers/data/NanoClaw/inbox/store.db` with FTS5 virtual tables on subject + body + sender fields.
-- [ ] 1.3 Migrate ingestion: `gmail.ts` + `protonmail.ts` write every received message into the store in addition to emitting the agent-facing preview.
-- [ ] 1.4 Write a query helper library (Node module) exposing structured lookups (by sender, thread, date range, classification, full-text).
-- [ ] 1.5 Expose the query helper to Madison as an MCP tool (`mcp__inbox__search`, `mcp__inbox__thread`, `mcp__inbox__recent`).
-- [ ] 1.6 Port Madison's hourly triage to read watermarks + message facts from the store rather than re-querying IMAP/Gmail.
-- [ ] 1.7 Verify: Madison can recall by term ("find Guardian invoice 9246") and by thread ("what did we last say to Andres?") without re-fetching from backends.
+### Acceptance criteria
+
+- [ ] **AC-1** `~/containers/data/NanoClaw/inbox/store.db` exists with tables `messages`, `threads`, `senders`, `accounts`, `watermarks` and an FTS5 virtual table `messages_fts` indexed on `subject`, `body_markdown`, and `sender_address`. Verify: `sqlite3 ~/containers/data/NanoClaw/inbox/store.db ".tables"` lists all five.
+- [ ] **AC-2** Every email delivered by `gmail.ts` and `protonmail.ts` is written to `inbox/store.db` within the same poll cycle, without altering the existing `onMessage` IPC flow. Verify: after a test email arrives, `SELECT count(*) FROM messages` increments and the IPC file is also written normally.
+- [ ] **AC-3** Gmail messages are stored with `thread_id` populated from the Gmail API `threadId` field; Protonmail messages have `thread_id` derived from `In-Reply-To`/`References` headers. Verify: `SELECT thread_id, source FROM messages` shows non-null `thread_id` for both sources.
+- [ ] **AC-4** `src/inbox-store/watermarks.ts` exposes `getWatermark(account)` and `setWatermark(account, value)` backed by the `watermarks` table. Verify: unit test exercises round-trip read/write.
+- [ ] **AC-5** `container/inbox-mcp/` is a working MCP server exposing `mcp__inbox__search` (FTS5 query), `mcp__inbox__thread` (messages by `thread_id`), and `mcp__inbox__recent` (messages since watermark). Verify: `node container/inbox-mcp/dist/index.js` responds to JSON-RPC `tools/list` with all three names.
+- [ ] **AC-6** `src/container-runner.ts` mounts `~/containers/data/NanoClaw/inbox/store.db` read-only into the Madison Inbox container (JID `tg:-5273779685`) and registers the inbox MCP server only for that JID. Verify: `docker inspect` on a spawned Madison Inbox container shows the bind mount and the MCP entry; other group containers do not.
+- [ ] **AC-7** Madison's hourly triage reads `watermarks` + `mcp__inbox__recent` to determine "new since last sweep" rather than re-querying IMAP/Gmail; `groups/telegram_inbox/CLAUDE.md` documents the new read flow. Backend tools (`mcp__gmail__*`, Proton IMAP) remain available for *actions* (archive/reply/label), not reads. Verify: CLAUDE.md sweep section references `mcp__inbox__recent` instead of `mcp__gmail__search_emails` for per-sweep reads.
+
+### Read first
+
+- `src/db.ts` — reference for `better-sqlite3` + WAL + migration patterns to replicate in the new DB module.
+- `src/channels/gmail.ts` — where `threadId` is available and where the ingestion hook must be inserted.
+- `src/channels/protonmail.ts` — where `In-Reply-To`/`References` headers are parsed and where the ingestion hook goes.
+- `src/container-runner.ts` — `buildVolumeMounts` + MCP registration pattern to follow for Madison-only mounting.
+- `container/Dockerfile` — shows how `a-mem-mcp` is baked in; `inbox-mcp` follows the same `COPY` + `RUN npm install && npm run build` pattern.
+- `container/a-mem-mcp/` — reference MCP layout; inbox-mcp will be Node/TypeScript but the `server.json` registration pattern is the same.
+- `container/build.sh` — must include the new `inbox-mcp/` directory in the build.
+
+### Wave 1 — Contracts and schema (parallel) ✅
+
+- [x] **1.1** Define TypeScript types for the inbox store — `src/inbox-store/types.ts` (`b4fe57c`).
+- [x] **1.2** Create the inbox SQLite DB module with FTS5 triggers — `src/inbox-store/db.ts` (`e707a99`).
+- [x] **1.3** Unit tests for the schema (8 tests, all pass) — `src/inbox-store/db.test.ts` (`e707a99`).
+
+### Wave 2 — Ingestion and queries (parallel, depends on Wave 1) ✅
+
+- [x] **2.1** Ingestion with thread derivation (10 tests) — `src/inbox-store/ingest.ts` (`bb82006`).
+- [x] **2.2** Watermarks module (6 tests) — `src/inbox-store/watermarks.ts` (`98870ba`).
+- [x] **2.3** Read-side queries search/thread/recent (15 tests) — `src/inbox-store/queries.ts` (`05cad11`).
+
+### Wave 3 — Channel wiring + MCP server (parallel, depends on Wave 2)
+
+- [ ] **3.1** Wire `ingestGmail` into `src/channels/gmail.ts`: after `pickBody` succeeds, call `ingestGmail(msg)` in a fire-and-forget try/catch that logs errors but never blocks or throws into the poll loop. — `src/channels/gmail.ts` (modify) — serves AC-2, AC-3.
+- [ ] **3.2** Wire `ingestProtonmail` into `src/channels/protonmail.ts`: same fire-and-forget pattern, per-address, after `pickBody`. — `src/channels/protonmail.ts` (modify) — serves AC-2, AC-3.
+- [ ] **3.3** Scaffold the inbox MCP server: Node/TypeScript package using `@modelcontextprotocol/sdk` with three tools (`search`, `thread`, `recent`) delegating to `queries.ts`. The DB path is read from env var `INBOX_DB_PATH` (injected by `container-runner`). Include `package.json`, `tsconfig.json`, `server.json`, `src/index.ts`, `Dockerfile`-compatible build. — `container/inbox-mcp/` (new directory) — serves AC-5.
+
+### Wave 4 — Container wiring and CLAUDE.md update (parallel, depends on Wave 3)
+
+- [ ] **4.1** Update `src/container-runner.ts`: for Madison Inbox (JID `tg:-5273779685`) add a read-only bind mount of `~/containers/data/NanoClaw/inbox/store.db` to `/workspace/inbox/store.db`, set env `INBOX_DB_PATH=/workspace/inbox/store.db`, and register the inbox MCP server entry. Other groups: no mount, no registration. — `src/container-runner.ts` (modify) + test — serves AC-6.
+- [ ] **4.2** Update `container/Dockerfile` to `COPY container/inbox-mcp/` and `RUN cd /opt/inbox-mcp && npm ci && npm run build`. Update `container/build.sh` to include the new directory in the build context. — `container/Dockerfile` + `container/build.sh` (modify) — serves AC-5, AC-6.
+- [ ] **4.3** Rewrite the hourly triage section of `/home/jeff/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`: replace per-sweep IMAP/Gmail read queries with `mcp__inbox__recent` (keyed on watermark) and `mcp__inbox__thread` for reply context. Document the watermark-update step at end of each sweep. Backend action tools remain for archive/reply/label only. — `groups/telegram_inbox/CLAUDE.md` (modify, outside repo) — serves AC-7.
 
 ## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
 
@@ -105,4 +141,4 @@ Transform Madison Inbox from a reactive email-polling agent into a unified, auto
 
 ## Current status
 
-Currently in Phase 0 execution. All blocking decisions resolved 2026-04-21. Feature branch `unified-inbox` created. Ready to start with 0.1 (CLAUDE.md schema: `proposed_action` column).
+Phase 0 code-complete on `unified-inbox` branch (commits `910c15f`, `7c8d0d8`, `2d67da7`) — pending deploy + monitoring. Phase 1 **PLANNED** with 7 acceptance criteria and 10 tasks in 4 waves. Ready for `/lode:execute` with parallel subagents once Jeff approves kick-off.

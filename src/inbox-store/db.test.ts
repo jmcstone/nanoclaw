@@ -59,12 +59,14 @@ function insertMessage(
     ...overrides,
   };
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO messages
       (message_id, source, account_id, source_message_id, thread_id, sender_id, subject, body_markdown, received_at, raw_headers_json)
     VALUES
       (@message_id, @source, @account_id, @source_message_id, @thread_id, @sender_id, @subject, @body_markdown, @received_at, @raw_headers_json)
-  `).run(vals);
+  `,
+  ).run(vals);
 
   return vals;
 }
@@ -78,7 +80,13 @@ describe('schema: all tables exist', () => {
       .prepare(
         `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?)`,
       )
-      .all('accounts', 'senders', 'threads', 'messages', 'watermarks') as Array<{
+      .all(
+        'accounts',
+        'senders',
+        'threads',
+        'messages',
+        'watermarks',
+      ) as Array<{
       name: string;
     }>;
 
@@ -176,9 +184,7 @@ describe('constraints: UNIQUE (source, source_message_id)', () => {
     const db = insertFixtures();
     insertMessage(db);
 
-    expect(() =>
-      insertMessage(db, { message_id: 'msg-2' }),
-    ).toThrow();
+    expect(() => insertMessage(db, { message_id: 'msg-2' })).toThrow();
   });
 });
 

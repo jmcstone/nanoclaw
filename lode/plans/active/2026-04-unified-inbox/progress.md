@@ -4,6 +4,10 @@
 
 ### 2026-04-21
 
+- **19:05 CDT** — Wave 2 complete in parallel. Three executors landed `bb82006` (ingest), `98870ba` (watermarks), `05cad11` (queries). 31 new tests pass; full suite 362/362.
+- **18:55 CDT** — Wave 1 executed as two sequential sub-steps (types first, then schema+tests atomic). Commits `b4fe57c` and `e707a99`. 8 schema tests pass; full suite 331/331.
+- **18:30 CDT** — Phase 1 planned via `/lode:plan`. Decomposed into 7 acceptance criteria + 10 tasks across 4 waves. Read First list captures the files executors must read before touching code. Wave 1 is contract-first (types + schema + tests) so Waves 2–4 can fan out in parallel. Ready for `/lode:execute`.
+- **18:15 CDT** — Phase 0 committed in 3 logical commits on `unified-inbox`: `910c15f` (routing), `7c8d0d8` (plan init), `2d67da7` (Phase 0 body + cooldown).
 - **18:10 CDT** — Phase 0 code changes complete on `unified-inbox` branch. 0.1 + 0.5 CLAUDE.md edits, 0.4 turndown HTML→Markdown helper + both channels wired, 0.3 per-address cooldown in Protonmail poll loop. Build clean, all 323 tests pass (+9 new email-body tests). Not yet deployed; service restart pending Jeff's approval.
 - **17:40 CDT** — All Phase 0 blocking decisions resolved by Jeff. Feature branch `unified-inbox` created and checked out. Tracker's decisions table updated. Ready to start 0.1.
 - **17:30 CDT** — Plan created. Three-file lode pattern initialized at `lode/plans/active/2026-04-unified-inbox/`. Branch: `main` at time of creation.

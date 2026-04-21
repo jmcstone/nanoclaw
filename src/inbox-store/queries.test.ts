@@ -166,7 +166,11 @@ describe('getRecentMessages', () => {
   it('without since_watermark uses stored watermark from watermarks table', () => {
     db.prepare(
       `INSERT INTO watermarks(account_id, watermark_value, updated_at) VALUES (?,?,?)`,
-    ).run('gmail:jeff@example.com', '2024-01-01T15:00:00Z', new Date().toISOString());
+    ).run(
+      'gmail:jeff@example.com',
+      '2024-01-01T15:00:00Z',
+      new Date().toISOString(),
+    );
 
     const result = getRecentMessages({ account_id: 'gmail:jeff@example.com' });
     // msg1 received_at = 2024-01-01T10:00:00Z < watermark → excluded
@@ -178,7 +182,11 @@ describe('getRecentMessages', () => {
     // Store an old watermark that would return both messages
     db.prepare(
       `INSERT INTO watermarks(account_id, watermark_value, updated_at) VALUES (?,?,?)`,
-    ).run('gmail:jeff@example.com', '2020-01-01T00:00:00Z', new Date().toISOString());
+    ).run(
+      'gmail:jeff@example.com',
+      '2020-01-01T00:00:00Z',
+      new Date().toISOString(),
+    );
 
     // Pass a recent watermark that excludes msg1
     const result = getRecentMessages({
@@ -206,7 +214,7 @@ describe('getRecentMessages', () => {
     });
     const ids = result.messages.map((m) => m.message_id);
     expect(ids).not.toContain('proton:msg3'); // source_message_id = 1001, not > 1001
-    expect(ids).toContain('proton:msg4');     // source_message_id = 1002 > 1001
+    expect(ids).toContain('proton:msg4'); // source_message_id = 1002 > 1001
   });
 
   it('returns new_watermark equal to max timestamp for Gmail', () => {
