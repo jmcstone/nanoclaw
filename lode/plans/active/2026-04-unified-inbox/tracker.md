@@ -161,6 +161,8 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 | Work on `unified-inbox` feature branch | Multi-phase effort spanning weeks; isolates in-progress changes from `main` until a phase is shippable. |
 | Backfill walks newest-first on both sources | Gmail does this by API default; Proton now flipped to descending UID. Lets Jeff Ctrl-C the backfill at any time with the most recent mail already present. Length of full-history completion is no longer load-bearing on utility. |
 | Cold-start default = NOW - 24h, env-overridable via `INBOX_COLD_START_LOOKBACK_MS` | Eliminates the need for a manual watermark-seed step after Phase 1.5 backfill. `getRecentMessages` with no watermark returns the last 24h of mail; second call self-heals into native per-source semantics via the `new_watermark` it emitted on the first call. Env override lets Jeff widen the window after a long weekend without code change. |
+| Generic `ingestMessage` replaces per-source `ingestGmail`/`ingestProtonmail` | Caller derives its own `thread_id` and passes it in. Adding a source no longer requires a new exported function in the ingest layer — just a Channel implementation that calls `ingestMessage`. Proton-specific thread-root derivation lives in `deriveProtonThreadId` in the Proton channel module. |
+| Per-source watermark strategies in `getRecentMessages` | `Record<InboxSource, WatermarkStrategy>` replaces hardcoded `isGmail ? ... : proton` branches. Each strategy owns a prepared SELECT, a max-watermark reducer, and a cold-start-empty fallback. TypeScript rejects an incomplete strategies map so forgetting a source when adding one fails at compile time. |
 
 ## Errors
 
@@ -171,4 +173,4 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 
 ## Current status
 
-Phase 0 + Phase 1 code-complete on `unified-inbox`. Phase 1.5 (historical backfill) planned with 2 tasks. 365/365 tests pass. Next: `/lode:verify unified-inbox` to confirm each Phase 1 AC against the codebase, then rebuild the agent container (`./container/build.sh`) and restart nanoclaw to bring Phase 0 + 1 into production. Phase 1.5 executes after that deploy (scripts need the live store.db).
+Phase 0 + Phase 1 + Phase 1.5 all code-complete on `unified-inbox`. Two follow-on modularity refactors (generic `ingestMessage`, per-source watermark strategies) landed so Outlook/Slack/SMS additions in Phases 4–5 stay plugin-shaped. **31 commits on branch, 384/384 tests passing.** Pending: deploy (`./container/build.sh` + restart `nanoclaw`) + run the two backfill scripts + watch Madison's first post-deploy sweep. See `lode/tmp/handover-2026-04-21.md` for the session-handover playbook.
