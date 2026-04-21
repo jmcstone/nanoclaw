@@ -137,6 +137,24 @@ Madison container
 
 ## Open engineering questions
 
+### Gotchas discovered during execution
+
+Five technical traps surfaced between Wave A and Madison's first real use. Listed in discovery order:
+
+1. **NODE_PATH for global npm packages** — see dedicated section below.
+
+2. **Node 22 strict `exports` blocks `require.resolve('pkg/package.json')`** — context-mode's `package.json` `exports` map doesn't include `./package.json`. Workaround: walk `require.resolve.paths('context-mode')` and check each search directory for a package.json directly. Bypasses the exports check because we read the file from disk rather than resolving through Node's loader.
+
+3. **Agent SDK's pipe-separated matcher string doesn't fire reliably** — even though the SDK's own description says `"Bash|Read|Write"` is a supported matcher shape, empirically PreToolUse/PostToolUse hooks never fired with that format. Fix: one hook entry per matcher (`Bash`, `Read`, `Grep`, ...) in the array, not a single pipe-separated regex. Upstream context-mode's `hooks.json` uses pipe-separated and works in Claude Code — behavior divergence between Claude Code and Agent SDK.
+
+4. **MCP server command must invoke `node start.mjs`, not the `context-mode` CLI binary** — the npm package's `bin` field points at `cli.bundle.mjs` which is the CLI frontend (ctx-stats, ctx-doctor, etc.), not the MCP server. The server entry is `start.mjs` at package root. Use `node <pkg>/start.mjs` with `require.resolve`-derived path.
+
+5. **`hookSpecificOutput.additionalContext` is dropped by the Agent SDK** — context-mode's PreToolUse returns guidance text via this field intending it to be injected into the LLM's context. In Claude Code, the plugin loader injects it. In the Agent SDK (as used inside Madison's container), it never reaches the session JSONL. Workaround: vendor the context-mode SKILL.md into `container/skills/context-mode/` so the routing guidance lives in the skill system prompt instead of per-call hook injection. The skill's description triggers auto-activation on prompts like "find TODOs" / "process data" / "analyze logs".
+
+6. **Sessions resume their original skill list** — if a session started before context-mode was installed, resuming it does NOT re-scan `.claude/skills/` for the new skill. Force a fresh session (clear the sessionId row in `store/messages.db` → `sessions` table) to verify new skills are discovered. Once the session refreshes, Madison sees context-mode as an invokable skill.
+
+7. **Context-mode's PostToolUse doesn't self-index `ctx_execute` calls** — by design. The sandbox's printed output is already the summary; no raw data to index. So the FTS5 DB won't show session_events for `mcp__context-mode__*` calls. It only captures raw Bash/Read/Grep outputs that need compression.
+
 ### NODE_PATH required for globally-installed packages (found during execution)
 
 First rebuild completed cleanly but `require.resolve('context-mode/package.json')` from `/app/dist/index.js` returned "Cannot find module." The package was installed at `/usr/local/lib/node_modules/context-mode` but Node's default module resolution from `/app/dist/` searches:

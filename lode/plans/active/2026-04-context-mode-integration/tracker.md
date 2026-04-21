@@ -92,8 +92,8 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 - [x] AC-4: `mcp__context-mode__*` wildcard added to `allowedTools` conditional on `hasContextMode` (`abcbacc`)
 - [x] AC-5: 4 host directories exist at `~/containers/data/NanoClaw/context-mode/telegram_*/` with `jeff:jeff` / `2775`, mirroring a-mem layout exactly
 - [x] AC-6: 4 per-group mount entries added to `container_config.additionalMounts` via new `context-mode-defaults` helper (`fbc78fd`); mount-allowlist at `~/.config/nanoclaw/mount-allowlist.json` extended with 4 matching entries
-- [x] AC-7: MCP server boots cleanly inside rebuilt image — direct `node start.mjs` spawn stays alive with only the "install Bun for 3-5x speedup" info message in stderr. Full `ctx_stats` round-trip from Madison deferred to real message test.
-- [x] AC-8: Smoke test of real agent-runner in container shows `a-mem MCP: enabled` + `context-mode: enabled` + session initialization + message processing — no hook interference with existing a-mem / Trawl wiring
+- [x] AC-7: Live end-to-end validation on Madison's main group. Fresh session on fresh image shows: PreToolUse/PostToolUse hooks fire per tool call (`[ctx-hook-fire]` in container stderr); FTS5 session DB records `file_search` events for Grep calls; Madison invokes `mcp__context-mode__ctx_execute` naturally on "find TODOs"-style prompts (two `ctx_execute` calls observed in one run — sandbox-routed `grep -r` + `find`). The skill's routing guidance is in effect.
+- [x] AC-8: Same live session confirms a-mem (`search_memories` 6 calls) and Trawl (`inspect_pages`/`extract_text` x5) continue to work unchanged. No hook interference with existing MCP flows.
 
 ## Read First
 - `/home/jeff/containers/nanoclaw/container/Dockerfile` — a-mem install pattern to mirror; where to add npm global install and ENV
@@ -126,7 +126,7 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 
 ## Phase 5: Validation — DONE
 ### Wave 1 (depends on Phase 3 rebuild + Phase 4 mounts)
-- [x] Restarted nanoclaw service. Two-layer validation complete: (1) direct container spawn with context-mode mount confirmed path resolution + MCP server boot + sentinel detection; (2) full agent-runner smoke test in a raw container showed `a-mem MCP: enabled` + `context-mode: enabled` + session init + message processing without hook-registration errors. Remaining: a live Madison message round-trip to confirm `ctx_stats` responds and the PreToolUse hook actually reroutes a large Bash/Read call — that's the Phase 6 smoke test.
+- [x] Validation complete in three layers. (1) direct MCP server spawn test — path resolution + server boot + sentinel detection all green. (2) agent-runner smoke test in raw container — `a-mem MCP: enabled` + `context-mode: enabled` + session init + message processing clean. (3) live Madison round-trip on main group — after forcing a fresh session (DB row cleared so skill list re-discovered) Madison activated the context-mode skill and used `mcp__context-mode__ctx_execute` twice for a "find TODOs" prompt instead of raw Grep. Hooks fire on Bash/Read/Grep. PostToolUse records to FTS5. Existing a-mem + Trawl flows continue working.
 
 ## Phase 6: Per-Group Rollout Confirmation — PLANNED
 ### Wave 1 (depends on Phase 5 green signal)
@@ -147,4 +147,4 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 
 ## Current Status
 
-**Phases 0–5 complete, 2026-04-20.** All 8 acceptance criteria green. Seven commits landed (`2d572b5`, `6b70b55`, `96e241d`, `9d6766f`, `abcbacc`, `51c4388`, `fbc78fd`, `3e768dd`). Phase 6 = per-group live message smoke test (requires Madison to receive a real test message from each of the 4 groups). Phase 7 = lode graduation after Phase 6.
+**Phases 0–5 complete + Phase 6 partial, 2026-04-20.** All 8 acceptance criteria green. Ten commits landed across two waves and a third fix-up wave (`2d572b5`, `6b70b55`, `96e241d`, `9d6766f`, `abcbacc`, `51c4388`, `fbc78fd`, `3e768dd`, `7ffeaee`, `5a41482`). Main group smoke test passed — Madison uses `mcp__context-mode__ctx_execute` organically. Phase 6 remaining: confirm same behavior on AVP, Trading, and Inbox as messages arrive (expected to Just Work — same skill pipeline, same image). Phase 7 = lode graduation.
