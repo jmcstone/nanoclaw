@@ -46,11 +46,46 @@ const COOLDOWN_BASE_MS = 60_000;
 const COOLDOWN_MAX_MS = 15 * 60_000;
 const CHANNEL_BACKOFF_MAX_MS = 30 * 60_000;
 
-interface ProtonmailConfig {
+export interface ProtonmailConfig {
   addresses: string[];
   host: string;
   imapPort: number;
   smtpPort: number;
+}
+
+/**
+ * Open an IMAP session to the Proton Bridge for a single address and select
+ * INBOX. Returns the client, the mailbox lock, and a `close` helper that
+ * releases the lock and logs out. Callers must invoke `close()` in a finally.
+ */
+export async function openProtonInbox(
+  address: string,
+  password: string,
+  config: ProtonmailConfig,
+): Promise<{ client: ImapFlow; close: () => Promise<void> }> {
+  const client = new ImapFlow({
+    host: config.host,
+    port: config.imapPort,
+    secure: false,
+    auth: { user: address, pass: password },
+    tls: { rejectUnauthorized: false },
+    logger: false,
+  });
+  await client.connect();
+  const lock = await client.getMailboxLock('INBOX');
+  const close = async (): Promise<void> => {
+    try {
+      lock.release();
+    } catch {
+      /* already released */
+    }
+    try {
+      await client.logout();
+    } catch {
+      /* ignore */
+    }
+  };
+  return { client, close };
 }
 
 interface MessageMeta {
@@ -295,42 +330,24 @@ export class ProtonmailChannel implements Channel {
   }
 
   private async pollAddress(address: string): Promise<void> {
-    const client = new ImapFlow({
-      host: this.config!.host,
-      port: this.config!.imapPort,
-      secure: false,
-      auth: { user: address, pass: this.password },
-      tls: { rejectUnauthorized: false },
-      logger: false,
-    });
-
+    let session: { client: ImapFlow; close: () => Promise<void> } | null = null;
     try {
-      await client.connect();
-      const lock = await client.getMailboxLock('INBOX');
+      session = await openProtonInbox(address, this.password, this.config!);
+      const uids = await session.client.search({ seen: false });
+      if (!uids || !uids.length) return;
 
-      try {
-        const uids = await client.search({ seen: false });
-        if (!uids || !uids.length) return;
+      for (const uid of uids as number[]) {
+        const dedupKey = `${address}:${uid}`;
+        if (this.processedIds.has(dedupKey)) continue;
+        this.processedIds.add(dedupKey);
 
-        for (const uid of uids as number[]) {
-          const dedupKey = `${address}:${uid}`;
-          if (this.processedIds.has(dedupKey)) continue;
-          this.processedIds.add(dedupKey);
-
-          await this.processMessage(client, uid, address);
-        }
-      } finally {
-        lock.release();
+        await this.processMessage(session.client, uid, address);
       }
     } catch (err) {
       logger.warn({ address, err }, 'Failed to poll Protonmail address');
       throw err;
     } finally {
-      try {
-        await client.logout();
-      } catch {
-        // Ignore logout errors
-      }
+      if (session) await session.close();
     }
   }
 

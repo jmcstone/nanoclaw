@@ -19,15 +19,19 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { ImapFlow } from 'imapflow';
-
 import { readEnvFile } from '../src/env.js';
 import { pickBody } from '../src/channels/email-body.js';
 import {
-  parseReferencesHeader,
   extractProtonmailBody,
+  openProtonInbox,
+  parseReferencesHeader,
+  type ProtonmailConfig,
 } from '../src/channels/protonmail.js';
+import { DATA_DIR } from '../src/config.js';
 import { ingestProtonmail } from '../src/inbox-store/ingest.js';
+import { logger } from '../src/logger.js';
+
+const backfillLog = logger.child({ component: 'backfill-proton' });
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -74,12 +78,6 @@ function parseArgs(argv: string[]): CliArgs {
 // Config
 // ---------------------------------------------------------------------------
 
-interface ProtonmailConfig {
-  addresses: string[];
-  host: string;
-  imapPort: number;
-}
-
 function loadConfig(): { config: ProtonmailConfig; password: string } {
   const configPath = path.join(
     os.homedir(),
@@ -116,13 +114,7 @@ function loadConfig(): { config: ProtonmailConfig; password: string } {
 // constraint in the store prevents duplicates.
 // ---------------------------------------------------------------------------
 
-const CURSOR_DIR = path.join(
-  os.homedir(),
-  'containers',
-  'data',
-  'NanoClaw',
-  'inbox',
-);
+const CURSOR_DIR = path.join(DATA_DIR, 'inbox');
 const CURSOR_FILE = path.join(CURSOR_DIR, 'backfill-cursor.json');
 
 interface ProtonAddressCursor {
@@ -219,12 +211,12 @@ export function planNewestFirstBatches(
 // ---------------------------------------------------------------------------
 
 function die(msg: string): never {
-  process.stderr.write(`FATAL: ${msg}\n`);
+  backfillLog.fatal(msg);
   process.exit(1);
 }
 
 function log(msg: string): void {
-  process.stderr.write(`[backfill-proton] ${msg}\n`);
+  backfillLog.info(msg);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -265,21 +257,11 @@ async function backfillAddress(
     `${address}: connecting to bridge${args.dryRun ? ' [dry-run]' : ''}`,
   );
 
-  const client = new ImapFlow({
-    host: config.host,
-    port: config.imapPort,
-    secure: false,
-    auth: { user: address, pass: password },
-    tls: { rejectUnauthorized: false },
-    logger: false,
-  });
+  const session = await openProtonInbox(address, password, config);
+  const { client } = session;
 
   try {
-    await client.connect();
-    const lock = await client.getMailboxLock('INBOX');
-
-    try {
-      // SEARCH ALL returns all UIDs in INBOX
+    {
       const allUids = (await client.search({ all: true })) as number[];
       if (!allUids || !allUids.length) {
         log(`${address}: mailbox empty`);
@@ -464,15 +446,9 @@ async function backfillAddress(
       log(
         `${address}: complete — inserted=${totalInserted} skipped=${totalSkipped} errors=${totalErrors} lowest_uid=${addrCursor.lowest_processed_uid}`,
       );
-    } finally {
-      lock.release();
     }
   } finally {
-    try {
-      await client.logout();
-    } catch {
-      // Ignore logout errors
-    }
+    await session.close();
   }
 }
 
@@ -515,6 +491,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`FATAL: ${err.message}\n`);
+  backfillLog.fatal({ err }, 'Backfill fatal');
   process.exit(1);
 });

@@ -2,6 +2,11 @@
 
 export type InboxSource = 'gmail' | 'protonmail';
 
+export const INBOX_SOURCES: readonly InboxSource[] = [
+  'gmail',
+  'protonmail',
+] as const;
+
 export interface InboxAccount {
   account_id: string; // stable local id; e.g. "gmail:jeff@americanvoxpop.com"
   source: InboxSource;

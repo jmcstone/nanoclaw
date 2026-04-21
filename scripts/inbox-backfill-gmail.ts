@@ -11,12 +11,17 @@
 import fs from 'fs';
 import path from 'path';
 
-import { google, gmail_v1 } from 'googleapis';
-
-import { extractGmailBodyParts } from '../src/channels/gmail.js';
+import {
+  createGmailClient,
+  extractGmailBodyParts,
+  gmailCredPaths,
+} from '../src/channels/gmail.js';
 import { pickBody } from '../src/channels/email-body.js';
 import { DATA_DIR } from '../src/config.js';
 import { ingestGmail } from '../src/inbox-store/ingest.js';
+import { logger } from '../src/logger.js';
+
+const log = logger.child({ component: 'backfill-gmail' });
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -103,74 +108,37 @@ function sleep(ms: number): Promise<void> {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  // --- OAuth init (mirrors GmailChannel.connect()) ---
-  const credDir = path.join(os.homedir(), '.gmail-mcp');
-  const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
-  const tokensPath = path.join(credDir, 'credentials.json');
-
+  const { keysPath, tokensPath } = gmailCredPaths();
   if (!fs.existsSync(keysPath) || !fs.existsSync(tokensPath)) {
-    process.stderr.write(
-      'ERROR: Gmail credentials not found in ~/.gmail-mcp/. Run /add-gmail to set up.\n',
+    log.error(
+      'Gmail credentials not found in ~/.gmail-mcp/. Run /add-gmail to set up.',
     );
     process.exit(1);
   }
 
-  const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
-  const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+  const { gmail, accountEmail } = await createGmailClient();
+  log.info({ accountEmail }, 'Connected');
 
-  const clientConfig = keys.installed || keys.web || keys;
-  const { client_id, client_secret, redirect_uris } = clientConfig;
-  const oauth2Client = new google.auth.OAuth2(
-    client_id,
-    client_secret,
-    redirect_uris?.[0],
-  );
-  oauth2Client.setCredentials(tokens);
-
-  // Persist refreshed tokens
-  oauth2Client.on('tokens', (newTokens) => {
-    try {
-      const current = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
-      Object.assign(current, newTokens);
-      fs.writeFileSync(tokensPath, JSON.stringify(current, null, 2));
-      process.stderr.write('Gmail OAuth tokens refreshed\n');
-    } catch (err) {
-      process.stderr.write(`WARN: Failed to persist refreshed tokens: ${err}\n`);
-    }
-  });
-
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-  // Verify connection + get account email
-  const profile = await gmail.users.getProfile({ userId: 'me' });
-  const accountEmail = profile.data.emailAddress || '';
-  process.stderr.write(`Connected as: ${accountEmail}\n`);
-
-  // --- Cursor setup ---
   const cursor = readCursor();
-  if (!cursor.gmail[accountEmail]) {
-    cursor.gmail[accountEmail] = {};
-  }
+  if (!cursor.gmail[accountEmail]) cursor.gmail[accountEmail] = {};
   const acctCursor = cursor.gmail[accountEmail];
 
   let startPageToken: string | undefined;
   if (!args.fromScratch && acctCursor.next_page_token) {
     startPageToken = acctCursor.next_page_token;
-    process.stderr.write(`Resuming from cursor page token: ${startPageToken}\n`);
+    log.info({ startPageToken }, 'Resuming from cursor');
   } else {
     if (args.fromScratch) {
       acctCursor.next_page_token = undefined;
       acctCursor.last_processed_id = undefined;
-      process.stderr.write('--from-scratch: ignoring cursor\n');
+      log.info('--from-scratch: ignoring cursor');
     }
-    process.stderr.write(`Backfill since: ${args.since}\n`);
+    log.info({ since: args.since }, 'Backfill window');
   }
 
-  // Convert YYYY-MM-DD → YYYY/MM/DD for Gmail query
   const sinceQuery = args.since.replace(/-/g, '/');
   const q = `after:${sinceQuery}`;
 
-  // --- Pagination loop ---
   let pageIndex = 0;
   let totalMessages = 0;
   let totalInserted = 0;
@@ -179,7 +147,7 @@ async function main(): Promise<void> {
   let pageToken: string | undefined = startPageToken;
 
   outer: do {
-    process.stderr.write(`\n[Page ${pageIndex + 1}] Fetching message list...\n`);
+    log.info({ page: pageIndex + 1 }, 'Fetching message list');
 
     const listRes = await gmail.users.messages.list({
       userId: 'me',
@@ -191,14 +159,13 @@ async function main(): Promise<void> {
     const stubs = listRes.data.messages || [];
     const nextPageToken = listRes.data.nextPageToken || undefined;
 
-    process.stderr.write(`  Found ${stubs.length} messages on this page\n`);
+    log.info({ page: pageIndex + 1, count: stubs.length }, 'Page listed');
 
     for (const stub of stubs) {
       if (!stub.id) continue;
 
-      // Check max-messages limit
       if (args.maxMessages > 0 && totalMessages >= args.maxMessages) {
-        process.stderr.write(`  --max-messages ${args.maxMessages} reached, stopping\n`);
+        log.info({ limit: args.maxMessages }, '--max-messages reached, stopping');
         break outer;
       }
 
@@ -233,13 +200,12 @@ async function main(): Promise<void> {
         const body = pickBody(plain, html);
 
         if (!body) {
-          process.stderr.write(
-            `  SKIP [${stub.id}] no extractable body (subject: ${subject || '(none)'})\n`,
-          );
+          log.debug({ id: stub.id, subject }, 'Skipped — no extractable body');
           totalSkipped++;
         } else if (args.dryRun) {
-          process.stderr.write(
-            `  DRY-RUN [${stub.id}] from=${senderEmail} subject=${subject || '(none)'} len=${body.length}\n`,
+          log.debug(
+            { id: stub.id, senderEmail, subject, len: body.length },
+            'Dry-run',
           );
           totalSkipped++;
         } else {
@@ -253,30 +219,19 @@ async function main(): Promise<void> {
             body_markdown: body,
             received_at: timestamp,
           });
-
-          if (result.inserted) {
-            totalInserted++;
-          } else {
-            totalSkipped++;
-          }
+          if (result.inserted) totalInserted++;
+          else totalSkipped++;
         }
 
-        // Update last_processed_id after each message
-        if (!args.dryRun) {
-          acctCursor.last_processed_id = stub.id;
-          writeCursor(cursor);
-        }
+        if (!args.dryRun) acctCursor.last_processed_id = stub.id;
       } catch (err) {
         totalErrors++;
-        process.stderr.write(`  ERROR [${stub.id}]: ${err}\n`);
-        // log-and-skip, continue
+        log.warn({ id: stub.id, err }, 'Message fetch/ingest failed');
       }
 
-      // Rate limit: 200ms between messages
       await sleep(200);
     }
 
-    // Advance page token after full page is processed
     if (!args.dryRun) {
       acctCursor.next_page_token = nextPageToken;
       writeCursor(cursor);
@@ -285,28 +240,25 @@ async function main(): Promise<void> {
     pageToken = nextPageToken;
     pageIndex++;
 
-    if (pageToken) {
-      process.stderr.write(`  Page complete. Sleeping 1s before next page...\n`);
-      await sleep(1000);
-    }
+    if (pageToken) await sleep(1000);
   } while (pageToken);
 
-  process.stderr.write(`\n=== Backfill complete ===\n`);
-  process.stderr.write(`  Pages processed : ${pageIndex}\n`);
-  process.stderr.write(`  Messages fetched: ${totalMessages}\n`);
-  process.stderr.write(`  Inserted        : ${totalInserted}\n`);
-  process.stderr.write(`  Skipped/dup     : ${totalSkipped}\n`);
-  process.stderr.write(`  Errors          : ${totalErrors}\n`);
+  log.info(
+    {
+      pages: pageIndex,
+      totalMessages,
+      totalInserted,
+      totalSkipped,
+      totalErrors,
+    },
+    'Backfill complete',
+  );
 
-  if (totalErrors > 0 && totalErrors === totalMessages) {
-    // All messages errored — treat as unrecoverable
-    process.exit(1);
-  }
-
+  if (totalErrors > 0 && totalErrors === totalMessages) process.exit(1);
   process.exit(0);
 }
 
 main().catch((err) => {
-  process.stderr.write(`FATAL: ${err}\n`);
+  log.fatal({ err }, 'Backfill fatal');
   process.exit(1);
 });

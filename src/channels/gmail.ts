@@ -18,6 +18,67 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+const GMAIL_CRED_DIR_NAME = '.gmail-mcp';
+const GMAIL_KEYS_FILE = 'gcp-oauth.keys.json';
+const GMAIL_TOKENS_FILE = 'credentials.json';
+
+export function gmailCredPaths(): {
+  credDir: string;
+  keysPath: string;
+  tokensPath: string;
+} {
+  const credDir = path.join(os.homedir(), GMAIL_CRED_DIR_NAME);
+  return {
+    credDir,
+    keysPath: path.join(credDir, GMAIL_KEYS_FILE),
+    tokensPath: path.join(credDir, GMAIL_TOKENS_FILE),
+  };
+}
+
+/**
+ * Initialize a Gmail API client from the credentials in ~/.gmail-mcp/.
+ * Throws if the credential files are missing. Callers that want a
+ * graceful skip (e.g. the polling channel) must check existence first.
+ *
+ * The returned `oauth2Client` has a `tokens` listener attached that
+ * persists refreshed tokens back to disk.
+ */
+export async function createGmailClient(): Promise<{
+  gmail: gmail_v1.Gmail;
+  oauth2Client: OAuth2Client;
+  accountEmail: string;
+}> {
+  const { keysPath, tokensPath } = gmailCredPaths();
+  const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
+  const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+
+  const clientConfig = keys.installed || keys.web || keys;
+  const { client_id, client_secret, redirect_uris } = clientConfig;
+  const oauth2Client = new google.auth.OAuth2(
+    client_id,
+    client_secret,
+    redirect_uris?.[0],
+  );
+  oauth2Client.setCredentials(tokens);
+
+  oauth2Client.on('tokens', (newTokens) => {
+    try {
+      const current = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+      Object.assign(current, newTokens);
+      fs.writeFileSync(tokensPath, JSON.stringify(current, null, 2));
+      logger.debug('Gmail OAuth tokens refreshed');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to persist refreshed Gmail tokens');
+    }
+  });
+
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const profile = await gmail.users.getProfile({ userId: 'me' });
+  const accountEmail = profile.data.emailAddress ?? '';
+
+  return { gmail, oauth2Client, accountEmail };
+}
+
 export function extractGmailBodyParts(
   payload: gmail_v1.Schema$MessagePart | undefined,
 ): {
@@ -77,10 +138,7 @@ export class GmailChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    const credDir = path.join(os.homedir(), '.gmail-mcp');
-    const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
-    const tokensPath = path.join(credDir, 'credentials.json');
-
+    const { keysPath, tokensPath } = gmailCredPaths();
     if (!fs.existsSync(keysPath) || !fs.existsSync(tokensPath)) {
       logger.warn(
         'Gmail credentials not found in ~/.gmail-mcp/. Skipping Gmail channel. Run /add-gmail to set up.',
@@ -88,35 +146,10 @@ export class GmailChannel implements Channel {
       return;
     }
 
-    const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
-    const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
-
-    const clientConfig = keys.installed || keys.web || keys;
-    const { client_id, client_secret, redirect_uris } = clientConfig;
-    this.oauth2Client = new google.auth.OAuth2(
-      client_id,
-      client_secret,
-      redirect_uris?.[0],
-    );
-    this.oauth2Client.setCredentials(tokens);
-
-    // Persist refreshed tokens
-    this.oauth2Client.on('tokens', (newTokens) => {
-      try {
-        const current = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
-        Object.assign(current, newTokens);
-        fs.writeFileSync(tokensPath, JSON.stringify(current, null, 2));
-        logger.debug('Gmail OAuth tokens refreshed');
-      } catch (err) {
-        logger.warn({ err }, 'Failed to persist refreshed Gmail tokens');
-      }
-    });
-
-    this.gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
-
-    // Verify connection
-    const profile = await this.gmail.users.getProfile({ userId: 'me' });
-    this.userEmail = profile.data.emailAddress || '';
+    const client = await createGmailClient();
+    this.oauth2Client = client.oauth2Client;
+    this.gmail = client.gmail;
+    this.userEmail = client.accountEmail;
     logger.info({ email: this.userEmail }, 'Gmail channel connected');
 
     // Start polling with error backoff
