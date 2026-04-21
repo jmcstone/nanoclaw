@@ -64,6 +64,10 @@ Review of `_digests/2026-04-21.md` (sweeps `av` through `bh`):
 - Ollama host on `host.docker.internal:11434` with `qwen3.5:9b` — already drives a-mem, can drive embedding generation for Phase 6.
 - Proton Bridge is Bridge v3 `3.23.1`, connected account `stone.jeffrey`, split mode. Docs for `info` / `repair` / `change` / `login` commands available via `help` over `/protonmail/faketty` FIFO.
 
+## Future design thoughts (not yet decided)
+
+- **Cross-source person clustering**: when Phase 4 (Slack) or Phase 5 (SMS) lands, a `people` table + `person_senders` join may be the right way to link the same human across sources (same Dan on Gmail + Slack + phone). Table would be LLM-writable so Madison learns associations over time. Jeff's instinct 2026-04-21 — **revisit at Phase 4**. Do not preemptively add in Phase 1–3.
+
 ## Open research items (feed back into tracker)
 
 - Phase 0.3: confirm whether `stone.jeffrey@{protonmail.com,pm.me,proton.me}` should be added to NanoClaw's active polling rotation, or left as receive-only on the bridge. Depends on whether Jeff actively uses those for incoming mail (vs just outgoing).
