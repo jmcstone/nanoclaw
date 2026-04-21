@@ -155,19 +155,28 @@ After restart (18:22:55 CDT, seconds after rebuild + `systemctl --user restart n
 
 Noticed during log review: the startup log line `NanoClaw running (default trigger: @"Madison"INBOX_DB_KEY=<hex>)` shows `ASSISTANT_NAME` concatenated with `INBOX_DB_KEY` — likely a `.env` parsing bug around quoted-value continuation. Not caused by M4, and the log file is local-only (no external shipping). **Flag, not fix** — separate lode entry appropriate.
 
-### Phase M5 — Cutover and cleanup (sequential, after M1–M4 verified)
+### Phase M5 — Cutover and cleanup ✅
 
-- [ ] **M5.1** With mailroom stably ingesting, drain nanoclaw's host-side Gmail/Proton poll loops: set env flags to disable `GmailChannel` and `ProtonmailChannel` registration OR comment-out `import './gmail.js'` / `import './protonmail.js'` in `src/channels/index.ts`. Restart nanoclaw; verify no more duplicate writes.
-- [ ] **M5.2** Delete `src/channels/gmail.ts`, `src/channels/gmail.test.ts`, `src/channels/protonmail.ts`, `src/channels/protonmail.test.ts`, `src/channels/email-body.ts`, `src/channels/email-body.test.ts`, `src/channels/email-routing.ts`, `src/channels/email-routing.test.ts`.
-- [ ] **M5.3** Delete `src/inbox-store/` entirely.
-- [ ] **M5.4** Delete `container/inbox-mcp/` entirely; remove Dockerfile stanza that builds it.
-- [ ] **M5.5** Delete `scripts/inbox-backfill-proton.ts` and `scripts/inbox-backfill-gmail.ts`.
-- [ ] **M5.6** Uninstall: `npm uninstall googleapis google-auth-library imapflow turndown nodemailer better-sqlite3 @types/better-sqlite3 @types/turndown @types/nodemailer`.
-- [ ] **M5.7** Remove `INBOX_DB_KEY` from `~/containers/nanoclaw/.env`.
-- [ ] **M5.8** Remove Gmail mount from `src/container-runner.ts`; remove Protonmail mount; remove inbox store bind mount (store.db lives in mailroom now).
-- [ ] **M5.9** Remove `mcp__gmail__*` allowed tool from agent-runner allowlist (Madison uses mcp__inbox__* instead for reads; writes/replies go through mailroom if needed or are out of scope until Phase 2 of the original unified-inbox plan reincarnates).
-- [ ] **M5.10** Full test suite + typecheck pass.
-- [ ] **M5.11** Archive `~/containers/data/NanoClaw/data/inbox/` (the old store.db) to a backup location; it's no longer needed post-cutover.
+Landed on `unified-inbox` as commit `87e658b` (2026-04-21). 7,153 lines deleted, 22 added (net ≈ −7,100). 297/297 tests pass (dropped from 394 because ~97 tests belong to deleted files). Jeff confirmed "read-only for now" — write paths deferred to a later phase.
+
+- [x] **M5.1** `src/channels/index.ts` no longer imports `./gmail.js` or `./protonmail.js`. Retired channels retired the in-flight `GmailChannel` and `ProtonmailChannel` instances cleanly on shutdown — `Gmail channel stopped` / `Protonmail channel stopped` logged at 18:43:51 before the new process started at 18:43:52 (`87e658b`).
+- [x] **M5.2** Deleted 8 files: `src/channels/{gmail,gmail.test,protonmail,protonmail.test,email-body,email-body.test,email-routing,email-routing.test}.ts` (`87e658b`).
+- [x] **M5.3** Deleted `src/inbox-store/` entirely — 10 files (5 source + 5 tests, including `db.encryption.test.ts`) (`87e658b`).
+- [x] **M5.4** Deleted `container/inbox-mcp/` entirely — 10 files including `package.json`, `package-lock.json`, `server.json`, `tsconfig.json`, `README.md`, `.gitignore`, and `src/{db,index,queries,types}.ts`. Removed the `COPY inbox-mcp/ /opt/inbox-mcp/` + `RUN npm ci --ignore-scripts && npm rebuild better-sqlite3 && npm run build && npm prune --omit=dev` stanza from `container/Dockerfile` (`87e658b`).
+- [x] **M5.5** Deleted `scripts/inbox-backfill-{proton,gmail}.ts` (`87e658b`).
+- [x] **M5.6** `npm uninstall googleapis google-auth-library imapflow turndown nodemailer @types/turndown @types/nodemailer`. **Corrected the tracker's original spec**: `better-sqlite3` and `@types/better-sqlite3` are KEPT — nanoclaw's main `nanoclaw.db` uses them, and the `better-sqlite3-multiple-ciphers` alias is harmless for plain-SQLite use (plus keeps Phase 2 encryption trivially accessible) (`87e658b`).
+- [x] **M5.7** `INBOX_DB_KEY` removed from `~/containers/nanoclaw/.env`. Value archived to `~/containers/data/NanoClaw/data/inbox.archived-2026-04-21/.archived-key` (`600` perms) alongside a README so the old encrypted store can still be opened if historical recovery is ever needed.
+- [x] **M5.8** Stripped three mounts from `src/container-runner.ts`: `~/.gmail-mcp` (Gmail OAuth creds), `~/.protonmail-bridge` (bridge config), `/workspace/inbox/store.db` (the telegram_inbox-only inbox store bind mount). Also removed the `INBOX_DB_KEY=...` `-e` forwarding into the container env (`87e658b`).
+- [x] **M5.9** Stripped from `container/agent-runner/src/index.ts`: the `gmail:` MCP server entry (npx `@gongrzhe/server-gmail-autoauth-mcp`) and `mcp__gmail__*` from the allowedTools array. Madison now has `mcp__inbox__*` only for email — read-only by design (`87e658b`).
+- [x] **M5.10** `npm run build` clean; `npm test` 297/297 passing (dropped from 394 with the deleted test files). Replaced the old `container-runner.test.ts` suite (which asserted the removed inbox-store bind mount + INBOX_DB_KEY env forwarding) with a three-case suite asserting the new `--network mailroom_shared` gate: attached for `telegram_inbox`, absent for `telegram_main`, absent for `telegram_trading` (`87e658b`).
+- [x] **M5.11** `mv ~/containers/data/NanoClaw/data/inbox/ ~/containers/data/NanoClaw/data/inbox.archived-2026-04-21/`. Store.db preserved with its key and a recovery-instructions README (see M5.7).
+
+### Side-effect notes
+
+- **Refactor surfaced during cleanup**: `findEmailTargetJid` + `EMAIL_TARGET_FOLDER` (formerly in the deleted `src/channels/email-routing.ts`) had two non-deleted callers — the mailroom subscriber and `container-runner.ts`. Relocated both constants into a new **`src/inbox-routing.ts`** at the `src/` level (not under `channels/` since it's channel-agnostic now). Two import lines updated.
+- **`src/index.ts`**: removed the `import { getInboxDb } ...` + `getInboxDb()` startup call — no inbox store to eagerly open on the host anymore.
+- **Agent container rebuilt + nanoclaw restarted**. Madison's container still spawning on `mailroom_shared`, subscriber still watching `ipc-out/`. Zero M5-introduced errors in the post-restart error log.
+- **Known pre-existing `.env` parsing bug still present**: the startup log line still shows `@"Madison"INBOX_DB_KEY=<hex>` — the `ASSISTANT_NAME` quoted-value is eating the next line. Unrelated to M5; flagged for separate fix.
 
 ### Phase M6 — Bridge hardening
 
@@ -206,15 +215,24 @@ Noticed during log review: the startup log line `NanoClaw running (default trigg
 
 ## Current status
 
-**Phases M0 + M1 + M2 + M3 + M4 complete. Phase M5 (cutover + cleanup) next.** End-to-end inbox flow is now working through mailroom:
+**Phases M0 + M1 + M2 + M3 + M4 + M5 complete.** Mailroom is the sole source of truth for inbox email. Nanoclaw is lean: router + orchestrator + chat channels + mailroom-subscriber. No more duplicate Gmail race, no more ENOTFOUND, no more vendored inbox-store/queries code. Agent container slimmer (inbox-mcp COPY+RUN stanza removed). Deps down by 7 npm packages.
+
+End-to-end flow (live on jarvis):
 
 ```
-Proton/Gmail → mailroom ingestor → SQLCipher store.db → (a) mcp__inbox__* via HTTP for Madison's reads
-                                                      → (b) inbox:new event JSON → nanoclaw subscriber → Madison's Telegram group
+Proton bridge ─┐
+Gmail API ─────┼─► mailroom ingestor ──► SQLCipher store.db ─► HTTP MCP (inbox-mcp:8080)
+               │                                └───► ipc-out/*.json
+               │                                           ↓
+               │                          nanoclaw mailroom-subscriber
+               │                                           ↓
+               └─ (nanoclaw's own Gmail/Proton channels: retired) ─► Madison's Telegram group
+                                                           ↑ ← agent-runner registers
+                                                             mcp__inbox__* over HTTP
 ```
 
-Running on jarvis: `mailroom-ingestor-1` (up), `mailroom-inbox-mcp-1` (healthy), `nanoclaw.service` (restarted), `nanoclaw-telegram-inbox-*` containers spawning on `mailroom_shared` when Madison is triggered. 9 backlogged events dispatched at restart.
+Running: `mailroom-ingestor-1` (up), `mailroom-inbox-mcp-1` (healthy), `nanoclaw.service` (restarted on new image, subscriber watching, Gmail/Proton channels gone).
 
-**Parallel-operation caveat** still applies until M5: nanoclaw's host-side Gmail + Protonmail channels are still imported and running in `src/channels/index.ts`. For each arrival, exactly one of nanoclaw / mailroom wins the unread-race; mailroom wins dispatch via the subscriber, nanoclaw wins dispatch via its legacy `onMessage` path. Formatting differs slightly (old Gmail channel references `mcp__gmail__*`; subscriber references `mcp__inbox__*`). M5 eliminates the split.
+Known blockers: none. Remaining phases are small + non-code: M6 bridge-port hardening (drop `0.0.0.0` publish), M7 lode graduation, M8 update `/add-gmail` skill for the new fresh-install shape, M9 Protonmail fresh-install docs.
 
-Known blockers: none. Next is M5 — drain nanoclaw's host-side mail channels, remove `src/channels/{gmail,protonmail,email-body,email-routing}.ts` + tests, drop `src/inbox-store/` entirely, drop `container/inbox-mcp/` + its Dockerfile stanza, delete the backfill scripts, uninstall the retired npm deps, remove the `INBOX_DB_KEY` from nanoclaw `.env`, remove the inbox store.db bind mount from container-runner, archive the old nanoclaw store.db. 11 sub-tasks.
+**Pre-existing** `.env` parsing bug noted during M5 audit: ASSISTANT_NAME quoted-value concatenates with the next line into the startup log. Unrelated to mailroom; separate fix.
