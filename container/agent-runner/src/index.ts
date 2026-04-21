@@ -365,46 +365,88 @@ function prefixed(name: string): string {
 }
 
 /**
- * Fetch the Trawl MCP tools/list via Streamable HTTP (JSON-RPC POST).
- * Returns null on any failure — caller falls back to skipping allowlist
- * expansion (explicit mode still works from static config).
+/**
+ * Fetch Trawl's tool list. MCP Streamable HTTP requires a full handshake
+ * before tools/list is accepted — initialize (to obtain a session id),
+ * then notifications/initialized, then tools/list with the session header.
+ * A bare tools/list POST returns HTTP 400 "Missing session ID".
  */
 async function fetchTrawlTools(url: string): Promise<TrawlToolInfo[] | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TRAWL_TOOLS_LIST_TIMEOUT_MS);
+
+  const commonHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+  };
+
+  const parseBody = (text: string): unknown | null => {
+    // Streamable HTTP may return plain JSON or a single SSE `data:` frame.
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('{')) {
+      try { return JSON.parse(trimmed); } catch { return null; }
+    }
+    const dataLine = trimmed.split('\n').find(l => l.startsWith('data:'));
+    if (!dataLine) return null;
+    try { return JSON.parse(dataLine.slice('data:'.length).trim()); } catch { return null; }
+  };
+
   try {
-    const res = await fetch(url, {
+    // Step 1: initialize handshake. FastMCP returns the session id in the
+    // `mcp-session-id` response header.
+    const initRes = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-      },
+      headers: commonHeaders,
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
-        method: 'tools/list',
-        params: {},
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'nanoclaw-agent-runner', version: '1' },
+        },
       }),
       signal: controller.signal,
     });
-    if (!res.ok) {
-      log(`Trawl tools/list HTTP ${res.status}`);
+    if (!initRes.ok) {
+      log(`Trawl initialize HTTP ${initRes.status}`);
       return null;
     }
-    const text = await res.text();
-    // Streamable HTTP may return either plain JSON or an SSE stream with a
-    // single `data:` frame. Support both defensively.
-    let payload: unknown;
-    const trimmed = text.trim();
-    if (trimmed.startsWith('{')) {
-      payload = JSON.parse(trimmed);
-    } else {
-      const dataLine = trimmed.split('\n').find(l => l.startsWith('data:'));
-      if (!dataLine) {
-        log(`Trawl tools/list: unparseable response (first 200): ${trimmed.slice(0, 200)}`);
-        return null;
-      }
-      payload = JSON.parse(dataLine.slice('data:'.length).trim());
+    const sessionId = initRes.headers.get('mcp-session-id');
+    if (!sessionId) {
+      log('Trawl initialize: no mcp-session-id header');
+      return null;
+    }
+    // Drain the init body so the connection can be reused.
+    await initRes.text();
+
+    const sessionHeaders = { ...commonHeaders, 'mcp-session-id': sessionId };
+
+    // Step 2: notifications/initialized (no response body expected).
+    await fetch(url, {
+      method: 'POST',
+      headers: sessionHeaders,
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      signal: controller.signal,
+    });
+
+    // Step 3: tools/list with session.
+    const listRes = await fetch(url, {
+      method: 'POST',
+      headers: sessionHeaders,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+      signal: controller.signal,
+    });
+    if (!listRes.ok) {
+      log(`Trawl tools/list HTTP ${listRes.status}`);
+      return null;
+    }
+    const payload = parseBody(await listRes.text());
+    if (!payload) {
+      log('Trawl tools/list: unparseable response');
+      return null;
     }
     const toolsRaw = (payload as { result?: { tools?: unknown } } | undefined)?.result?.tools;
     if (!Array.isArray(toolsRaw)) {
