@@ -242,6 +242,11 @@ function resolveCtxModeRoot(): string | null {
  */
 function createContextModeHook(scriptName: string): HookCallback {
   return async (input, _toolUseId, _context) => {
+    // TEMP DIAGNOSTIC — confirm hook is actually firing
+    const inputType = (input as { hook_event_name?: string })?.hook_event_name ?? 'unknown';
+    const toolName = (input as { tool_name?: string })?.tool_name ?? 'n/a';
+    log(`[ctx-hook-fire] script=${scriptName} event=${inputType} tool=${toolName}`);
+
     const root = resolveCtxModeRoot();
     if (!root) return {};
 
@@ -762,16 +767,20 @@ async function runQuery(
       mcpServers,
       hooks: {
         PreToolUse: hasContextMode
-          ? [{
-              matcher: 'Bash|Read|Grep|WebFetch|Agent|mcp__context-mode__ctx_execute|mcp__context-mode__ctx_execute_file|mcp__context-mode__ctx_batch_execute',
-              hooks: [createContextModeHook('pretooluse')],
-            }]
+          ? [
+              'Bash', 'Read', 'Grep', 'WebFetch', 'Agent',
+              'mcp__context-mode__ctx_execute',
+              'mcp__context-mode__ctx_execute_file',
+              'mcp__context-mode__ctx_batch_execute',
+            ].map((m) => ({ matcher: m, hooks: [createContextModeHook('pretooluse')] }))
           : [],
         PostToolUse: hasContextMode
-          ? [{
-              matcher: 'Bash|Read|Write|Edit|NotebookEdit|Glob|Grep|TodoWrite|TaskCreate|TaskUpdate|EnterPlanMode|ExitPlanMode|Skill|Agent|AskUserQuestion|EnterWorktree|mcp__',
-              hooks: [createContextModeHook('posttooluse')],
-            }]
+          ? [
+              'Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep',
+              'TodoWrite', 'TaskCreate', 'TaskUpdate',
+              'EnterPlanMode', 'ExitPlanMode', 'Skill', 'Agent',
+              'AskUserQuestion', 'EnterWorktree', 'mcp__',
+            ].map((m) => ({ matcher: m, hooks: [createContextModeHook('posttooluse')] }))
           : [],
         PreCompact: [{
           hooks: hasContextMode
