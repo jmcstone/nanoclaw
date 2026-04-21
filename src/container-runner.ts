@@ -28,8 +28,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
-import { EMAIL_TARGET_FOLDER } from './channels/email-routing.js';
-import { loadInboxDbKey } from './inbox-store/db.js';
+import { EMAIL_TARGET_FOLDER } from './inbox-routing.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -171,27 +170,6 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Gmail credentials directory (for Gmail MCP inside the container)
-  const homeDir = os.homedir();
-  const gmailDir = path.join(homeDir, '.gmail-mcp');
-  if (fs.existsSync(gmailDir)) {
-    mounts.push({
-      hostPath: gmailDir,
-      containerPath: '/home/node/.gmail-mcp',
-      readonly: false, // MCP may need to refresh OAuth tokens
-    });
-  }
-
-  // Protonmail Bridge config (for potential IMAP MCP inside the container)
-  const protonDir = path.join(homeDir, '.protonmail-bridge');
-  if (fs.existsSync(protonDir)) {
-    mounts.push({
-      hostPath: protonDir,
-      containerPath: '/home/node/.protonmail-bridge',
-      readonly: true,
-    });
-  }
-
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -246,15 +224,6 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Read-only: writes happen on the host via channel ingest.
-  if (group.folder === EMAIL_TARGET_FOLDER) {
-    mounts.push({
-      hostPath: path.join(DATA_DIR, 'inbox', 'store.db'),
-      containerPath: '/workspace/inbox/store.db',
-      readonly: true,
-    });
-  }
-
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -277,12 +246,6 @@ function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
-
-  // Inbox-group only: forward the SQLCipher key so the container's inbox-mcp
-  // can decrypt the read-only mount. Gated on the same folder check as the mount.
-  if (group.folder === EMAIL_TARGET_FOLDER) {
-    args.push('-e', `INBOX_DB_KEY=${loadInboxDbKey()}`);
-  }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(

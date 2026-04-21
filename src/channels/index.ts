@@ -3,11 +3,10 @@
 
 // discord
 
-// gmail
-import './gmail.js';
+// gmail — retired 2026-04-21; mailroom now owns Gmail ingestion + exposes
+// mcp__inbox__* for reads via mailroom-subscriber.
 
-// protonmail
-import './protonmail.js';
+// protonmail — retired 2026-04-21; same as gmail.
 
 // slack
 

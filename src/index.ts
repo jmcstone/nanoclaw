@@ -18,7 +18,6 @@ import {
 } from './config.js';
 import { initBotPool } from './channels/telegram.js';
 import { startCredentialProxy } from './credential-proxy.js';
-import { getInboxDb } from './inbox-store/db.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -567,8 +566,6 @@ async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
-  getInboxDb();
-  logger.info('Inbox database initialized');
   loadState();
   restoreRemoteControl();
 

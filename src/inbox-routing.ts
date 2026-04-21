@@ -1,11 +1,11 @@
-import { RegisteredGroup } from '../types.js';
+import { RegisteredGroup } from './types.js';
 
 export const EMAIL_TARGET_FOLDER = 'telegram_inbox';
 
 /**
- * Pick the group that inbound email should be delivered to.
+ * Pick the group that inbound inbox events should be delivered to.
  *
- * Prefers a group whose folder is `telegram_inbox` (the dedicated email-triage
+ * Prefers a group whose folder is `telegram_inbox` (the dedicated inbox-triage
  * group), and falls back to the first group flagged `isMain`. Returns the JID
  * of the chosen group, or null if no candidate exists.
  */

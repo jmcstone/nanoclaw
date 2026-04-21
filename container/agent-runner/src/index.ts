@@ -684,10 +684,6 @@ async function runQuery(
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
       },
     },
-    gmail: {
-      command: 'npx',
-      args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
-    },
   };
   if (hasContextMode) {
     const ctxRoot = resolveCtxModeRoot();
@@ -751,7 +747,6 @@ async function runQuery(
     'TodoWrite', 'ToolSearch', 'Skill',
     'NotebookEdit',
     'mcp__nanoclaw__*',
-    'mcp__gmail__*',
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
     ...(hasInbox ? ['mcp__inbox__*'] : []),

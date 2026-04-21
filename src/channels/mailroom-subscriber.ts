@@ -4,7 +4,7 @@ import path from 'path';
 
 import { logger } from '../logger.js';
 import { Channel, NewMessage } from '../types.js';
-import { findEmailTargetJid } from './email-routing.js';
+import { findEmailTargetJid } from '../inbox-routing.js';
 import { ChannelOpts, registerChannel } from './registry.js';
 
 const DEFAULT_IPC_DIR = path.join(
@@ -102,9 +102,7 @@ class MailroomSubscriber implements Channel {
     if (this.stopped) return;
     this.timer = setTimeout(() => {
       this.pollOnce()
-        .catch((err) =>
-          logger.error({ err }, 'Mailroom subscriber poll error'),
-        )
+        .catch((err) => logger.error({ err }, 'Mailroom subscriber poll error'))
         .finally(() => this.schedulePoll());
     }, POLL_INTERVAL_MS);
   }

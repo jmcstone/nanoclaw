@@ -60,17 +60,6 @@ RUN python3 -m venv /opt/a-mem/.venv \
          "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
     && chmod -R a+rX /opt/a-mem /opt/a-mem-mcp
 
-# --- inbox-mcp (unified inbox MCP server) ---
-# Self-contained Node.js MCP server; built here so no network access is needed
-# at runtime. COPY busts the layer cache whenever files under inbox-mcp/ change.
-COPY inbox-mcp/ /opt/inbox-mcp/
-RUN cd /opt/inbox-mcp \
-    && npm ci --ignore-scripts \
-    && npm rebuild better-sqlite3 \
-    && npm run build \
-    && npm prune --omit=dev \
-    && chmod -R a+rX /opt/inbox-mcp
-
 # context-mode MCP plugin (path resolved at runtime via createRequire).
 # NODE_PATH makes globally-installed packages (context-mode, agent-browser,
 # @anthropic-ai/claude-code) resolvable from any working directory — without

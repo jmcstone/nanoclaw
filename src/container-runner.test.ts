@@ -231,21 +231,17 @@ describe('container-runner timeout behavior', () => {
   });
 });
 
-describe('inbox store mount gating', () => {
+describe('mailroom_shared network gating (telegram_inbox)', () => {
   const spawnMock = spawn as ReturnType<typeof vi.fn>;
-  const TEST_INBOX_KEY =
-    'deadbeefcafefeeddeadbeefcafefeed' + 'deadbeefcafefeeddeadbeefcafefeed';
 
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
     spawnMock.mockClear();
-    process.env.INBOX_DB_KEY = TEST_INBOX_KEY;
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    delete process.env.INBOX_DB_KEY;
   });
 
   function getSpawnArgs(): string[] {
@@ -271,7 +267,13 @@ describe('inbox store mount gating', () => {
     return p;
   }
 
-  it('telegram_inbox group includes inbox store bind mount (readonly)', async () => {
+  function hasMailroomNetwork(args: string[]): boolean {
+    return args.some(
+      (a, i) => a === '--network' && args[i + 1] === 'mailroom_shared',
+    );
+  }
+
+  it('telegram_inbox group attaches mailroom_shared network', async () => {
     const inboxGroup: RegisteredGroup = {
       name: 'Madison Inbox',
       folder: 'telegram_inbox',
@@ -282,19 +284,10 @@ describe('inbox store mount gating', () => {
     startAndClose(inboxGroup, 'telegram_inbox');
     await vi.advanceTimersByTimeAsync(10);
 
-    const args = getSpawnArgs();
-    // readonlyMountArgs returns ['-v', 'host:container:ro'], so the mount
-    // appears as a single combined arg: 'hostPath:/workspace/inbox/store.db:ro'
-    const inboxMountArg = args.find(
-      (a) => a.includes('/workspace/inbox/store.db') && a.includes(':ro'),
-    );
-    expect(inboxMountArg).toBeDefined();
-    expect(inboxMountArg).toContain(
-      'inbox/store.db:/workspace/inbox/store.db:ro',
-    );
+    expect(hasMailroomNetwork(getSpawnArgs())).toBe(true);
   });
 
-  it('non-inbox group does not include inbox store bind mount', async () => {
+  it('non-inbox main group does not attach mailroom_shared', async () => {
     const mainGroup: RegisteredGroup = {
       name: 'Main Group',
       folder: 'telegram_main',
@@ -305,14 +298,10 @@ describe('inbox store mount gating', () => {
     startAndClose(mainGroup, 'telegram_main');
     await vi.advanceTimersByTimeAsync(10);
 
-    const args = getSpawnArgs();
-    const hasInboxMount = args.some((a) =>
-      a.includes('/workspace/inbox/store.db'),
-    );
-    expect(hasInboxMount).toBe(false);
+    expect(hasMailroomNetwork(getSpawnArgs())).toBe(false);
   });
 
-  it('trading group does not include inbox store bind mount', async () => {
+  it('trading group does not attach mailroom_shared', async () => {
     const tradingGroup: RegisteredGroup = {
       name: 'Trading',
       folder: 'telegram_trading',
@@ -323,42 +312,6 @@ describe('inbox store mount gating', () => {
     startAndClose(tradingGroup, 'telegram_trading');
     await vi.advanceTimersByTimeAsync(10);
 
-    const args = getSpawnArgs();
-    const hasInboxMount = args.some((a) =>
-      a.includes('/workspace/inbox/store.db'),
-    );
-    expect(hasInboxMount).toBe(false);
-  });
-
-  it('telegram_inbox group forwards INBOX_DB_KEY into container env', async () => {
-    const inboxGroup: RegisteredGroup = {
-      name: 'Madison Inbox',
-      folder: 'telegram_inbox',
-      trigger: '@Madison',
-      added_at: new Date().toISOString(),
-    };
-
-    startAndClose(inboxGroup, 'telegram_inbox');
-    await vi.advanceTimersByTimeAsync(10);
-
-    const args = getSpawnArgs();
-    const keyArg = args.find((a) => a.startsWith('INBOX_DB_KEY='));
-    expect(keyArg).toBe(`INBOX_DB_KEY=${TEST_INBOX_KEY}`);
-  });
-
-  it('non-inbox group does not forward INBOX_DB_KEY', async () => {
-    const mainGroup: RegisteredGroup = {
-      name: 'Main Group',
-      folder: 'telegram_main',
-      trigger: '@Madison',
-      added_at: new Date().toISOString(),
-    };
-
-    startAndClose(mainGroup, 'telegram_main');
-    await vi.advanceTimersByTimeAsync(10);
-
-    const args = getSpawnArgs();
-    const hasKey = args.some((a) => a.startsWith('INBOX_DB_KEY='));
-    expect(hasKey).toBe(false);
+    expect(hasMailroomNetwork(getSpawnArgs())).toBe(false);
   });
 });
