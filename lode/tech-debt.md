@@ -14,13 +14,6 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 
 ## Trawl ecosystem
 
-### TD-TRAWL-SEARXNG — SearXNG backend for `search_web`
-- **Repo**: `~/Projects/trawl/`
-- **Scope**: M
-- **Trigger**: DDGS rate-limit or result-gap observed in Madison's AVP research; or Jeff wants meta-search across Google/Bing/Brave/Qwant for any reason.
-- **Why deferred**: DDGS is sufficient for current AVP workload. SearXNG instance already runs at `searxng.crested-gecko.ts.net` and is reachable from the Trawl container — flipping the backend is a backend-selection feature, not an integration.
-- **Done looks like**: `search_web(backend: "ddgs" | "searxng" = "ddgs")` or env-driven default. SearXNG path parses the JSON API response; DDGS path unchanged. One test per backend.
-
 ### TD-TRAWL-ADMIN-UI — Hosted admin UI
 - **Repo**: `~/Projects/trawl/` (+ ConfigFiles compose for exposure)
 - **Scope**: M
@@ -56,15 +49,15 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 
 The trawl MCP tracker closes with "follow-ups logged in the project task list (#11, #12, #14–17)." No such file exists — the task list lived in planning-session context and was never persisted. The entries above replace those ghost references. Rough mapping for anyone searching:
 
-| Ghost ID | Semantic ID |
-|---|---|
-| #11 | TD-TRAWL-SEARXNG |
-| #12 | TD-TRAWL-ADMIN-UI |
-| #13 | *(skipped in original)* |
-| #14 | TD-TRAWL-CACHE-TOOLSLIST |
-| #15 | TD-TRAWL-FETCHER-LLM-DECOUPLE |
-| #16 | TD-TRAWL-REGISTER-MCP-HELPER |
-| #17 | *(prose named 5 items for 6 numbers — one item lost in planning)* |
+| Ghost ID | Semantic ID | Status |
+|---|---|---|
+| #11 | TD-TRAWL-SEARXNG | Shipped 2026-04-20 (trawl `ce6378e`, ConfigFiles `1e09aa3`, searxng JSON-format `83d3987`) |
+| #12 | TD-TRAWL-ADMIN-UI | Deferred |
+| #13 | *(skipped in original)* | — |
+| #14 | TD-TRAWL-CACHE-TOOLSLIST | Deferred |
+| #15 | TD-TRAWL-FETCHER-LLM-DECOUPLE | Deferred |
+| #16 | TD-TRAWL-REGISTER-MCP-HELPER | Deferred |
+| #17 | *(prose named 5 items for 6 numbers — one item lost in planning)* | — |
 
 If the #17 item resurfaces from memory or transcript, add it here.
 

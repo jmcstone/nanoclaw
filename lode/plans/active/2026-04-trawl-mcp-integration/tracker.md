@@ -104,7 +104,7 @@ Partial — some items shipped, some deferred.
 - [x] `container/skills/trawl-handles/SKILL.md` (shipped)
 - [ ] Subagent output contract referenced explicitly from system prompt (may not be needed — progressive disclosure loads it on demand)
 - [ ] Context-mode MCP (FTS5 session memory) — observe first; only add if session-continuity gap remains after Trawl adoption stabilizes
-- [ ] **SearXNG backend** (Task #11) — defer; DDGS is sufficient for AVP workload today
+- [x] **SearXNG backend** — shipped 2026-04-20. `search_web` dispatches to DDGS or SearXNG via `TRAWL_SEARCH_ENGINE` env; Jeff's instance defaults to SearXNG at `host.docker.internal:8085`. Trawl commit `ce6378e`, ConfigFiles `1e09aa3`, SearXNG JSON-format enable `83d3987`.
 
 ### Phase 9 — Observation  🟡 (in progress)
 - [x] Pre-Trawl baseline captured: `baseline-pre-trawl.txt` — 369 web calls / session (269 WebSearch + 100 WebFetch), 14 subagents avg 200KB, 16 duplicate URL fetches
@@ -262,7 +262,7 @@ If the Trawl tool surface grows to include more write-capable external services 
 | Credentials live on server; never traverse MCP boundary | Contains blast radius — a compromised client container can't exfiltrate Zoho tokens |
 | Tool allowlisting at client, not server | Matches existing NanoClaw pattern (a-mem); server stays role-free |
 | Tailnet membership = auth; no bearer tokens in v1 | Matches existing posture for SearXNG / Karakeep / GitLab |
-| Drop SearXNG integration from the Madison bundle | Redundant — Trawl's `search_web` covers it |
+| ~~Drop SearXNG integration from the Madison bundle~~ Revisited 2026-04-20: SearXNG is now Trawl's `search_web` backend | Keeps one tool surface (`search_web`) for Madison; SearXNG wins the backend slot per deployment env. Tailnet URL doesn't work from container netns (tailscale DNS unreachable), so URL is `host.docker.internal:8085`. |
 | Drop Firecrawl from the Madison bundle | Redundant — Trawl's scraping stack (Scrapling + patchright + browserforge) supersedes it |
 | Context-mode deferred, not cancelled | Revisit if session continuity feels insufficient after Trawl lands |
 
