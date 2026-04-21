@@ -1,0 +1,108 @@
+# Unified Inbox Tracker
+
+Branch: `unified-inbox`
+
+## Goal
+
+Transform Madison Inbox from a reactive email-polling agent into a unified, autonomous message-management agent that is a viable alternative to Jeff opening Gmail / Proton Mail / Slack / Google Messages manually. Coverage: Proton + Gmail + Slack + Google Messages. Properties: durable message store, push ingestion, one consistent action verb set, auditable + reversible auto-actions.
+
+## Overall acceptance criteria (goal-backward)
+
+- Jeff uses the Madison Inbox group as his primary triage surface and stops opening individual apps for routine inbox checking.
+- Every message across all sources flows through one normalized classification pipeline (urgent / needs-reply / fyi / auto-handled / spam).
+- Madison's actions (reply, archive, label, snooze, unsubscribe) behave identically regardless of source backend.
+- Every auto-action has recorded rationale and is reversible.
+- HTML-only emails never silently drop; attachments are surfaced.
+- Ingestion is push-based where the backend supports it (IMAP IDLE for Proton; push/poll for Gmail; Socket Mode for Slack).
+- Semantic recall works across months of historical conversations via hybrid FTS+vector.
+
+## Phase 0 — Stabilize current state (P0, days)
+
+- [ ] 0.1 Add `proposed_action` column to Madison's digest schema in `groups/telegram_inbox/CLAUDE.md`; require one of {action_taken, proposed_action} on every row.
+- [ ] 0.2 Add "carry-over re-propose" rule to CLAUDE.md: every morning brief re-proposes action (or asks if still relevant) for each pending item.
+- [ ] 0.3 Keep all 7 Proton addresses in `~/.protonmail-bridge/config.json` (decision: Jeff actively receives on all 7). Audit the polling loop for robustness against the bridge's rate-limit cascade — stagger more aggressively, skip addresses that recently errored, or switch polling to a single-session multi-folder IMAP connection.
+- [ ] 0.4 Add HTML→Markdown fallback in `src/channels/protonmail.ts` + `src/channels/gmail.ts` using `turndown` (decision: Markdown preserves structure better for LLM consumption than plaintext).
+- [ ] 0.5 Implement priority-gated per-email-arrival policy: on arrival, Madison performs a fast classification (sender-preferences.md + a-mem fuzzy match; LLM fallback if novel). If classified `urgent` / `needs-reply` or any action is required → post immediately to the group with `proposed_action`. Otherwise stay silent and let the `:07` sweep absorb it into the next digest. Update CLAUDE.md triage workflow to codify this.
+- [ ] 0.6 Monitor bridge auth-cascade for 24h after 0.3 lands. Expect zero "no such user" entries attributable to login budget exhaustion.
+
+## Phase 1 — Durable message store (P1, 1–2 weeks)
+
+- [ ] 1.1 Schema design: `messages`, `threads`, `senders`, `accounts`, `sources` (gmail/proton/slack/sms), `classifications`, `actions`, `audit_log`, `labels`, `attachments`, `digest_refs`.
+- [ ] 1.2 Create SQLite DB at `~/containers/data/NanoClaw/inbox/store.db` with FTS5 virtual tables on subject + body + sender fields.
+- [ ] 1.3 Migrate ingestion: `gmail.ts` + `protonmail.ts` write every received message into the store in addition to emitting the agent-facing preview.
+- [ ] 1.4 Write a query helper library (Node module) exposing structured lookups (by sender, thread, date range, classification, full-text).
+- [ ] 1.5 Expose the query helper to Madison as an MCP tool (`mcp__inbox__search`, `mcp__inbox__thread`, `mcp__inbox__recent`).
+- [ ] 1.6 Port Madison's hourly triage to read watermarks + message facts from the store rather than re-querying IMAP/Gmail.
+- [ ] 1.7 Verify: Madison can recall by term ("find Guardian invoice 9246") and by thread ("what did we last say to Andres?") without re-fetching from backends.
+
+## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
+
+- [ ] 2.1 Design API surface: `list`, `read`, `search`, `reply`, `archive`, `label`, `thread`, `snooze`, `unsubscribe`, `mark_read`, `mark_unread`. Shared across all sources.
+- [ ] 2.2 Implement MCP server (`mcp__inbox`) routing by JID prefix to the correct backend adapter (gmail API, Proton IMAP/SMTP, Slack API).
+- [ ] 2.3 Backend adapters implement the same verb set; abstract IMAP / Gmail / Slack quirks behind consistent responses.
+- [ ] 2.4 Mount MCP server into the Madison Inbox container; remove direct `mcp__gmail__*` + `fetch-protonmail.js` usage from Madison's CLAUDE.md.
+- [ ] 2.5 Rewrite CLAUDE.md action-commands section to use unified verbs only; ensure behavior is identical per source.
+- [ ] 2.6 Verify: same action command (e.g. `archive a1`) produces identical end state regardless of whether `a1` is a Gmail or Proton message.
+
+## Phase 3 — Push ingestion (P1, ~1 week)
+
+- [ ] 3.1 Replace polling in `protonmail.ts` with IMAP IDLE; add reconnect + exponential backoff for dropped IDLE sessions.
+- [ ] 3.2 Evaluate Gmail push (`users.watch` + Cloud Pub/Sub) vs sustained polling; pick and implement.
+- [ ] 3.3 Gate each source behind a feature flag so we can fall back to polling if IDLE misbehaves.
+- [ ] 3.4 Verify: median message-arrival latency <30s; bridge LOGIN attempts per hour drops by >80%; zero auth-cascade events over a 7-day window.
+
+## Phase 4 — Slack as a source (P2, ~2 weeks)
+
+- [ ] 4.1 Socket Mode Slack adapter in `src/channels/slack.ts` — DMs + mentions + messages in selected channels.
+- [ ] 4.2 Ingestion writes Slack messages into the unified store with source=`slack`.
+- [ ] 4.3 Classification taxonomy extended for Slack semantics (thread replies, reactions, mentions-as-urgent).
+- [ ] 4.4 Outbound actions routed via the unified MCP API: reply in thread, mark read, add reaction.
+- [ ] 4.5 Update CLAUDE.md digest schema to include Slack items alongside email items.
+- [ ] 4.6 Verify: Slack DMs + emails appear in the same hourly digest and can be actioned interchangeably.
+
+## Phase 5 — Google Messages (P3, scope TBD)
+
+- [ ] 5.1 Decide ingestion path: Messages-for-Web (headless Playwright), Google Voice API, or always-on Android via ADB.
+- [ ] 5.2 Write chosen-path ingestion adapter.
+- [ ] 5.3 Outbound SMS send path through same chosen mechanism.
+- [ ] 5.4 Classification rules for SMS (different cadence, different urgency defaults).
+- [ ] 5.5 Verify: SMS flows through same digest + action surface; send works.
+
+## Phase 6 — Selective semantic layer (P3, ~1 week)
+
+- [ ] 6.1 Policy spec: what gets embedded (sender dossiers, thread summaries, classification rationales, action-outcome pairs) and what does NOT (raw bodies, OTPs, PII).
+- [ ] 6.2 Pipeline to generate + embed derived artifacts into Madison Inbox's existing a-mem.
+- [ ] 6.3 Hybrid retrieval wrapper: FTS on the store first, vector rerank via a-mem.
+- [ ] 6.4 Verify: Madison can answer "have I ever received something like this?" across multi-month history with high precision.
+
+## Phase 7 — Trust properties (P3, ~1 week)
+
+- [ ] 7.1 Confidence scoring on classifications; threshold gate for silent auto-actions (below threshold → ask Jeff).
+- [ ] 7.2 `undo last N actions` command with full reversal (re-mark unread, un-archive, un-label, un-send where possible).
+- [ ] 7.3 Replay tool: "with current rules, what would Madison do to messages from {date range}?" — non-destructive dry-run.
+- [ ] 7.4 Audit log browser accessible to Jeff (either a Madison command or a small CLI).
+- [ ] 7.5 Verify: Jeff can reconstruct any past action's rationale and reverse it.
+
+## Decisions
+
+| Decision | Rationale |
+|---|---|
+| Start with Phase 0 stabilization before any new architecture | Phase 0 fixes current pain immediately; the rest of the spine is meaningless if Madison's baseline digests drift. |
+| Build durable store (Phase 1) before unified API (Phase 2) | The API is a projection of the store; writing the API first would require re-doing it after the store lands. |
+| Defer Google Messages (Phase 5) until after Slack | Google Messages has no clean API path — its choice depends on tradeoffs we'll understand better once Slack is in. |
+| Vector DB is Phase 6, not earlier | Blindly embedding email bodies is cargo-cult; embeddings are high-value only over derived artifacts, which requires Phase 1 to exist first. |
+| Keep all 7 Proton addresses polling | Jeff receives mail on all 7. Robustness against bridge rate-limit cascade becomes a polling-loop concern (staggering / backoff / error-skip), not a config-pruning concern. |
+| Use `turndown` for HTML→Markdown | Markdown preserves semantic structure (lists, headings, links) better than flat text, which is materially useful for LLM classification and summarization. Replaces the empty-body silent-drop path in both channels. |
+| Per-email arrivals gated by priority | On arrival, fast classification decides: urgent / needs-reply / action-required → immediate post with `proposed_action`; otherwise silent, absorbed by the next `:07` sweep. Preserves the sweep's batching value for noise while giving urgent items near-real-time surfacing. The hourly sweep was originally added because Proton didn't push — the per-email path complements it, doesn't replace it. |
+| Work on `unified-inbox` feature branch | Multi-phase effort spanning weeks; isolates in-progress changes from `main` until a phase is shippable. |
+
+## Errors
+
+| Error | Resolution |
+|---|---|
+
+*(none yet)*
+
+## Current status
+
+Currently in Phase 0 execution. All blocking decisions resolved 2026-04-21. Feature branch `unified-inbox` created. Ready to start with 0.1 (CLAUDE.md schema: `proposed_action` column).
