@@ -4,6 +4,8 @@
 
 ### 2026-04-21
 
+- **19:40 CDT** — Wave 4 complete in parallel. Three executors landed `95740df` (container-runner gating + agent-runner MCP registration + startup init + 3 gating tests), `b530363` (Dockerfile bakes inbox-mcp), `5adccfb` (Madison CLAUDE.md reads via inbox MCP; `lode/groups.md` note). Full suite 365/365. **Phase 1 code-complete.**
+- **19:20 CDT** — Wave 3 complete in parallel. `42781ef` (Gmail ingestion wiring), `f72a528` (Protonmail ingestion wiring + References header parser), `7c516cd` (inbox MCP server scaffold — 10 files, MCP SDK 1.13.3, tools/list verified).
 - **19:05 CDT** — Wave 2 complete in parallel. Three executors landed `bb82006` (ingest), `98870ba` (watermarks), `05cad11` (queries). 31 new tests pass; full suite 362/362.
 - **18:55 CDT** — Wave 1 executed as two sequential sub-steps (types first, then schema+tests atomic). Commits `b4fe57c` and `e707a99`. 8 schema tests pass; full suite 331/331.
 - **18:30 CDT** — Phase 1 planned via `/lode:plan`. Decomposed into 7 acceptance criteria + 10 tasks across 4 waves. Read First list captures the files executors must read before touching code. Wave 1 is contract-first (types + schema + tests) so Waves 2–4 can fan out in parallel. Ready for `/lode:execute`.

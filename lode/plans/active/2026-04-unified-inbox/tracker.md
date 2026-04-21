@@ -59,17 +59,17 @@ Transform Madison Inbox from a reactive email-polling agent into a unified, auto
 - [x] **2.2** Watermarks module (6 tests) — `src/inbox-store/watermarks.ts` (`98870ba`).
 - [x] **2.3** Read-side queries search/thread/recent (15 tests) — `src/inbox-store/queries.ts` (`05cad11`).
 
-### Wave 3 — Channel wiring + MCP server (parallel, depends on Wave 2)
+### Wave 3 — Channel wiring + MCP server (parallel, depends on Wave 2) ✅
 
-- [ ] **3.1** Wire `ingestGmail` into `src/channels/gmail.ts`: after `pickBody` succeeds, call `ingestGmail(msg)` in a fire-and-forget try/catch that logs errors but never blocks or throws into the poll loop. — `src/channels/gmail.ts` (modify) — serves AC-2, AC-3.
-- [ ] **3.2** Wire `ingestProtonmail` into `src/channels/protonmail.ts`: same fire-and-forget pattern, per-address, after `pickBody`. — `src/channels/protonmail.ts` (modify) — serves AC-2, AC-3.
-- [ ] **3.3** Scaffold the inbox MCP server: Node/TypeScript package using `@modelcontextprotocol/sdk` with three tools (`search`, `thread`, `recent`) delegating to `queries.ts`. The DB path is read from env var `INBOX_DB_PATH` (injected by `container-runner`). Include `package.json`, `tsconfig.json`, `server.json`, `src/index.ts`, `Dockerfile`-compatible build. — `container/inbox-mcp/` (new directory) — serves AC-5.
+- [x] **3.1** Wire `ingestGmail` into Gmail channel — `src/channels/gmail.ts` (`42781ef`).
+- [x] **3.2** Wire `ingestProtonmail` into Protonmail channel + `parseReferencesHeader` helper — `src/channels/protonmail.ts` (`f72a528`).
+- [x] **3.3** Scaffold `container/inbox-mcp/` — 10 files; MCP SDK 1.13.3; `tools/list` returns all three tool names — (`7c516cd`).
 
-### Wave 4 — Container wiring and CLAUDE.md update (parallel, depends on Wave 3)
+### Wave 4 — Container wiring and CLAUDE.md update (parallel, depends on Wave 3) ✅
 
-- [ ] **4.1** Update `src/container-runner.ts`: for Madison Inbox (JID `tg:-5273779685`) add a read-only bind mount of `~/containers/data/NanoClaw/inbox/store.db` to `/workspace/inbox/store.db`, set env `INBOX_DB_PATH=/workspace/inbox/store.db`, and register the inbox MCP server entry. Other groups: no mount, no registration. — `src/container-runner.ts` (modify) + test — serves AC-6.
-- [ ] **4.2** Update `container/Dockerfile` to `COPY container/inbox-mcp/` and `RUN cd /opt/inbox-mcp && npm ci && npm run build`. Update `container/build.sh` to include the new directory in the build context. — `container/Dockerfile` + `container/build.sh` (modify) — serves AC-5, AC-6.
-- [ ] **4.3** Rewrite the hourly triage section of `/home/jeff/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`: replace per-sweep IMAP/Gmail read queries with `mcp__inbox__recent` (keyed on watermark) and `mcp__inbox__thread` for reply context. Document the watermark-update step at end of each sweep. Backend action tools remain for archive/reply/label only. — `groups/telegram_inbox/CLAUDE.md` (modify, outside repo) — serves AC-7.
+- [x] **4.1** Gate inbox store bind mount + MCP registration on `folder === 'telegram_inbox'`; startup `getInboxDb()` init; 3 gating tests — `src/container-runner.ts` + `container/agent-runner/src/index.ts` + `src/index.ts` (`95740df`).
+- [x] **4.2** `COPY inbox-mcp/` + `npm ci --omit=dev && npm run build` into `/opt/inbox-mcp/` — `container/Dockerfile` (`b530363`).
+- [x] **4.3** Madison CLAUDE.md reads via `mcp__inbox__*`, actions stay on `mcp__gmail__*` + Proton; `lode/groups.md` note added — (`5adccfb`).
 
 ## Phase 2 — Unified messaging API (MCP server) (P1, 1–2 weeks)
 
@@ -141,4 +141,4 @@ Transform Madison Inbox from a reactive email-polling agent into a unified, auto
 
 ## Current status
 
-Phase 0 code-complete on `unified-inbox` branch (commits `910c15f`, `7c8d0d8`, `2d67da7`) — pending deploy + monitoring. Phase 1 **PLANNED** with 7 acceptance criteria and 10 tasks in 4 waves. Ready for `/lode:execute` with parallel subagents once Jeff approves kick-off.
+Phase 0 + Phase 1 code-complete on `unified-inbox`. All 10 Phase 1 tasks landed across 4 waves with 11 inbox(phase1) commits. 365/365 tests pass. Next: `/lode:verify unified-inbox` to confirm each AC against the codebase, then rebuild the agent container (`./container/build.sh`) and restart nanoclaw to bring Phase 0 + 1 into production.

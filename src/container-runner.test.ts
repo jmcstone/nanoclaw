@@ -282,10 +282,12 @@ describe('inbox store mount gating', () => {
     // readonlyMountArgs returns ['-v', 'host:container:ro'], so the mount
     // appears as a single combined arg: 'hostPath:/workspace/inbox/store.db:ro'
     const inboxMountArg = args.find(
-      a => a.includes('/workspace/inbox/store.db') && a.includes(':ro'),
+      (a) => a.includes('/workspace/inbox/store.db') && a.includes(':ro'),
     );
     expect(inboxMountArg).toBeDefined();
-    expect(inboxMountArg).toContain('inbox/store.db:/workspace/inbox/store.db:ro');
+    expect(inboxMountArg).toContain(
+      'inbox/store.db:/workspace/inbox/store.db:ro',
+    );
   });
 
   it('non-inbox group does not include inbox store bind mount', async () => {
