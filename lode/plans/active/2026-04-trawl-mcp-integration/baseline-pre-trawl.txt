@@ -1,0 +1,55 @@
+=== Session baseline: 89e40f9b-a91a-4712-a24e-ffa277b116d6 ===
+Source: /home/jeff/containers/data/NanoClaw/data/sessions/telegram_avp/.claude/projects/-workspace-group/89e40f9b-a91a-4712-a24e-ffa277b116d6.jsonl
+
+--- Main session ---
+Size: 9.6M
+Lines: 1500
+
+Tool calls:
+       83 Edit
+       46 Read
+       41 Bash
+       21 Write
+       14 Agent
+       13 TodoWrite
+       11 mcp__nanoclaw__send_message
+       10 TaskOutput
+        9 mcp__a-mem__add_memory_note
+        6 mcp__a-mem__search_memories
+        2 Glob
+        1 WebFetch
+        1 Skill
+        1 mcp__nanoclaw__list_tasks
+        1 Grep
+
+--- Subagents ---
+Count: 14
+Total size: 2.8M
+Average size: 200K
+
+Aggregated tool calls:
+      269 WebSearch
+      100 WebFetch
+       39 Bash
+       16 mcp__a-mem__search_memories
+       12 mcp__a-mem__add_memory_note
+       11 mcp__nanoclaw__send_message
+        9 Write
+        2 Read
+        2 mcp__a-mem__read_memory_note
+        2 Edit
+        1 Glob
+
+--- Web-specific metrics ---
+WebSearch (main):   0
+WebSearch (subs):   269
+WebFetch  (main):   1
+WebFetch  (subs):   100
+Unique URLs fetched: 85 / 101 total (dedup opportunity)
+
+--- Rationale ---
+Use this output to compare against post-Trawl measurements.
+Expected improvements after Trawl activation:
+  * Lower WebSearch/WebFetch counts in Madison's transcript (moved to Trawl)
+  * Smaller avg subagent size (contract + Trawl delegation reduces verbosity)
+  * Higher unique-URL ratio (Trawl's cache dedups across sub-invocations)

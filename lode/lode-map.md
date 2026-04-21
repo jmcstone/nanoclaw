@@ -13,6 +13,7 @@ Authoritative index of project memory. Read this first.
   - [2026-04-trading-group](plans/active/2026-04-trading-group/tracker.md) — Telegram trading-research group with PDF ingestion, nightly web research, backtest orchestration, and 6-agent swarm
     - **[topics-status.md](plans/active/2026-04-trading-group/topics-status.md)** — topic-by-topic current state (read this first for the design map)
   - [2026-04-nanoclaw-migration](plans/active/2026-04-nanoclaw-migration/tracker.md) — migrate persistent data from `~/Data/Nanoclaw/` to `~/containers/data/NanoClaw/` (BTRFS subvolume, snapshotted)
+  - [2026-04-trawl-mcp-integration](plans/active/2026-04-trawl-mcp-integration/tracker.md) — expose Trawl's 40+ tools as a tailnet-reachable MCP service at `trawl.crested-gecko.ts.net`; usable from Madison, dev Claude Code, and future clients. Server-first rollout.
 - `plans/complete/` — historical reference
   - [2026-04-amem-integration](plans/complete/2026-04-amem-integration/tracker.md) — per-group a-mem in AlgoTrader + AVP + Jeff main + Inbox containers; see `infrastructure/a-mem.md` for current state
 
