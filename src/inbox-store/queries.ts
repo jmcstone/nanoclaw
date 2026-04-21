@@ -168,7 +168,9 @@ export function getRecentMessages(args: RecentArgs): RecentResult {
 
   let new_watermark: string;
   if (messages.length === 0) {
-    new_watermark = isColdStart ? (isGmail ? coldStartCutoff! : '0') : watermark;
+    if (!isColdStart) new_watermark = watermark;
+    else if (isGmail) new_watermark = coldStartCutoff!;
+    else new_watermark = '0';
   } else if (isGmail) {
     new_watermark = messages.reduce(
       (max, m) => (m.received_at > max ? m.received_at : max),

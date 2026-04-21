@@ -34,3 +34,4 @@ groups/*/**
 .nanoclaw/
 
 agents-sdk-docs
+nanoclaw.db
