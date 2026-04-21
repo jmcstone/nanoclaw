@@ -60,6 +60,9 @@ RUN python3 -m venv /opt/a-mem/.venv \
          "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
     && chmod -R a+rX /opt/a-mem /opt/a-mem-mcp
 
+# context-mode MCP plugin (path resolved at runtime via createRequire)
+RUN npm install -g context-mode
+
 # Create app directory
 WORKDIR /app
 
