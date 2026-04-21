@@ -151,6 +151,18 @@ If you `docker compose up` directly instead of `dcc up`, the shell has no env va
 
 Trawl's secrets: `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`. See `~/Projects/ConfigFiles/containers/trawl/trawl/.env.example` for the full list.
 
+## MCP Streamable HTTP is stateful — handshake required for tools/list
+
+When building an MCP client by hand (not through the Anthropic SDK), FastMCP rejects `tools/list` and other protocol calls that lack a session id. Required sequence:
+
+1. `POST initialize` (jsonrpc 2.0) → server returns `mcp-session-id` in response header
+2. `POST notifications/initialized` with `mcp-session-id` header
+3. `POST tools/list` (or any other method) with `mcp-session-id` header
+
+A bare `tools/list` returns HTTP 400 `"Missing session ID"`. This bit us during Trawl deploy — the agent-runner's initial `fetchTrawlTools` skipped steps 1-2 and silently returned empty, causing Trawl registration to be skipped on every container spawn.
+
+Rule for future hand-rolled MCP clients in this codebase: always do the three-step handshake. See `container/agent-runner/src/index.ts::fetchTrawlTools` for the canonical pattern.
+
 ## tsdproxy network + port convention (learned during deploy)
 
 Two requirements for a service to be reachable through tsdproxy WITHOUT publishing a host port:
