@@ -44,6 +44,9 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  // Per-group Trawl MCP config (enabled, mode, allowlist). Opaque here —
+  // agent-runner/src/index.ts owns the shape. Forwarded as-is over stdin.
+  trawl?: unknown;
 }
 
 export interface ContainerOutput {
