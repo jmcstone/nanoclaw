@@ -45,77 +45,131 @@ Madison is actively running AVP research. All Trawl-side and Ops-side work (Phas
 
 ## Phases
 
-### Phase 1 — Trawl MCP server skeleton
-- [ ] Add FastMCP dependency to `pyproject.toml`
-- [ ] Create `src/trawl/cli/mcp_server.py` — build FastMCP server from `ToolRegistry`
-- [ ] Add `trawl mcp-server --host --port` Typer subcommand in `src/trawl/cli/app.py`
-- [ ] Map every `BaseTool` subclass → MCP tool (Pydantic Input schema → MCP `inputSchema`)
-- [ ] Use Streamable HTTP transport
-- [ ] Smoke test: `trawl mcp-server` on host, list tools from dev Claude Code via direct URL
+### Phase 1 — Trawl MCP server skeleton  ✅
+- [x] FastMCP added to `pyproject.toml` (95cb5af in trawl)
+- [x] `src/trawl/cli/mcp_server.py` wraps `ToolRegistry` via `_TrawlBridgeTool`
+- [x] `trawl mcp-server --host --port --reload` subcommand
+- [x] All 38 BaseTool subclasses exposed; Pydantic Input → MCP inputSchema
+- [x] Streamable HTTP transport (FastMCP 3.2.4)
 
-### Phase 2 — Tier 2/3 handlers
-- [ ] Implement `trawl_delegate(task, context)` — invoke internal agent loop, return distilled result
-- [ ] Implement `trawl_pipeline_run(name, params)` — load pipeline from `pipelines/<name>/`, execute with iterate fan-out, return artifact path + summary
-- [ ] Progress notifications for long-running tools (`crawl_links`, `deep_inspect_pages`, pipelines) via MCP streaming events
-- [ ] Respect `_tool_timeout`, `_tool_confirm`, `_tool_cache_ttl` metadata
+### Phase 2 — Tier 2/3 handlers  ✅
+- [x] `trawl_delegate(task, model, max_iterations, context)` — invokes Trawl's agent engine
+- [x] `trawl_pipeline_run(name, params, model, step_overrides, resume_from)` — in-process engine call
+- [x] Progress notifications via FastMCP `Context.report_progress`
+- [x] Model override ContextVar (`trawl.llm.override`) consumed by all three providers
 
-### Phase 3 — File output strategy
-- [ ] Small artifacts (<1MB): return content inline in MCP tool response
-- [ ] Large artifacts: write to `/app/output/<date>/<slug>/`, return path + `resource://` URI
-- [ ] Document the output dir convention in Trawl's lode
+### Phase 3 — File output strategy  ✅
+- [x] Inline content in MCP tool response (default)
+- [x] Trawl writes larger artifacts under `jobs/{pipeline}/{stamp}/`; clients read from shared mount
 
-### Phase 4 — Dockerize
-- [ ] Add `Dockerfile` in Trawl repo — builds from `python:3.12-slim`, installs via `uv sync`, installs Playwright browsers
-- [ ] Verify image size stays reasonable (<2GB ideally)
-- [ ] Entrypoint: `trawl mcp-server --host 0.0.0.0 --port 8088`
+### Phase 4 — Dockerize  ✅
+- [x] Dockerfile + .dockerignore (python:3.12-slim + uv)
+- [x] Image size 1.47 GB (from 9.5 GB after CPU-torch pin via `tool.uv.sources`)
+- [x] Entrypoint `uv run --no-sync` + CMD `trawl mcp-server --host 0.0.0.0 --port 8088`
 
-### Phase 5 — Tailnet service
-- [ ] Create `~/Projects/ConfigFiles/containers/trawl/trawl/docker-compose.yml`
-  - tsdproxy labels (`tsdproxy.enable: true`, `tsdproxy.name: trawl`)
-  - Volume mounts: `../data/trawl/cache`, `../data/trawl/output`, `../data/trawl/lancedb`
-  - `env_file: ../data/trawl/env` for creds (OpenRouter, Zoho OAuth)
-- [ ] Create BTRFS subvolume: `sudo btrfs subvolume create ~/containers/data/trawl` (jeff:jeff 2775)
-- [ ] Run `~/Projects/ConfigFiles/bin/stow/stow-all.sh` — symlink `~/containers/trawl`
-- [ ] Populate `~/containers/data/trawl/env` with OpenRouter + Zoho creds (outside git)
-- [ ] `docker compose up -d` — verify tsdproxy provisions `trawl.crested-gecko.ts.net`
-- [ ] Smoke test: `curl https://trawl.crested-gecko.ts.net/mcp` responds
+### Phase 5 — Tailnet service  ✅
+- [x] `~/Projects/ConfigFiles/containers/trawl/trawl/docker-compose.yml` with tsdproxy labels + `tsdproxy_default` network + `tsdproxy.container_port: 8088` (learned: services without host-port publishing need both)
+- [x] BTRFS subvolume at `~/containers/data/trawl/` (BTRFS inode 256 confirmed)
+- [x] Stow-managed (`~/containers/trawl/ → ConfigFiles/...`)
+- [x] Secrets via dcc + env-vault; compose declares `environment:` passthrough (OPENROUTER_API_KEY, ZOHO_*, etc.)
+- [x] `dcc up trawl` brings up `trawl.crested-gecko.ts.net`
+- [x] `curl /mcp` + full MCP handshake validated
 
-### Phase 6 — Dev Claude Code integration
-- [ ] Add `trawl` MCP server to `~/.claude.json` (type: http, url: trawl.crested-gecko.ts.net/mcp)
-- [ ] Test all three tiers from dev Claude Code
-  - Tier 1: `mcp__trawl__inspect_pages(urls=["https://example.com"])`
-  - Tier 2: `mcp__trawl__trawl_delegate(task="find 5 academic papers on X")`
-  - Tier 3: `mcp__trawl__trawl_pipeline_run(name="gop-discovery", params={"state": "florida"})`
-- [ ] Validate Zoho tools work when called from dev Claude Code
+### Phase 6 — Dev Claude Code integration  ✅
+- [x] MCP Inspector from dev machine validates all three tiers
+  - Tier 1: `mcp__trawl__inspect_pages(urls=["https://en.wikipedia.org/wiki/Austin,_Texas"])` → 185KB structured output with 33 tables, 94 images, screenshot
+  - Tier 2: `mcp__trawl__trawl_delegate(task="say hello in 5 words")` → Grok 4.1-fast response, model_used correctly reported
+  - Tier 3 untested end-to-end (pipeline engine validated in tests)
 
-### Phase 7 — NanoClaw Madison wiring (requires Madison idle on AVP)
-- [ ] User confirms Madison idle on AVP
-- [ ] Edit `container/agent-runner/src/index.ts` — conditionally register Trawl MCP when `trawl.enabled` is true in group config
-- [ ] Implement three-mode allowlist engine (`wildcard` / `category` / `explicit`) with glob support in `excludedTools`
-- [ ] At container start: fetch Trawl's `tools/list` once, expand wildcard/category rules into concrete tool names for `allowedTools`
-- [ ] Add `nanoclaw group-config set <folder> trawl.<key> <value>` CLI helper for ergonomic edits
-- [ ] Apply per-group defaults (see Allowlist design section) to existing groups via CLI helper
-- [ ] Rebuild agent container: `./container/build.sh`
-- [ ] Test from AVP: send a message asking Madison to inspect a page via `mcp__trawl__inspect_pages`
+### Phase 7 — NanoClaw Madison wiring  ✅
+- [x] agent-runner adds conditional Trawl MCP registration + three-mode allowlist engine
+- [x] Host-side plumbing (`src/container-runner.ts`, `src/index.ts`, `src/task-scheduler.ts`) forwards `group.containerConfig.trawl` into container stdin
+- [x] `scripts/group-config.ts` CLI + `scripts/trawl-defaults.ts` per-group defaults
+- [x] Applied defaults to all four groups (AVP, main, trading, inbox)
+- [x] Agent container rebuilt
+- [x] `systemctl --user restart nanoclaw`
+- [x] Validated end-to-end: Madison in main group successfully called `mcp__trawl__inspect_pages` on Wikipedia Austin page
 
-### Phase 8 — Complementary bundle items (follow-on, separate work)
-Deferred from the original context-mode exploration — revisit after Trawl MCP is stable.
-- [ ] Subagent output contract in container CLAUDE.md (Stream D shipped the skill; may want explicit system-prompt reference)
-- [ ] `/research-dedupe` skill — shipped by Stream D in `container/skills/research-dedupe/`
-- [ ] Context-mode MCP (FTS5 session memory) — only if session continuity still feels insufficient after Trawl lands
-- [ ] **SearXNG backend for Trawl's `search_web`** — add `searxng` + `searxng:<category>` backend options alongside DDGS. Big win for AlgoTrader Web Researcher (academic category unlocks arxiv/semantic-scholar/crossref/pubmed). Requires: (a) JSON format enabled in SearXNG instance's `settings.yml`, (b) new `src/trawl/scraping/searxng.py` client, (c) backend dispatch in `search_web.py`, (d) `SEARXNG_URL` env var. Defaults stay on DDGS; opt-in per call or per group.
+### Phase 7.1 — Post-deploy fixes  ✅
+- [x] Fix: `fetchTrawlTools` must do full MCP handshake (initialize → notifications/initialized → tools/list with session id); bare `tools/list` returns HTTP 400
+- [x] Fix: registration is atomic — register `mcpServers.trawl` only after allowlist resolves non-empty
+- [x] Fix: remove `query_data` / `list_data` from base exclusions — these are the client-facing handle-resolution path, not internal plumbing
+- [x] Add `container/skills/trawl-handles/` skill documenting the handle return pattern
+- [x] /simplify pass on NanoClaw changes: removed regex glob compile, stringly-typed prefix, narrative comments; collapsed three-mode branches
 
-### Phase 9 — Observe and expand
-- [ ] Measure AVP session: tool-call count, token usage, Trawl Grok spend, Madison context pressure
-- [ ] Compare against pre-Trawl baseline (session 2026-04-20-1503: 244 WebSearch + 91 WebFetch + 172KB avg subagent)
-- [ ] Expand to trading group; add AlgoTrader-specific tool allowlist
-- [ ] Add Trawl MCP config to any additional dev machines / other NanoClaw instances
+### Phase 8 — Complementary bundle items  🟡
+Partial — some items shipped, some deferred.
+- [x] `container/skills/research-dedupe/SKILL.md` (shipped)
+- [x] `container/skills/subagent-output-contract/SKILL.md` (shipped)
+- [x] `container/skills/trawl-handles/SKILL.md` (shipped)
+- [ ] Subagent output contract referenced explicitly from system prompt (may not be needed — progressive disclosure loads it on demand)
+- [ ] Context-mode MCP (FTS5 session memory) — observe first; only add if session-continuity gap remains after Trawl adoption stabilizes
+- [ ] **SearXNG backend** (Task #11) — defer; DDGS is sufficient for AVP workload today
+
+### Phase 9 — Observation  🟡 (in progress)
+- [x] Pre-Trawl baseline captured: `baseline-pre-trawl.txt` — 369 web calls / session (269 WebSearch + 100 WebFetch), 14 subagents avg 200KB, 16 duplicate URL fetches
+- [x] Live tool-call monitor pattern established — see "Observation harness" section below
+- [ ] Collect post-Trawl baseline after 1-2 weeks of organic Madison use (run `baseline-measure.sh` on a fresh AVP session)
+- [ ] Compare mcp__trawl__* call counts vs native WebSearch/WebFetch usage
+- [ ] Quantify Grok spend via OpenRouter dashboard
+- [ ] Qualitative: does Madison reach for Trawl organically? Evidence so far: YES for search_web + extract_markdown + get_page_data; partial for handle pattern (see progress.md day 1 observations)
 
 ### Phase 10 — Lode graduation
-- [ ] Create `lode/infrastructure/trawl-mcp.md` — architecture snapshot for NanoClaw's lode
-- [ ] Update Trawl's own lode with the `mcp-server` subcommand design
+- [ ] Create `lode/infrastructure/trawl-mcp.md` — architecture snapshot
+- [ ] Update Trawl's own lode (`~/Projects/trawl/lode/`) with the `mcp-server` subcommand design
 - [ ] Update `lode/lode-map.md`, `lode/summary.md`, `lode/groups.md`
 - [ ] Move plan to `lode/plans/complete/`
+
+## Observation harness — live tool-call monitoring
+
+Pattern developed during Phase 7 validation: tail Madison's session JSONL and filter tool_use events to a stream of tagged one-liners. Used to confirm tool-choice behavior (Trawl vs native) in real time without interrupting Madison.
+
+### Launch
+
+```bash
+SESSDIR=/home/jeff/containers/data/NanoClaw/data/sessions/<group_folder>/.claude/projects/-workspace-group
+MAIN=$(ls -t "$SESSDIR"/*.jsonl 2>/dev/null | head -1)
+tail -F -n 0 "$MAIN" | while IFS= read -r line; do
+  printf '%s' "$line" | jq -r --unbuffered '
+    select(.type=="assistant")
+    | .message.content[]?
+    | select(.type=="tool_use")
+    | (if (.name | startswith("mcp__trawl__")) then "✨ TRAWL"
+        elif (.name | startswith("mcp__")) then "🔌 MCP"
+        elif .name=="WebSearch" or .name=="WebFetch" then "🌐 NATIVE-WEB"
+        else "🔧" end) + " " + .name + " " + (.input | tostring | .[0:140])
+  ' 2>/dev/null
+done
+```
+
+In a supervisor-style Claude Code session, wrap in the `Monitor` tool (persistent=true, timeout=3600000) so each tool call becomes a notification.
+
+### What to look for
+
+- **Trawl adoption rate** — count `✨ TRAWL` vs `🌐 NATIVE-WEB` over a session. If Madison is reaching for native WebSearch/WebFetch, the tool-selection skill/prompt isn't strong enough.
+- **Handle-pattern usage** — `inspect_pages` → `get_page_data` sequence vs `inspect_pages` called twice on same URL. The latter means she's not leveraging the cache.
+- **Duplicate fetches** — repeated URLs within a session indicate research-dedupe skill isn't firing.
+- **Re-scraping across sessions** — compare URLs in today's session vs yesterday's. Should decrease as a-mem fills with prior findings.
+
+### Caveat
+
+The monitor only sees the MAIN session. Subagents spawn their own JSONL files under `{session-id}/subagents/*.jsonl`. For comprehensive observation, watch the subagents dir too (adds complexity; unnecessary for ad-hoc tool-choice spot checks).
+
+## Post-deploy ops runbook
+
+Quick references for routine operations after the initial deploy.
+
+| Need | Command |
+|---|---|
+| Restart Trawl service | `cd ~/containers/trawl && dcc up trawl` (never `docker compose` directly — skips env-vault) |
+| Edit Trawl secrets | `env-vault edit ~/containers/trawl/env.vault` then `dcc up trawl` |
+| Update Trawl source (live-reload) | Save file in `~/Projects/trawl/src/` — container's `--reload` picks it up via the bind-mount |
+| Rebuild Trawl image | `cd ~/Projects/trawl && docker build -t trawl:local .` then `dcc up trawl` |
+| Change a group's Trawl config | `npx tsx scripts/group-config.ts set <folder> trawl.<key> <json-value>` |
+| Reset a group to defaults | `npx tsx scripts/group-config.ts trawl-defaults <folder>` |
+| Restart NanoClaw | `systemctl --user restart nanoclaw` |
+| Rebuild agent container | `cd ~/containers/nanoclaw && ./container/build.sh` |
+| Check Trawl health from client | `curl -sS --http1.1 -H "Accept: application/json, text/event-stream" -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' https://trawl.crested-gecko.ts.net/mcp` |
 
 ## Allowlist design
 
@@ -219,4 +273,10 @@ If the Trawl tool surface grows to include more write-capable external services 
 
 ## Current status
 
-Currently in **Phase 1 — Trawl MCP server skeleton**. Planning locked in; ready to begin the FastMCP wrapper on Trawl-side. Phases 1–5 (Trawl + Ops) can run without touching Madison. Phase 7 (NanoClaw wiring) requires Madison idle on AVP.
+**Phases 1–7 shipped; Phase 9 (observation) in progress.**
+
+Trawl MCP service is live at `https://trawl.crested-gecko.ts.net/mcp` and reachable from all Madison containers plus dev Claude Code. 12 commits landed across three repos (Trawl, ConfigFiles, NanoClaw). Validated end-to-end in production:
+- AVP: search_web + extract_markdown + batch queries; organic Trawl preference confirmed
+- Main: inspect_pages + get_page_data handle-drilldown pattern confirmed
+
+Remaining work is observational (Phase 9) and graduation (Phase 10). No code changes required to meet the plan goal. Deferred items (SearXNG backend, hosted admin UI, cache tools/list, fetcher/LLM decoupling, registerMcpServer helper) are follow-ups logged in the project task list (#11, #12, #14–17).
