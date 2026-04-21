@@ -106,12 +106,12 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 ### Wave 1 (parallel)
 - [x] Add `RUN npm install -g context-mode` after the existing a-mem block (no `ENV` directive — path is resolved at runtime via `require.resolve`) — `/home/jeff/containers/nanoclaw/container/Dockerfile` (`96e241d`)
 
-## Phase 2: Agent-Runner Wiring — PLANNED
+## Phase 2: Agent-Runner Wiring — DONE (`abcbacc`)
 ### Wave 1 (parallel — all edits to same file, but logically independent; executor may batch)
-- [ ] Add `hasContextMode` sentinel check (`fs.existsSync('/workspace/extra/context-mode')`) below the `hasAmem` check, and add the `context-mode` MCP server entry to `mcpServers` when true — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
-- [ ] Add `mcp__context-mode__*` to `allowedTools` array (conditional on `hasContextMode`) — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
-- [ ] Add a `createContextModeHook(scriptName)` factory near the existing `createPreCompactHook`: uses `createRequire(import.meta.url)` + `require.resolve('context-mode/package.json')` to locate the install dir, then returns a `HookCallback` that spawns `node <ctxModeRoot>/hooks/<scriptName>.mjs`, pipes the JSON input on stdin, and parses the JSON decision from stdout — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
-- [ ] Replace the `hooks:` block in the `query()` options to add PreToolUse (8 matchers from hooks.json), PostToolUse (broad matcher), SessionStart, UserPromptSubmit, and the second PreCompact entry (context-mode's `precompact.mjs`) alongside the existing `createPreCompactHook`, using `createContextModeHook(...)` for all context-mode entries — `/home/jeff/containers/nanoclaw/container/agent-runner/src/index.ts`
+- [x] Add `hasContextMode` sentinel check (`fs.existsSync('/workspace/extra/context-mode')`) below the `hasAmem` check, and add the `context-mode` MCP server entry to `mcpServers` when true — `container/agent-runner/src/index.ts` (`abcbacc`)
+- [x] Add `mcp__context-mode__*` to `allowedTools` array (conditional on `hasContextMode`) — `container/agent-runner/src/index.ts` (`abcbacc`)
+- [x] Add a `createContextModeHook(scriptName)` factory + shared `resolveCtxModeRoot()` helper near `createPreCompactHook`; uses `createRequire` + `require.resolve('context-mode/package.json')` with cached result, 60s timeout, graceful fallback on missing script / non-JSON output / spawn error — `container/agent-runner/src/index.ts` (`abcbacc`)
+- [x] Extend `hooks:` block with PreToolUse (regex alternation over 8 matchers), PostToolUse (upstream broad matcher), SessionStart, UserPromptSubmit (all conditional on `hasContextMode`), plus PreCompact array now chains existing `createPreCompactHook` + context-mode's `precompact.mjs` — `container/agent-runner/src/index.ts` (`abcbacc`)
 
 ## Phase 3: Container Rebuild — PLANNED
 ### Wave 1
