@@ -11,7 +11,7 @@ import { readEnvFile } from '../env.js';
 import { pickBody } from './email-body.js';
 import { findEmailTargetJid } from './email-routing.js';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { ingestProtonmail } from '../inbox-store/ingest.js';
+import { ingestMessage } from '../inbox-store/ingest.js';
 import {
   Channel,
   OnChatMetadata,
@@ -39,6 +39,20 @@ export function parseReferencesHeader(sourceBuf: Buffer): string[] {
   const value = match[1].replace(/\r?\n[\t ]+/g, ' ');
   const ids = value.match(/<[^>]+>/g);
   return ids ?? [];
+}
+
+/**
+ * Derive the `thread_id` for a Proton message. Root is the first non-empty
+ * References entry, then In-Reply-To, else the message's own Message-ID.
+ * Prefixed with `proton:` so it can never collide with other sources.
+ */
+export function deriveProtonThreadId(
+  references: string[],
+  in_reply_to: string | null,
+  source_message_id: string,
+): string {
+  const firstRef = references.find((r) => r.length > 0);
+  return `proton:${firstRef ?? in_reply_to ?? source_message_id}`;
 }
 
 const POLL_STAGGER_MS = 2000;
@@ -418,16 +432,17 @@ export class ProtonmailChannel implements Channel {
       const references = fetchMsg.source
         ? parseReferencesHeader(fetchMsg.source)
         : [];
-      ingestProtonmail({
+      const inReplyTo: string | null = envelope.inReplyTo || null;
+      ingestMessage({
+        source: 'protonmail',
         account_email: recipientAddress,
         source_message_id: messageId,
+        thread_id: deriveProtonThreadId(references, inReplyTo, messageId),
         sender_email: senderEmail,
         sender_name: senderName || null,
         subject: subject === '(no subject)' ? null : subject,
         body_markdown: body,
         received_at: date,
-        in_reply_to: envelope.inReplyTo || null,
-        references,
       });
     } catch (err) {
       logger.warn(

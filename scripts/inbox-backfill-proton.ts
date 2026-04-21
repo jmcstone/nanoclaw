@@ -22,13 +22,14 @@ import path from 'path';
 import { readEnvFile } from '../src/env.js';
 import { pickBody } from '../src/channels/email-body.js';
 import {
+  deriveProtonThreadId,
   extractProtonmailBody,
   openProtonInbox,
   parseReferencesHeader,
   type ProtonmailConfig,
 } from '../src/channels/protonmail.js';
 import { DATA_DIR } from '../src/config.js';
-import { ingestProtonmail } from '../src/inbox-store/ingest.js';
+import { ingestMessage } from '../src/inbox-store/ingest.js';
 import { logger } from '../src/logger.js';
 
 const backfillLog = logger.child({ component: 'backfill-proton' });
@@ -387,16 +388,20 @@ async function backfillAddress(
               : null;
 
             if (!args.dryRun) {
-              const result = ingestProtonmail({
+              const result = ingestMessage({
+                source: 'protonmail',
                 account_email: address,
                 source_message_id: messageId,
+                thread_id: deriveProtonThreadId(
+                  references,
+                  inReplyTo,
+                  messageId,
+                ),
                 sender_email: senderEmail,
                 sender_name: senderName || null,
                 subject,
                 body_markdown: body,
                 received_at: date,
-                in_reply_to: inReplyTo,
-                references,
               });
 
               if (result.inserted) {

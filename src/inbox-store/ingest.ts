@@ -1,29 +1,18 @@
 import crypto from 'crypto';
 import type Database from 'better-sqlite3';
 import { getInboxDb } from './db.js';
+import type { InboxSource } from './types.js';
 
-export interface GmailIngestInput {
+export interface MessageIngestInput {
+  source: InboxSource;
   account_email: string;
-  source_message_id: string;
   thread_id: string;
-  sender_email: string;
-  sender_name: string | null;
-  subject: string | null;
-  body_markdown: string;
-  received_at: string;
-  raw_headers_json?: string | null;
-}
-
-export interface ProtonmailIngestInput {
-  account_email: string;
   source_message_id: string;
   sender_email: string;
   sender_name: string | null;
   subject: string | null;
   body_markdown: string;
   received_at: string;
-  in_reply_to: string | null;
-  references: string[];
   raw_headers_json?: string | null;
 }
 
@@ -85,20 +74,14 @@ function makeSenderId(email: string): string {
     .slice(0, 16);
 }
 
-interface Common {
-  source: 'gmail' | 'protonmail';
-  account_email: string;
-  thread_id: string;
-  source_message_id: string;
-  sender_email: string;
-  sender_name: string | null;
-  subject: string | null;
-  body_markdown: string;
-  received_at: string;
-  raw_headers_json: string | null;
-}
-
-function ingestCommon(input: Common): {
+/**
+ * Idempotently upsert a single message into the inbox store. Caller
+ * derives the `thread_id` for their source (email sources prefix with
+ * their source name; chat sources use their native thread key).
+ * Returns { message_id, inserted } — `inserted: false` means a row with
+ * this (source, source_message_id) already existed.
+ */
+export function ingestMessage(input: MessageIngestInput): {
   message_id: string;
   inserted: boolean;
 } {
@@ -128,7 +111,7 @@ function ingestCommon(input: Common): {
       input.subject,
       input.body_markdown,
       input.received_at,
-      input.raw_headers_json,
+      input.raw_headers_json ?? null,
     );
     const inserted = res.changes === 1;
     if (inserted) {
@@ -136,44 +119,4 @@ function ingestCommon(input: Common): {
     }
     return { message_id, inserted };
   })();
-}
-
-export function ingestGmail(input: GmailIngestInput): {
-  message_id: string;
-  inserted: boolean;
-} {
-  return ingestCommon({
-    source: 'gmail',
-    account_email: input.account_email,
-    thread_id: `gmail:${input.thread_id}`,
-    source_message_id: input.source_message_id,
-    sender_email: input.sender_email,
-    sender_name: input.sender_name,
-    subject: input.subject,
-    body_markdown: input.body_markdown,
-    received_at: input.received_at,
-    raw_headers_json: input.raw_headers_json ?? null,
-  });
-}
-
-export function ingestProtonmail(input: ProtonmailIngestInput): {
-  message_id: string;
-  inserted: boolean;
-} {
-  // Thread root: first non-empty References entry, then In-Reply-To, else own id.
-  const firstRef = input.references.find((r) => r.length > 0);
-  const threadRoot = firstRef ?? input.in_reply_to ?? input.source_message_id;
-
-  return ingestCommon({
-    source: 'protonmail',
-    account_email: input.account_email,
-    thread_id: `proton:${threadRoot}`,
-    source_message_id: input.source_message_id,
-    sender_email: input.sender_email,
-    sender_name: input.sender_name,
-    subject: input.subject,
-    body_markdown: input.body_markdown,
-    received_at: input.received_at,
-    raw_headers_json: input.raw_headers_json ?? null,
-  });
 }

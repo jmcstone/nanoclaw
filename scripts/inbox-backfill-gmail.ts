@@ -18,7 +18,7 @@ import {
 } from '../src/channels/gmail.js';
 import { pickBody } from '../src/channels/email-body.js';
 import { DATA_DIR } from '../src/config.js';
-import { ingestGmail } from '../src/inbox-store/ingest.js';
+import { ingestMessage } from '../src/inbox-store/ingest.js';
 import { logger } from '../src/logger.js';
 
 const log = logger.child({ component: 'backfill-gmail' });
@@ -209,10 +209,11 @@ async function main(): Promise<void> {
           );
           totalSkipped++;
         } else {
-          const result = ingestGmail({
+          const result = ingestMessage({
+            source: 'gmail',
             account_email: accountEmail,
             source_message_id: stub.id,
-            thread_id: threadId,
+            thread_id: `gmail:${threadId}`,
             sender_email: senderEmail,
             sender_name: senderName || null,
             subject: subject || null,

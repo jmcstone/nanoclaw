@@ -6,7 +6,7 @@ import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
 import { MAX_EMAIL_PREVIEW_CHARS } from '../config.js';
-import { ingestGmail } from '../inbox-store/ingest.js';
+import { ingestMessage } from '../inbox-store/ingest.js';
 import { logger } from '../logger.js';
 import { pickBody } from './email-body.js';
 import { findEmailTargetJid } from './email-routing.js';
@@ -334,10 +334,11 @@ export class GmailChannel implements Channel {
     }
 
     try {
-      ingestGmail({
+      ingestMessage({
+        source: 'gmail',
         account_email: this.userEmail,
         source_message_id: messageId,
-        thread_id: threadId,
+        thread_id: `gmail:${threadId}`,
         sender_email: senderEmail,
         sender_name: senderName || null,
         subject: subject || null,
