@@ -451,66 +451,74 @@ export class ProtonmailChannel implements Channel {
     plain: string;
     html: string;
   } {
-    const acc = { plain: '', html: '' };
-    this.walkMimePart(source.toString('utf-8'), acc);
-    return acc;
+    return extractProtonmailBody(source);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers (also used by backfill script)
+// ---------------------------------------------------------------------------
+
+function decodeQuotedPrintable(text: string): string {
+  return text
+    .replace(/=\r?\n/g, '') // soft line breaks
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    );
+}
+
+function walkMimePart(raw: string, acc: { plain: string; html: string }): void {
+  const headerEnd = raw.indexOf('\r\n\r\n');
+  if (headerEnd === -1) return;
+
+  const headers = raw.slice(0, headerEnd).toLowerCase();
+  const bodyRaw = raw.slice(headerEnd + 4);
+
+  const boundaryMatch = headers.match(/boundary="?([^"\r\n;]+)"?/);
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1];
+    const parts = bodyRaw.split(`--${boundary}`);
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed || trimmed === '--') continue;
+      walkMimePart(trimmed, acc);
+    }
+    return;
   }
 
-  /**
-   * Recursively walk a MIME part, accumulating the first text/plain and
-   * text/html payloads found. Handles nested multipart containers.
-   */
-  private walkMimePart(
-    raw: string,
-    acc: { plain: string; html: string },
-  ): void {
-    const headerEnd = raw.indexOf('\r\n\r\n');
-    if (headerEnd === -1) return;
+  const isPlain = headers.includes('text/plain');
+  const isHtml = headers.includes('text/html');
+  if (!isPlain && !isHtml) return;
 
-    const headers = raw.slice(0, headerEnd).toLowerCase();
-    const bodyRaw = raw.slice(headerEnd + 4);
+  let body = bodyRaw.trim();
+  const endBoundary = body.search(/\n--[^\n]*--\s*$/);
+  if (endBoundary !== -1) body = body.slice(0, endBoundary).trim();
 
-    const boundaryMatch = headers.match(/boundary="?([^"\r\n;]+)"?/);
-    if (boundaryMatch) {
-      const boundary = boundaryMatch[1];
-      const parts = bodyRaw.split(`--${boundary}`);
-      for (const part of parts) {
-        const trimmed = part.trim();
-        if (!trimmed || trimmed === '--') continue;
-        this.walkMimePart(trimmed, acc);
-      }
-      return;
-    }
-
-    const isPlain = headers.includes('text/plain');
-    const isHtml = headers.includes('text/html');
-    if (!isPlain && !isHtml) return;
-
-    let body = bodyRaw.trim();
-    const endBoundary = body.search(/\n--[^\n]*--\s*$/);
-    if (endBoundary !== -1) body = body.slice(0, endBoundary).trim();
-
-    if (headers.includes('quoted-printable')) {
-      body = this.decodeQuotedPrintable(body);
-    }
-    if (
-      headers.includes('content-transfer-encoding: base64') ||
-      headers.includes('content-transfer-encoding:base64')
-    ) {
-      body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8');
-    }
-
-    if (isPlain && !acc.plain) acc.plain = body;
-    else if (isHtml && !acc.html) acc.html = body;
+  if (headers.includes('quoted-printable')) {
+    body = decodeQuotedPrintable(body);
+  }
+  if (
+    headers.includes('content-transfer-encoding: base64') ||
+    headers.includes('content-transfer-encoding:base64')
+  ) {
+    body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8');
   }
 
-  private decodeQuotedPrintable(text: string): string {
-    return text
-      .replace(/=\r?\n/g, '') // soft line breaks
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
-        String.fromCharCode(parseInt(hex, 16)),
-      );
-  }
+  if (isPlain && !acc.plain) acc.plain = body;
+  else if (isHtml && !acc.html) acc.html = body;
+}
+
+/**
+ * Extract text/plain and text/html body parts from a raw MIME email source.
+ * Exported for use by the backfill script and any other consumers.
+ */
+export function extractProtonmailBody(source: Buffer): {
+  plain: string;
+  html: string;
+} {
+  const acc = { plain: '', html: '' };
+  walkMimePart(source.toString('utf-8'), acc);
+  return acc;
 }
 
 registerChannel('protonmail', (opts: ChannelOpts) => {

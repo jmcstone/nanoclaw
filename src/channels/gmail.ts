@@ -18,6 +18,31 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+export function extractGmailBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): {
+  plain: string;
+  html: string;
+} {
+  const acc = { plain: '', html: '' };
+  if (!payload) return acc;
+
+  const walk = (part: gmail_v1.Schema$MessagePart): void => {
+    if (part.body?.data) {
+      const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
+      if (part.mimeType === 'text/plain' && !acc.plain) {
+        acc.plain = decoded;
+      } else if (part.mimeType === 'text/html' && !acc.html) {
+        acc.html = decoded;
+      }
+    }
+    if (part.parts) {
+      for (const child of part.parts) walk(child);
+    }
+  };
+
+  walk(payload);
+  return acc;
+}
+
 export interface GmailChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -262,7 +287,7 @@ export class GmailChannel implements Channel {
     // Skip emails from self (our own replies)
     if (senderEmail === this.userEmail) return;
 
-    const { plain, html } = this.extractBodyParts(msg.data.payload);
+    const { plain, html } = extractGmailBodyParts(msg.data.payload);
     const body = pickBody(plain, html);
 
     if (!body) {
@@ -350,30 +375,6 @@ export class GmailChannel implements Channel {
     );
   }
 
-  private extractBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): {
-    plain: string;
-    html: string;
-  } {
-    const acc = { plain: '', html: '' };
-    if (!payload) return acc;
-
-    const walk = (part: gmail_v1.Schema$MessagePart): void => {
-      if (part.body?.data) {
-        const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
-        if (part.mimeType === 'text/plain' && !acc.plain) {
-          acc.plain = decoded;
-        } else if (part.mimeType === 'text/html' && !acc.html) {
-          acc.html = decoded;
-        }
-      }
-      if (part.parts) {
-        for (const child of part.parts) walk(child);
-      }
-    };
-
-    walk(payload);
-    return acc;
-  }
 }
 
 registerChannel('gmail', (opts: ChannelOpts) => {

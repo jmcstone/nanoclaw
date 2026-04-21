@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock registry (registerChannel runs at import time)
 vi.mock('./registry.js', () => ({ registerChannel: vi.fn() }));
 
-import { GmailChannel, GmailChannelOpts } from './gmail.js';
+import { GmailChannel, GmailChannelOpts, extractGmailBodyParts } from './gmail.js';
 
 function makeOpts(overrides?: Partial<GmailChannelOpts>): GmailChannelOpts {
   return {
@@ -72,5 +72,63 @@ describe('GmailChannel', () => {
       const ch = new GmailChannel(makeOpts());
       expect(ch.name).toBe('gmail');
     });
+  });
+});
+
+describe('extractGmailBodyParts', () => {
+  function b64(s: string): string {
+    return Buffer.from(s).toString('base64');
+  }
+
+  it('returns empty strings for undefined payload', () => {
+    const result = extractGmailBodyParts(undefined);
+    expect(result).toEqual({ plain: '', html: '' });
+  });
+
+  it('extracts plain text from a simple text/plain part', () => {
+    const payload = {
+      mimeType: 'text/plain',
+      body: { data: b64('Hello world') },
+    };
+    const { plain, html } = extractGmailBodyParts(payload);
+    expect(plain).toBe('Hello world');
+    expect(html).toBe('');
+  });
+
+  it('extracts html from a text/html part', () => {
+    const payload = {
+      mimeType: 'text/html',
+      body: { data: b64('<p>Hello</p>') },
+    };
+    const { plain, html } = extractGmailBodyParts(payload);
+    expect(plain).toBe('');
+    expect(html).toBe('<p>Hello</p>');
+  });
+
+  it('extracts both plain and html from a multipart/alternative payload', () => {
+    const payload = {
+      mimeType: 'multipart/alternative',
+      body: {},
+      parts: [
+        { mimeType: 'text/plain', body: { data: b64('Plain text') } },
+        { mimeType: 'text/html', body: { data: b64('<p>HTML text</p>') } },
+      ],
+    };
+    const { plain, html } = extractGmailBodyParts(payload);
+    expect(plain).toBe('Plain text');
+    expect(html).toBe('<p>HTML text</p>');
+  });
+
+  it('takes only the first plain part (no accumulation)', () => {
+    const payload = {
+      mimeType: 'multipart/mixed',
+      body: {},
+      parts: [
+        { mimeType: 'text/plain', body: { data: b64('First') } },
+        { mimeType: 'text/plain', body: { data: b64('Second') } },
+      ],
+    };
+    const { plain } = extractGmailBodyParts(payload);
+    expect(plain).toBe('First');
   });
 });
