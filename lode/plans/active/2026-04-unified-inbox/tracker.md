@@ -94,7 +94,7 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 
 ### Wave 1.5 — Two independent backfill scripts ✅
 
-- [x] **1.5.1** Proton backfill script + `extractProtonmailBody` refactor + `parseReferencesHeader` export + 11 new tests — `scripts/inbox-backfill-proton.ts`, `src/channels/protonmail.ts` (`3f9df7b` for substance, `0f881de` for prettier tidy — attribution note below).
+- [x] **1.5.1** Proton backfill script (newest-first, descending UID walk) + `extractProtonmailBody` refactor + `parseReferencesHeader` export + 11 new tests — `scripts/inbox-backfill-proton.ts`, `src/channels/protonmail.ts` (`3f9df7b` for substance, `0f881de` for prettier tidy, refactored to newest-first in later commit — attribution note below). Cursor shape: nested `proton.<address>.{ceiling_uid, lowest_processed_uid}`; legacy flat `proton.<address>.last_uid` is migrated-and-deleted on first use. `--floor-uid` flag caps how far back the walk goes. Ctrl-C safe: most recent mail is in the store immediately.
 - [x] **1.5.2** Gmail backfill script + `extractGmailBodyParts` module-level export + 5 new tests — `scripts/inbox-backfill-gmail.ts`, `src/channels/gmail.ts` (`3f9df7b`).
 
 **Attribution note**: the Gmail executor committed first and swept in the Proton executor's unstaged files from the working tree, so both substantive changes landed under `3f9df7b`. `0f881de` is a small prettier-only follow-up. All substance is in history; split attribution is noisy but not lossy. Future parallel lode-execute runs: keep executors out of overlapping file paths even at the working-tree level, or have them `git stash` before committing to avoid sweeping in sibling work.
@@ -159,6 +159,7 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 | Use `turndown` for HTML→Markdown | Markdown preserves semantic structure (lists, headings, links) better than flat text, which is materially useful for LLM classification and summarization. Replaces the empty-body silent-drop path in both channels. |
 | Per-email arrivals gated by priority | On arrival, fast classification decides: urgent / needs-reply / action-required → immediate post with `proposed_action`; otherwise silent, absorbed by the next `:07` sweep. Preserves the sweep's batching value for noise while giving urgent items near-real-time surfacing. The hourly sweep was originally added because Proton didn't push — the per-email path complements it, doesn't replace it. |
 | Work on `unified-inbox` feature branch | Multi-phase effort spanning weeks; isolates in-progress changes from `main` until a phase is shippable. |
+| Backfill walks newest-first on both sources | Gmail does this by API default; Proton now flipped to descending UID. Lets Jeff Ctrl-C the backfill at any time with the most recent mail already present. Length of full-history completion is no longer load-bearing on utility. |
 | Cold-start default = NOW - 24h, env-overridable via `INBOX_COLD_START_LOOKBACK_MS` | Eliminates the need for a manual watermark-seed step after Phase 1.5 backfill. `getRecentMessages` with no watermark returns the last 24h of mail; second call self-heals into native per-source semantics via the `new_watermark` it emitted on the first call. Env override lets Jeff widen the window after a long weekend without code change. |
 
 ## Errors
