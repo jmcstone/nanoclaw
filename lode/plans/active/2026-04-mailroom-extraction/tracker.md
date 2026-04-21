@@ -102,12 +102,20 @@ All items landed in ConfigFiles commit `a74e8c7` (2026-04-21). Executed as 3 par
 
 Side effect: the smoke test drained 3 weeks of backlogged Protonmail into mailroom's store. These emails will NOT appear in nanoclaw's host-side inbox store (which has been dark for that source since 2026-03-30); they are reachable only via mailroom once M2 lands the MCP server and M4 wires Madison's container. Acceptable per plan — nanoclaw's Proton path is already broken and scheduled for removal at M5.
 
-### Phase M2 — HTTP MCP server
+### Phase M2 — HTTP MCP server ✅
 
-- [ ] **M2.1** Port `container/inbox-mcp/src/{db,queries,types}.ts` → mailroom `src/mcp/`. Adjust for Streamable HTTP.
-- [ ] **M2.2** Replace stdio transport with `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp`. Listen on port 8080 inside container. Follow MCP SDK HTTP server example.
-- [ ] **M2.3** Write `src/mcp-server.ts` entry point — session management, graceful shutdown, health check endpoint.
-- [ ] **M2.4** Verify: `curl -X POST http://<inbox-mcp-ip>:8080/mcp` handshake from another container on `mailroom_shared` returns all three tool names.
+All items landed in ConfigFiles commit `d5d79a6` (2026-04-21). Written inline (single subdomain, ~300 LOC including store/db.ts change). Verified end-to-end: initialize + tools/list + tools/call on live data.
+
+- [x] **M2.1** Queries + types reused from `src/store/` rather than vendored — mailroom already has them from M1, and the nanoclaw `container/inbox-mcp/` copy was byte-for-byte identical below its "Vendored from…" banner. Single source of truth now. Only a read-only DB wrapper needed: added `MAILROOM_DB_READONLY=true` branch to `src/store/db.ts` that opens with `{readonly: true, fileMustExist: true}`, applies cipher PRAGMA, sets `query_only=true`, skips WAL + createSchema (`d5d79a6`).
+- [x] **M2.2** `src/mcp/server.ts` — `createInboxMcpServer()` factory returning a configured MCP `Server` instance. Three tools (`mcp__inbox__{search,thread,recent}`) with the exact schemas from nanoclaw's stdio server. Handlers delegate to `searchMessages`/`getThread`/`getRecentMessages` from `../store/queries.js`. Helpers for arg-parsing (`requireString`, `optionalNumber`, etc.) ported verbatim (`d5d79a6`).
+- [x] **M2.3** `src/mcp-server.ts` — Node `http.createServer` wrapping `StreamableHTTPServerTransport`. **Stateful session mode** (`sessionIdGenerator: crypto.randomUUID`); session-id tracked in `transports` Map, populated via `onsessioninitialized`, deleted via `transport.onclose`. `GET /health` returns `{status, sessions}` JSON. `POST /mcp` with no `mcp-session-id` initializes a new session; `POST /mcp` with known session-id routes to that transport; unknown session-id → 404. Listens on `MAILROOM_MCP_HOST:MAILROOM_MCP_PORT` (default `0.0.0.0:8080`). SIGTERM/SIGINT closes http server, closes all transports, closes DB, exits (`d5d79a6`).
+- [x] **M2.4** Verified from peer container on `mailroom_shared` via `curlimages/curl` one-shot:
+  - `GET /health` → `{"status":"ok","sessions":0}` (before handshake)
+  - `POST /mcp initialize` → HTTP 200 + `mcp-session-id: 6a63e9b7-...` header + serverInfo `inbox-mcp@0.1.0`
+  - `POST /mcp tools/list` (with session-id) → all three tool schemas returned as SSE event
+  - `POST /mcp tools/call mcp__inbox__search {query:"burger"}` → FTS5 matched the P. Terry's Burger Stand email ingested earlier, returned full `SearchResult` through the SSE stream. End-to-end HTTP → MCP → SQLCipher-ro → SSE confirmed (`d5d79a6`).
+
+Ops: `mailroom-inbox-mcp-1` container reports `(healthy)` per Docker healthcheck (node one-liner GETs `/health` every 30s). Both services (ingestor + inbox-mcp) running from the same `mailroom-local:latest` image.
 
 ### Phase M3 — Backfill as compose services
 
@@ -174,8 +182,10 @@ Side effect: the smoke test drained 3 weeks of backlogged Protonmail into mailro
 
 ## Current status
 
-**Phase M0 + M1 complete (ConfigFiles `421c97e` + `a74e8c7`). Phase M2 next.** Mailroom ingestor is LIVE on jarvis: `mailroom-ingestor-1` container ingesting from Gmail API + Protonmail bridge into encrypted `/var/mailroom/data/store.db`, emitting `inbox:new` events into `ipc-out/`. Protonmail side is working for the first time since 2026-03-30 — the ENOTFOUND issue does not exist in the Docker service-DNS path. Nanoclaw's host-side Gmail channel is still running in parallel; both write to separate store.db files (nanoclaw's `~/containers/data/NanoClaw/inbox/store.db`, mailroom's `~/containers/data/mailroom/store.db`).
+**Phases M0 + M1 + M2 complete (ConfigFiles `421c97e`, `a74e8c7`, `d5d79a6`). Phase M3 (backfill compose services) next.** Both mailroom services are LIVE on jarvis:
+- `mailroom-ingestor-1` — polling Gmail + Protonmail, writing to encrypted `/var/mailroom/data/store.db`, emitting `inbox:new` events to `ipc-out/`. Protonmail path working (no ENOTFOUND).
+- `mailroom-inbox-mcp-1` — Streamable HTTP MCP server on port 8080 internal, reports `(healthy)` per docker healthcheck. Reachable from any container on `mailroom_shared` via `http://inbox-mcp:8080/mcp`. Full MCP handshake + FTS5 search verified end-to-end.
 
-**Parallel-operation caveat**: both nanoclaw and mailroom query `is:unread` Gmail and mark-as-read. Whoever polls first wins the message; the other skips. During M2-M4, some Gmail arrivals may land only in mailroom's store, invisible to Madison until the M4 subscriber wires up. Acceptable per plan — Madison's reading experience was going to be disrupted by the cutover anyway, and the Protonmail-side recovery outweighs the transient Gmail-split.
+**Parallel-operation caveat unchanged**: nanoclaw's host-side Gmail poller still running in parallel; ~50% of new Gmail arrivals during this window land in mailroom-only, invisible to Madison until M4 wires her container. Protonmail side is net-positive (recovering a 3-week backlog that was dark on the nanoclaw side).
 
-Known blockers: none. Next step is M2 — Streamable HTTP MCP server at `src/mcp-server.ts` exposing `mcp__inbox__{search,thread,recent}` on port 8080, reachable from Madison's container via `mailroom_shared`.
+Known blockers: none. Next is M3 — port the two backfill scripts to become `profiles: [backfill]` compose services invoked via `docker compose run --rm backfill-{proton,gmail}`.
