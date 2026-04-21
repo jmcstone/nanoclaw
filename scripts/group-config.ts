@@ -38,6 +38,7 @@ import {
   applyTrawlDefault,
   getTrawlDefault,
 } from './trawl-defaults.js';
+import { applyContextModeMount, getContextModeMount } from './context-mode-defaults.js';
 
 type Json =
   | null
@@ -169,6 +170,7 @@ function printUsage(): void {
       '  group-config get <folder>',
       '  group-config set <folder> <dotted.key> <value> [--dry-run]',
       '  group-config trawl-defaults <folder> [--dry-run]',
+      '  group-config context-mode-defaults <folder> [--dry-run]',
       '',
       'Flags:',
       '  --dry-run       Show diff without writing',
@@ -275,6 +277,36 @@ function main(): void {
         writeConfig(db, row.jid, after);
         process.stdout.write(
           `Applied Trawl default to ${folder}: ${JSON.stringify(trawlDefault)}\n`,
+        );
+        return;
+      }
+
+      case 'context-mode-defaults': {
+        const folder = positional[0];
+        if (!folder) {
+          process.stderr.write('context-mode-defaults: missing <folder>\n');
+          process.exit(1);
+        }
+        const row = findGroupByFolder(db, folder);
+        if (!row) {
+          process.stderr.write(`No registered group with folder=${folder}\n`);
+          process.exit(3);
+        }
+        const before = readConfig(row);
+        const mount = getContextModeMount(folder);
+        const after = applyContextModeMount(before, folder) as Record<string, Json>;
+        const diff = { folder, mount, before, after };
+        if (dryRun) {
+          process.stdout.write(
+            '[dry-run] would apply context-mode mount:\n' +
+              JSON.stringify(diff, null, 2) +
+              '\n',
+          );
+          return;
+        }
+        writeConfig(db, row.jid, after);
+        process.stdout.write(
+          `Applied context-mode mount to ${folder}: ${JSON.stringify(mount)}\n`,
         );
         return;
       }
