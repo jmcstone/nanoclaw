@@ -90,8 +90,8 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 - [ ] AC-2: `container/agent-runner/src/index.ts` registers a `context-mode` MCP server entry in `mcpServers` when `/workspace/extra/context-mode` sentinel exists, using the stdio transport with the `context-mode` binary
 - [ ] AC-3: `container/agent-runner/src/index.ts` wires all 5 hook types (PreToolUse with 8 matchers, PostToolUse, PreCompact with 2 entries, SessionStart, UserPromptSubmit) in the `hooks:` option block via a `createContextModeHook(scriptName)` factory that uses `createRequire(import.meta.url)` + `require.resolve('context-mode/package.json')` to locate hook scripts — no hardcoded paths
 - [ ] AC-4: `mcp__context-mode__*` tools appear in `allowedTools` when the sentinel exists, and are absent when it does not
-- [ ] AC-5: 4 BTRFS subvolumes exist at `~/containers/data/NanoClaw/extra/context-mode/{avp,main,trading,inbox}/` with `jeff:jeff` ownership and `2775` mode
-- [ ] AC-6: 4 per-group mount-allowlist entries bind-mount each subvolume to `/workspace/extra/context-mode/` inside the respective group's container
+- [ ] AC-5: 4 regular directories exist at `~/containers/data/NanoClaw/context-mode/{telegram_avp,telegram_main,telegram_trading,telegram_inbox}/` with `jeff:jeff` ownership and `2775` mode (regular dirs, not subvolumes — inherits snapshot rotation from parent NanoClaw/ subvolume; mirrors a-mem host layout exactly)
+- [ ] AC-6: 4 per-group mount entries in `container_config.mounts[]` bind-mount each host dir to `/workspace/extra/context-mode/` inside the respective group's container
 - [ ] AC-7: After a container run with the sentinel present, `ctx_stats` returns a non-empty response (confirming the MCP server connected and the FTS5 DB initialized)
 - [ ] AC-8: After adding hooks, a session with a-mem and Trawl still successfully calls `mcp__a-mem__*` and trawl tools without hook interference
 
@@ -102,9 +102,9 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 - `/home/jeff/containers/nanoclaw/lode/infrastructure/persistence.md` — BTRFS subvolume creation convention (ownership, mode, command)
 - `/home/jeff/containers/nanoclaw/lode/plans/active/2026-04-context-mode-integration/findings.md` — all locked decisions and the open engineering question on `CLAUDE_PLUGIN_ROOT`
 
-## Phase 1: Container Install — PLANNED
+## Phase 1: Container Install — IN PROGRESS
 ### Wave 1 (parallel)
-- [ ] Add `RUN npm install -g context-mode` after the existing a-mem block (no `ENV` directive — path is resolved at runtime via `require.resolve`) — `/home/jeff/containers/nanoclaw/container/Dockerfile`
+- [x] Add `RUN npm install -g context-mode` after the existing a-mem block (no `ENV` directive — path is resolved at runtime via `require.resolve`) — `/home/jeff/containers/nanoclaw/container/Dockerfile` (`96e241d`)
 
 ## Phase 2: Agent-Runner Wiring — PLANNED
 ### Wave 1 (parallel — all edits to same file, but logically independent; executor may batch)
@@ -117,14 +117,11 @@ The original Trawl plan deferred context-mode pending Phase 9 observation of Tra
 ### Wave 1
 - [ ] Run `./container/build.sh` to produce the updated image with context-mode installed (single expensive step; must complete before validation) — `container/build.sh` (no file change; execution only)
 
-## Phase 4: Per-Group Data Isolation — PLANNED
-### Wave 1 (all 4 subvolumes parallelizable)
-- [ ] Create BTRFS subvolume + set ownership for AVP group: `sudo btrfs subvolume create ~/containers/data/NanoClaw/extra/context-mode/avp && sudo chown jeff:jeff ... && sudo chmod 2775 ...` — host filesystem (no code file)
-- [ ] Create BTRFS subvolume + set ownership for Main group: same pattern for `main/` — host filesystem
-- [ ] Create BTRFS subvolume + set ownership for Trading group: same pattern for `trading/` — host filesystem
-- [ ] Create BTRFS subvolume + set ownership for Inbox group: same pattern for `inbox/` — host filesystem
-### Wave 2 (depends on subvolumes existing)
-- [ ] Add a `context-mode` mount entry to each of the 4 groups' `container_config.mounts[]` via `npx tsx scripts/group-config.ts set <folder> mounts +{hostPath:"~/containers/data/NanoClaw/extra/context-mode/<group>",containerPath:"context-mode"}` (mirroring how Trawl defaults are applied; mount lands at `/workspace/extra/context-mode/` per `src/types.ts:3`) — DB edit via `scripts/group-config.ts`; no source file change
+## Phase 4: Per-Group Data Isolation — IN PROGRESS
+### Wave 1 (create all 4 host dirs in one pass — they're regular directories, not subvolumes)
+- [x] Create `~/containers/data/NanoClaw/context-mode/` and 4 per-group subdirectories (`telegram_avp`, `telegram_main`, `telegram_trading`, `telegram_inbox`) as regular directories with `jeff:jeff` ownership and `2775` mode (setgid). Mirrors a-mem's exact host layout (`~/containers/data/NanoClaw/a-mem/telegram_*/`). Not subvolumes — they inherit snapshot rotation from the parent NanoClaw/ BTRFS subvolume — host filesystem operation (no commit — untracked by git)
+### Wave 2 (depends on Wave 1 dirs existing)
+- [ ] Add a `context-mode` mount entry to each of the 4 groups' `container_config.mounts[]` via `npx tsx scripts/group-config.ts set <folder> mounts +{hostPath:"~/containers/data/NanoClaw/context-mode/<folder>",containerPath:"context-mode"}` (mirroring Trawl defaults; mount lands at `/workspace/extra/context-mode/` per `src/types.ts:3`) — DB edit via `scripts/group-config.ts`; no source file change
 - [ ] *Optional convenience:* create `scripts/context-mode-defaults.ts` mirroring `scripts/trawl-defaults.ts` so future groups can be set up with a single command — `/home/jeff/containers/nanoclaw/scripts/context-mode-defaults.ts`
 
 ## Phase 5: Validation — PLANNED

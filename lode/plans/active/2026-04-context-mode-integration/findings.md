@@ -85,8 +85,8 @@ Madison container
 │         SessionStart:[context-mode/hooks/sessionstart.mjs] ← NEW
 │         UserPromptSubmit:[...userpromptsubmit.mjs]         ← NEW
 │       }
-├── /workspace/extra/a-mem/           ← ChromaDB, per-group
-├── /workspace/extra/context-mode/    ← FTS5 DB, per-group  ← NEW
+├── /workspace/extra/a-mem/           ← ChromaDB, per-group (host: ~/containers/data/NanoClaw/a-mem/<folder>/)
+├── /workspace/extra/context-mode/    ← FTS5 DB, per-group  ← NEW (host: ~/containers/data/NanoClaw/context-mode/<folder>/)
 └── /workspace/group/                 ← Madison's home
 ```
 
