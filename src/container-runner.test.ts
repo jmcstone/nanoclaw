@@ -107,6 +107,7 @@ vi.mock('child_process', async () => {
   };
 });
 
+import { spawn } from 'child_process';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
@@ -227,5 +228,99 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('inbox store mount gating', () => {
+  const spawnMock = spawn as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    spawnMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function getSpawnArgs(): string[] {
+    return spawnMock.mock.calls[0]?.[1] ?? [];
+  }
+
+  function startAndClose(
+    group: RegisteredGroup,
+    folder: string,
+  ): Promise<ContainerOutput> {
+    const p = runContainerAgent(
+      group,
+      {
+        prompt: 'Hello',
+        groupFolder: folder,
+        chatJid: 'x@g.us',
+        isMain: false,
+      },
+      () => {},
+    );
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    fakeProc.emit('close', 0);
+    return p;
+  }
+
+  it('telegram_inbox group includes inbox store bind mount (readonly)', async () => {
+    const inboxGroup: RegisteredGroup = {
+      name: 'Madison Inbox',
+      folder: 'telegram_inbox',
+      trigger: '@Madison',
+      added_at: new Date().toISOString(),
+    };
+
+    startAndClose(inboxGroup, 'telegram_inbox');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = getSpawnArgs();
+    // readonlyMountArgs returns ['-v', 'host:container:ro'], so the mount
+    // appears as a single combined arg: 'hostPath:/workspace/inbox/store.db:ro'
+    const inboxMountArg = args.find(
+      a => a.includes('/workspace/inbox/store.db') && a.includes(':ro'),
+    );
+    expect(inboxMountArg).toBeDefined();
+    expect(inboxMountArg).toContain('inbox/store.db:/workspace/inbox/store.db:ro');
+  });
+
+  it('non-inbox group does not include inbox store bind mount', async () => {
+    const mainGroup: RegisteredGroup = {
+      name: 'Main Group',
+      folder: 'telegram_main',
+      trigger: '@Madison',
+      added_at: new Date().toISOString(),
+    };
+
+    startAndClose(mainGroup, 'telegram_main');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = getSpawnArgs();
+    const hasInboxMount = args.some((a) =>
+      a.includes('/workspace/inbox/store.db'),
+    );
+    expect(hasInboxMount).toBe(false);
+  });
+
+  it('trading group does not include inbox store bind mount', async () => {
+    const tradingGroup: RegisteredGroup = {
+      name: 'Trading',
+      folder: 'telegram_trading',
+      trigger: '@Madison',
+      added_at: new Date().toISOString(),
+    };
+
+    startAndClose(tradingGroup, 'telegram_trading');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = getSpawnArgs();
+    const hasInboxMount = args.some((a) =>
+      a.includes('/workspace/inbox/store.db'),
+    );
+    expect(hasInboxMount).toBe(false);
   });
 });

@@ -244,6 +244,18 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Inbox store DB (read-only) — Madison Inbox group only.
+  // The DB is initialized at host startup (getInboxDb()); this mount makes it
+  // available inside the container so the inbox MCP server can query it.
+  if (group.folder === 'telegram_inbox') {
+    const inboxDbPath = path.join(DATA_DIR, 'inbox', 'store.db');
+    mounts.push({
+      hostPath: inboxDbPath,
+      containerPath: '/workspace/inbox/store.db',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

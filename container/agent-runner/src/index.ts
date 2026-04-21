@@ -666,6 +666,10 @@ async function runQuery(
   log(`a-mem MCP: ${hasAmem ? 'enabled' : 'disabled'}`);
   const hasContextMode = fs.existsSync('/workspace/extra/context-mode');
   log(`context-mode: ${hasContextMode ? 'enabled' : 'disabled'}`);
+  // Inbox MCP is enabled only for Madison Inbox (telegram_inbox), where the
+  // store DB is bind-mounted read-only at /workspace/inbox/store.db.
+  const hasInbox = fs.existsSync('/workspace/inbox/store.db');
+  log(`inbox MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
 
   const mcpServers: Record<string, any> = {
     nanoclaw: {
@@ -708,6 +712,15 @@ async function runQuery(
       },
     };
   }
+  if (hasInbox) {
+    mcpServers['inbox'] = {
+      command: 'node',
+      args: ['/opt/inbox-mcp/dist/index.js'],
+      env: {
+        INBOX_DB_PATH: '/workspace/inbox/store.db',
+      },
+    };
+  }
 
   const trawlCfg = containerInput.trawl;
   const hasTrawl = trawlCfg?.enabled === true;
@@ -741,6 +754,7 @@ async function runQuery(
     'mcp__gmail__*',
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
+    ...(hasInbox ? ['mcp__inbox__*'] : []),
     ...trawlAllowed,
   ];
 
