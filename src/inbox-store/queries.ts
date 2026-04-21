@@ -115,7 +115,9 @@ export function getRecentMessages(args: RecentArgs): RecentResult {
       // Cold start: no stored watermark and no explicit since_watermark.
       // Return only messages within the lookback window instead of epoch.
       isColdStart = true;
-      coldStartCutoff = new Date(Date.now() - getColdStartLookbackMs()).toISOString();
+      coldStartCutoff = new Date(
+        Date.now() - getColdStartLookbackMs(),
+      ).toISOString();
       watermark = coldStartCutoff;
     }
   }
