@@ -159,6 +159,7 @@ Gating: Phase 1.5 execution waits until Phase 1 has been deployed (agent contain
 | Use `turndown` for HTML→Markdown | Markdown preserves semantic structure (lists, headings, links) better than flat text, which is materially useful for LLM classification and summarization. Replaces the empty-body silent-drop path in both channels. |
 | Per-email arrivals gated by priority | On arrival, fast classification decides: urgent / needs-reply / action-required → immediate post with `proposed_action`; otherwise silent, absorbed by the next `:07` sweep. Preserves the sweep's batching value for noise while giving urgent items near-real-time surfacing. The hourly sweep was originally added because Proton didn't push — the per-email path complements it, doesn't replace it. |
 | Work on `unified-inbox` feature branch | Multi-phase effort spanning weeks; isolates in-progress changes from `main` until a phase is shippable. |
+| Cold-start default = NOW - 24h, env-overridable via `INBOX_COLD_START_LOOKBACK_MS` | Eliminates the need for a manual watermark-seed step after Phase 1.5 backfill. `getRecentMessages` with no watermark returns the last 24h of mail; second call self-heals into native per-source semantics via the `new_watermark` it emitted on the first call. Env override lets Jeff widen the window after a long weekend without code change. |
 
 ## Errors
 

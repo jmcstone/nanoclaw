@@ -10,6 +10,18 @@ import {
 } from './types.js';
 import { getInboxDb } from './db.js';
 
+export const DEFAULT_COLD_START_LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24h
+
+export function getColdStartLookbackMs(): number {
+  const raw = process.env.INBOX_COLD_START_LOOKBACK_MS;
+  if (!raw) return DEFAULT_COLD_START_LOOKBACK_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_COLD_START_LOOKBACK_MS;
+  }
+  return parsed;
+}
+
 function rowToMessage(row: unknown): InboxMessage {
   return row as InboxMessage;
 }
@@ -89,17 +101,38 @@ export function getRecentMessages(args: RecentArgs): RecentResult {
 
   // Resolve watermark
   let watermark: string;
+  let isColdStart = false;
+  let coldStartCutoff: string | undefined;
   if (args.since_watermark !== undefined) {
     watermark = args.since_watermark;
   } else {
     const wmRow = db
       .prepare(`SELECT watermark_value FROM watermarks WHERE account_id = ?`)
       .get(args.account_id) as { watermark_value: string } | undefined;
-    watermark = wmRow?.watermark_value ?? '';
+    if (wmRow !== undefined) {
+      watermark = wmRow.watermark_value;
+    } else {
+      // Cold start: no stored watermark and no explicit since_watermark.
+      // Return only messages within the lookback window instead of epoch.
+      isColdStart = true;
+      coldStartCutoff = new Date(Date.now() - getColdStartLookbackMs()).toISOString();
+      watermark = coldStartCutoff;
+    }
   }
 
   let rows: unknown[];
-  if (isGmail) {
+  if (isColdStart) {
+    // Cold start: filter by received_at regardless of source (both Gmail and Proton use ISO timestamps).
+    rows = db
+      .prepare(
+        `SELECT * FROM messages
+         WHERE account_id = ?
+           AND received_at > ?
+         ORDER BY received_at ASC
+         LIMIT ?`,
+      )
+      .all(args.account_id, coldStartCutoff, limit);
+  } else if (isGmail) {
     rows = db
       .prepare(
         `SELECT * FROM messages
@@ -128,7 +161,11 @@ export function getRecentMessages(args: RecentArgs): RecentResult {
 
   let new_watermark: string;
   if (messages.length === 0) {
-    new_watermark = watermark;
+    if (isColdStart) {
+      new_watermark = isGmail ? coldStartCutoff! : '0';
+    } else {
+      new_watermark = watermark;
+    }
   } else if (isGmail) {
     new_watermark = messages.reduce(
       (max, m) => (m.received_at > max ? m.received_at : max),
