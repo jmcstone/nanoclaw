@@ -399,7 +399,8 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
-        trawl: (group.containerConfig as { trawl?: unknown } | undefined)?.trawl,
+        trawl: (group.containerConfig as { trawl?: unknown } | undefined)
+          ?.trawl,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),

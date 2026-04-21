@@ -133,7 +133,7 @@ Three layered categories determine what each group excludes:
 
 | Category | Tools | Why |
 |---|---|---|
-| **Base** (always excluded) | `save_*`, `write_output`, `read_file`, `memory`, `stash`, `query_data`, `list_data`, `delegate_task` | Duplicate-purpose (Madison has `Write`/`Read`/`a-mem`) or Trawl-internal plumbing (stash, data-store handles, the low-level delegate primitive — use `trawl_delegate` Tier 2 meta-tool instead) |
+| **Base** (always excluded) | `save_*`, `write_output`, `read_file`, `memory`, `stash`, `delegate_task` | Duplicate Madison's native `Write`/`Read`/`a-mem`, or Trawl-internal state with no external use (stash, delegate_task primitive — use `trawl_delegate` Tier 2 meta-tool instead). **Note:** `query_data` / `list_data` / `get_page_data` are **kept** — they're the client-facing handle-resolution path for Trawl's large-data return pattern. |
 | **Blast radius** | `zoho_*` | External mutation. Only groups whose purpose IS CRM get this. |
 | **Social scraping** | `search_facebook` | Niche; excluded by default across the board, opt-in per group |
 

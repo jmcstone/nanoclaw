@@ -43,11 +43,24 @@ export interface TrawlDefault {
 type JsonObj = { [k: string]: unknown };
 
 /**
- * Excluded from every Madison instance: these either duplicate Madison's
- * native Write/Read/a-mem tools (the save/read/memory group), are Trawl-
- * internal plumbing invisible to MCP clients (stash, query_data, list_data),
- * or are the low-level primitive superseded by the `trawl_delegate`
- * meta-tool (delegate_task).
+ * Excluded from every Madison instance:
+ *
+ *  - save_*, write_output, read_file — duplicate Madison's native Write/Read
+ *    and land in Trawl's /app/output/ which Madison can't see.
+ *  - memory — duplicates a-mem (MCP client's own per-group semantic memory).
+ *  - stash — per-invocation scratch inside Trawl's agent loop; meaningless
+ *    outside it.
+ *  - delegate_task — low-level primitive for Trawl's LLM to fan out
+ *    sub-agents. External clients should use the `trawl_delegate` meta-tool
+ *    which wraps the full agent loop with explicit model override.
+ *
+ * NOT excluded (left available):
+ *
+ *  - query_data, list_data, get_page_data — these are the client-facing
+ *    return channel for Trawl's handle-based data store. Large Trawl
+ *    results return a compact summary + handle_id; the client then uses
+ *    query_data / get_page_data to drill into specific categories without
+ *    re-fetching. Excluding them defeats the whole point of handles.
  */
 const BASE_EXCLUSIONS: string[] = [
   'save_*',
@@ -55,8 +68,6 @@ const BASE_EXCLUSIONS: string[] = [
   'read_file',
   'memory',
   'stash',
-  'query_data',
-  'list_data',
   'delegate_task',
 ];
 
