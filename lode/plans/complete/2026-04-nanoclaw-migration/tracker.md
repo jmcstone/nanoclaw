@@ -42,9 +42,9 @@ Data controlled by the `NANOCLAW_DATA_ROOT` env var — the code already support
 - [x] First hourly snapshot captured: `~/containers/data/.snapshots/NanoClaw/2026-04-18-170100/`
 
 ### Phase 5 — Cleanup (after 24h of stable operation)
-- [ ] Archive old `~/Data/Nanoclaw/` (tar.gz to `/tmp/` or delete directly if confident)
-- [ ] If parent `~/Data/` is now empty, remove it
-- [ ] Close out plan, graduate to `plans/complete/`
+- [x] Deleted old `~/Data/Nanoclaw/` directly (238MB reclaimed; rollback insurance unneeded after 2 days of stable operation + hourly BTRFS snapshots of new location)
+- [x] Removed empty parent `~/Data/`
+- [x] Close out plan, graduate to `plans/complete/`
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Data controlled by the `NANOCLAW_DATA_ROOT` env var — the code already support
 
 ## Current Status
 
-Phase 4 complete — migration fully validated end-to-end. Round-trip message works, hourly snapshot captured at `2026-04-18-170100`. Phase 5 cleanup (delete old `~/Data/Nanoclaw/`) scheduled for 2026-04-19 or later after 24h of stable operation.
+**Complete.** All phases shipped. Old `~/Data/Nanoclaw/` (238MB) and its empty parent deleted on 2026-04-20 after 2 days of stable operation. NanoClaw fully conformant with the persistence convention — see [lode/infrastructure/persistence.md](../../../infrastructure/persistence.md).
