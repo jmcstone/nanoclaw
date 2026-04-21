@@ -14,4 +14,9 @@ import './protonmail.js';
 // telegram
 import './telegram.js';
 
+// mailroom-subscriber (drains inbox:new events from the mailroom stack
+// at ~/containers/data/mailroom/ipc-out/ and dispatches them into the
+// configured email target group via the existing onMessage pipeline).
+import './mailroom-subscriber.js';
+
 // whatsapp

@@ -666,9 +666,12 @@ async function runQuery(
   log(`a-mem MCP: ${hasAmem ? 'enabled' : 'disabled'}`);
   const hasContextMode = fs.existsSync('/workspace/extra/context-mode');
   log(`context-mode: ${hasContextMode ? 'enabled' : 'disabled'}`);
-  // Inbox MCP is enabled only for Madison Inbox (telegram_inbox), where the
-  // store DB is bind-mounted read-only at /workspace/inbox/store.db.
-  const hasInbox = fs.existsSync('/workspace/inbox/store.db');
+  // Inbox MCP is enabled only for Madison Inbox (telegram_inbox). The
+  // mailroom stack exposes its MCP server over Streamable HTTP on the
+  // mailroom_shared Docker network at http://inbox-mcp:8080/mcp.
+  // Container-runner attaches this group to mailroom_shared (see
+  // src/container-runner.ts) so service-name DNS resolves.
+  const hasInbox = containerInput.groupFolder === 'telegram_inbox';
   log(`inbox MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
 
   const mcpServers: Record<string, any> = {
@@ -713,20 +716,9 @@ async function runQuery(
     };
   }
   if (hasInbox) {
-    const inboxKey = process.env.INBOX_DB_KEY;
-    if (!inboxKey) {
-      throw new Error(
-        'INBOX_DB_KEY is required inside the container for telegram_inbox groups. ' +
-          'The host orchestrator must pass it through — check src/container-runner.ts gating.',
-      );
-    }
     mcpServers['inbox'] = {
-      command: 'node',
-      args: ['/opt/inbox-mcp/dist/index.js'],
-      env: {
-        INBOX_DB_PATH: '/workspace/inbox/store.db',
-        INBOX_DB_KEY: inboxKey,
-      },
+      type: 'http',
+      url: 'http://inbox-mcp:8080/mcp',
     };
   }
 

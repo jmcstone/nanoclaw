@@ -304,6 +304,16 @@ function buildContainerArgs(
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
+  // Inbox-group only: attach to mailroom_shared so the container can reach
+  // the mailroom inbox-mcp service via Docker service DNS
+  // (http://inbox-mcp:8080/mcp). Docker run accepts only one --network;
+  // switching from the default bridge to mailroom_shared is safe because
+  // --add-host=host.docker.internal:host-gateway is orthogonal and keeps
+  // host.docker.internal resolving (used by the credential proxy + ollama).
+  if (group.folder === EMAIL_TARGET_FOLDER) {
+    args.push('--network', 'mailroom_shared');
+  }
+
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
   // or when getuid is unavailable (native Windows without WSL).
