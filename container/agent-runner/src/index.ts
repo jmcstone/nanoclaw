@@ -242,11 +242,6 @@ function resolveCtxModeRoot(): string | null {
  */
 function createContextModeHook(scriptName: string): HookCallback {
   return async (input, _toolUseId, _context) => {
-    // TEMP DIAGNOSTIC — confirm hook is actually firing
-    const inputType = (input as { hook_event_name?: string })?.hook_event_name ?? 'unknown';
-    const toolName = (input as { tool_name?: string })?.tool_name ?? 'n/a';
-    log(`[ctx-hook-fire] script=${scriptName} event=${inputType} tool=${toolName}`);
-
     const root = resolveCtxModeRoot();
     if (!root) return {};
 

@@ -103,7 +103,7 @@ Partial — some items shipped, some deferred.
 - [x] `container/skills/subagent-output-contract/SKILL.md` (shipped)
 - [x] `container/skills/trawl-handles/SKILL.md` (shipped)
 - [ ] Subagent output contract referenced explicitly from system prompt (may not be needed — progressive disclosure loads it on demand)
-- [ ] Context-mode MCP (FTS5 session memory) — observe first; only add if session-continuity gap remains after Trawl adoption stabilizes
+- [x] Context-mode MCP — shipped 2026-04-20 as a full context-compression integration (not just FTS5 session memory). Per-group opt-in via mount sentinel. See [lode/infrastructure/context-mode.md](../../../infrastructure/context-mode.md).
 - [x] **SearXNG backend** — shipped 2026-04-20. `search_web` dispatches to DDGS or SearXNG via `TRAWL_SEARCH_ENGINE` env; Jeff's instance defaults to SearXNG at `host.docker.internal:8085`. Trawl commit `ce6378e`, ConfigFiles `1e09aa3`, SearXNG JSON-format enable `83d3987`.
 
 ### Phase 9 — Observation  🟡 (in progress)
@@ -264,7 +264,7 @@ If the Trawl tool surface grows to include more write-capable external services 
 | Tailnet membership = auth; no bearer tokens in v1 | Matches existing posture for SearXNG / Karakeep / GitLab |
 | ~~Drop SearXNG integration from the Madison bundle~~ Revisited 2026-04-20: SearXNG is now Trawl's `search_web` backend | Keeps one tool surface (`search_web`) for Madison; SearXNG wins the backend slot per deployment env. Tailnet URL doesn't work from container netns (tailscale DNS unreachable), so URL is `host.docker.internal:8085`. |
 | Drop Firecrawl from the Madison bundle | Redundant — Trawl's scraping stack (Scrapling + patchright + browserforge) supersedes it |
-| Context-mode deferred, not cancelled | Revisit if session continuity feels insufficient after Trawl lands |
+| ~~Context-mode deferred, not cancelled~~ Shipped 2026-04-20 | Re-scoped after realizing context-mode is a context-compression layer, not just session memory. Orthogonal to Trawl — Trawl reduces web-call duplication; context-mode reduces context cost of every tool call. Both active now. See [lode/infrastructure/context-mode.md](../../../infrastructure/context-mode.md). |
 
 ## Errors
 
