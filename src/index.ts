@@ -101,6 +101,23 @@ function loadState(): void {
   );
 }
 
+function writeAllTaskSnapshots(): void {
+  const tasks = getAllTasks();
+  const taskRows = tasks.map((t) => ({
+    id: t.id,
+    groupFolder: t.group_folder,
+    prompt: t.prompt,
+    script: t.script || undefined,
+    schedule_type: t.schedule_type,
+    schedule_value: t.schedule_value,
+    status: t.status,
+    next_run: t.next_run,
+  }));
+  for (const group of Object.values(registeredGroups)) {
+    writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+  }
+}
+
 /**
  * Return the message cursor for a group, recovering from the last bot reply
  * if lastAgentTimestamp is missing (new group, corrupted state, restart).
@@ -736,25 +753,13 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
-    onTasksChanged: () => {
-      const tasks = getAllTasks();
-      const taskRows = tasks.map((t) => ({
-        id: t.id,
-        groupFolder: t.group_folder,
-        prompt: t.prompt,
-        script: t.script || undefined,
-        schedule_type: t.schedule_type,
-        schedule_value: t.schedule_value,
-        status: t.status,
-        next_run: t.next_run,
-      }));
-      for (const group of Object.values(registeredGroups)) {
-        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
-      }
-    },
+    onTasksChanged: writeAllTaskSnapshots,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+  // Seed the tasks snapshots (IPC + Obsidian mirror) at startup so the
+  // files are current before any message activity triggers a write.
+  writeAllTaskSnapshots();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);

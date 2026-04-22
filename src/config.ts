@@ -82,12 +82,7 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
 );
 export const ONECLI_URL =
   process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
-export const MAX_MESSAGES_PER_PROMPT = Math.max(
-  1,
-  parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
-);
 export const IPC_POLL_INTERVAL = 1000;
-export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
@@ -96,26 +91,77 @@ export const MAX_EMAIL_PREVIEW_CHARS = Math.max(
   0,
   parseInt(process.env.MAX_EMAIL_PREVIEW_CHARS || '200', 10) || 200,
 );
-export const SESSION_MAX_AGE_HOURS = Math.max(
-  1,
-  parseInt(process.env.SESSION_MAX_AGE_HOURS || '24', 10) || 24,
-);
-export const SESSION_MAX_MESSAGES = Math.max(
-  1,
-  parseInt(process.env.SESSION_MAX_MESSAGES || '50', 10) || 50,
-);
 
-// Per-group operational overrides (model, session rotation).
-// Lives in the Obsidian vault so Jeff can edit on any device.
-// Host-side only — not mounted into containers.
-export const GROUP_OVERRIDES_PATH = path.join(
+// Obsidian-resident settings (visible + editable on any device via sync).
+// Host-side only — never mounted into containers.
+export const OBSIDIAN_SETTINGS_DIR = path.join(
   HOME_DIR,
   'Documents',
   'Obsidian',
   'Main',
   'NanoClaw',
   '_Settings',
+);
+export const DEFAULTS_PATH = path.join(OBSIDIAN_SETTINGS_DIR, 'defaults.json');
+export const GROUP_OVERRIDES_PATH = path.join(
+  OBSIDIAN_SETTINGS_DIR,
   'group-overrides.json',
+);
+export const OBSIDIAN_TASKS_DIR = path.join(OBSIDIAN_SETTINGS_DIR, 'tasks');
+
+interface GlobalDefaults {
+  maxMessagesPerPrompt?: number;
+  idleTimeoutMs?: number;
+  sessionMaxMessages?: number;
+  sessionMaxAgeHours?: number;
+}
+
+function readDefaults(): GlobalDefaults {
+  try {
+    if (!fs.existsSync(DEFAULTS_PATH)) return {};
+    const parsed = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Precedence for each setting: Obsidian defaults.json → .env → built-in.
+// Per-group overrides (group-overrides.json) layer on top of this via the
+// resolve* functions below.
+function resolveInt(
+  obsidianValue: number | undefined,
+  envValue: string | undefined,
+  fallback: number,
+): number {
+  if (typeof obsidianValue === 'number' && obsidianValue > 0)
+    return Math.max(1, obsidianValue);
+  const envInt = envValue ? parseInt(envValue, 10) : NaN;
+  if (Number.isFinite(envInt) && envInt > 0) return Math.max(1, envInt);
+  return fallback;
+}
+
+const defaults = readDefaults();
+
+export const MAX_MESSAGES_PER_PROMPT = resolveInt(
+  defaults.maxMessagesPerPrompt,
+  process.env.MAX_MESSAGES_PER_PROMPT,
+  10,
+);
+export const IDLE_TIMEOUT = resolveInt(
+  defaults.idleTimeoutMs,
+  process.env.IDLE_TIMEOUT,
+  1800000, // 30 min
+);
+export const SESSION_MAX_AGE_HOURS = resolveInt(
+  defaults.sessionMaxAgeHours,
+  process.env.SESSION_MAX_AGE_HOURS,
+  24,
+);
+export const SESSION_MAX_MESSAGES = resolveInt(
+  defaults.sessionMaxMessages,
+  process.env.SESSION_MAX_MESSAGES,
+  50,
 );
 
 export interface GroupOverride {
