@@ -22,6 +22,12 @@ Backend classifier + actor for inbound mail. Runs inside the `mailroom-ingestor`
 
 Bad edits (malformed JSON, schema violation, uncompilable regex) log loudly and keep the previously-valid rule set in memory — the ingestor never crash-loops on config.
 
+## Operational gotcha — compose CWD vs realpath
+
+The compose volume mount in `docker-compose.yml` is `../data/mailroom:/var/mailroom/data` — a **relative** path. Docker Compose resolves it against the **process CWD's symlink chain**, NOT the compose file's `realpath`. The repo lives at `~/Projects/ConfigFiles/containers/mailroom/mailroom/docker-compose.yml`, but `~/containers/mailroom` is a symlink into that path, and the real data lives at `~/containers/data/mailroom/`.
+
+**Always run `dcc` from the symlinked path:** `cd ~/containers/mailroom && dcc up ingestor inbox-mcp`. Running from the realpath (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) makes `..` resolve to `~/Projects/ConfigFiles/containers/mailroom/`, where Docker silently auto-creates an empty `data/mailroom/` directory as root and starts a fresh empty `store.db` — losing access to the real 4GB+ encrypted store, the seeded `rules.json`, and the Gmail OAuth creds. Recovery: `dcc down`, `sudo rm -rf ~/Projects/ConfigFiles/containers/mailroom/data`, then `cd ~/containers/mailroom && dcc up ...` from the right CWD.
+
 ## Action model
 
 Two disjoint accumulators track label intent: `labels_to_add` and `labels_to_remove`. Primitives:
