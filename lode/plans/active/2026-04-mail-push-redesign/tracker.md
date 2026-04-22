@@ -116,12 +116,13 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **5.3** Test the end-to-end *(9 new vitest cases in `src/channels/mailroom-subscriber.test.ts`: temp `ipc-out` dir, `inbox-urgent-*.json` triggers `onMessage` + `requestImmediateProcessing`, `inbox-routine-*.json` triggers `onMessage` only, legacy `inbox-new-*.json` still works, filename/payload prefix mismatch dispatches per payload, unknown-prefix ignored, invalid JSON quarantined, schema-invalid quarantined, multiple routine events don't trigger immediate spawns, no-target-group drops silently. 303/303 nanoclaw suite)*
 - [x] **5.4** Add the new RW mount in `src/container-runner.ts`: `~/containers/data/mailroom → /workspace/extra/mailroom` gated on `folder === EMAIL_TARGET_FOLDER` *(imports `EMAIL_TARGET_FOLDER` from `inbox-routing.ts`; logs a warning if the host dir is missing rather than failing container startup)*
 
-### Phase 6 — Initial rules.json + accounts.json
-- [ ] **6.1** Port the 27 `imap_autolabel.py` RULES to `rules.json`. Most become `{match: {sender_contains: "X"}, actions: {add_label: "Y"}}`. Some get `auto_archive: true` added per Jeff's preference (Subscriptions, Job Postings likely).
-- [ ] **6.2** Add the DocuSign rule: `{match: {sender_contains: "docusign"}, actions: {urgent: true}}`. Keep no label for now (stays in INBOX for visibility).
-- [ ] **6.3** Add the QCM rule: `{match: {sender_equals: "euclid.qcm.llc@gmail.com"}, actions: {urgent: true, add_label: "QCM Notifications", qcm_alert: true}}`
-- [ ] **6.4** Build initial `accounts.json` from current bridge + Gmail config: 1 Gmail (`jeff@americanvoxpop.com` tags `work`, `avp`), 5 Proton addresses with `personal` + specific tags per address (jstone.pro `primary`, thestonefamily.us `family`, registrations `low-priority`, pm.me/protonmail.com `alias`).
-- [ ] **6.5** Create `rules-changelog.md` with an initial entry.
+### Phase 6 — Initial rules.json + accounts.json *(data volume; not under git — live at `~/containers/data/mailroom/`)*
+- [x] **6.1** Port the 27 `imap_autolabel.py` RULES to `rules.json` *(26 ported straight; the 27th — euclid.qcm — is replaced by the enriched urgent rule in 6.3. Auto-archive added for 15 Subscriptions + 1 Free Books + 3 Job Postings entries; Shopping / Household / T-Mobile / Finances / Personal stay in INBOX for Madison to surface.)*
+- [x] **6.2** Add the DocuSign rule *(`urgent-docusign`, no label — stays in INBOX for visibility; conflict resolution forces auto_archive:false if any broad rule ever sets it)*
+- [x] **6.3** Add the QCM rule *(`urgent-qcm-notifications`, urgent + add_label: QCM Notifications + qcm_alert: true; qcm_alert side-channel keeps the legacy JSONL poller working)*
+- [x] **6.4** Build initial `accounts.json` *(6 entries: 1 Gmail + 5 Proton from the running container's PROTONMAIL_ADDRESSES env. Tracker mention of "5 Proton" matches; Madison's stale CLAUDE.md listed 7 but alice@ and proton.me aren't configured)*
+- [x] **6.5** Create `rules-changelog.md` *(seed entry covers: which imap_autolabel.py rules were ported, which got auto_archive and why, the QCM enrichment, the DocuSign addition, related commit hashes, validation command)*
+- [x] **validation** `node dist/cli/rules-validate.js` against the seeded files returns `ok: true` — 28 rules + 6 accounts.
 
 ### Phase 7 — Madison CLAUDE.md rewrite + Obsidian symlink
 - [ ] **7.1** Remove M5/M6.2-orphaned tool references; document that all email writes go through `mcp__inbox__*`.
@@ -152,10 +153,10 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phases 1, 2, 3, 4, 5 complete.** Both sides of the event-type transition are in place. Mailroom emits `inbox-urgent-*.json` / `inbox-routine-*.json`; nanoclaw subscribes to both, bypasses POLL_INTERVAL for urgent, batches routine through normal polling. Madison's container gets `~/containers/data/mailroom` mounted RW for rules.json + accounts.json editing. 303/303 nanoclaw tests + 81/81 mailroom tests passing.
+**Phases 1–6 complete.** Rules engine + ingest-time classification + MCP write surface + subscriber transition + Madison's container mount + seeded rules.json/accounts.json are all in place. 303/303 nanoclaw tests + 81/81 mailroom tests passing. rules-validate CLI returns `ok: true` on the seeded files.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-**Safe to restart now.** The nanoclaw binary picks up Phase 5 on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4. With Phase 5 live, the subscriber handles both the legacy `inbox:new` prefix (for any in-flight events) and the new typed prefixes — so restarting mailroom first or nanoclaw first is both safe.
+**Safe to restart now.** The nanoclaw binary picks up Phase 5 on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4 — and when they do, they'll find `rules.json` + `accounts.json` waiting in the data volume (seeded Phase 6). With Phase 5 live, the subscriber handles both the legacy `inbox:new` prefix (for any in-flight events) and the new typed prefixes.
 
-Next action: **Phase 6** — initial `rules.json` + `accounts.json` content. Port the 27 `imap_autolabel.py` RULES, add the DocuSign/QCM urgent rules, build accounts.json from the current Gmail + Proton address roster, seed `rules-changelog.md`.
+Next action: **Phase 7** — rewrite Madison's `CLAUDE.md` to reflect the new surface (drop the Phase-1 "Current limitation" section, document `mcp__inbox__*` write tools, add "Mail rules maintenance" section, point at the changelog). Plus the Obsidian symlink so Jeff can edit `rules.json` from phone/iPad.

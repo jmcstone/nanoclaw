@@ -70,16 +70,15 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 6** — seed the on-disk config files:
-   - Port the 27 `imap_autolabel.py` RULES to `~/containers/data/mailroom/rules.json`. Most become `{match: {sender_contains: "X"}, actions: {add_label: "Y"}}`. For the newsletters Jeff has been archiving (Subscriptions, Job Postings, Promos), append `auto_archive: true` so they stay silent post-Phase-3.
-   - Add the DocuSign urgent rule: `{match: {sender_contains: "docusign"}, actions: {urgent: true}}`.
-   - Add the QCM rule: `{match: {sender_equals: "euclid.qcm.llc@gmail.com"}, actions: {urgent: true, add_label: "QCM Notifications", qcm_alert: true}}`.
-   - Build `accounts.json` from the current config: 1 Gmail (`jeff@americanvoxpop.com` with tags `work`, `avp`), 5 Proton addresses with per-address tags.
-   - Create `rules-changelog.md` with an initial entry noting the port from `imap_autolabel.py` + this plan's commits.
-   - Validate via `docker exec mailroom-ingestor-1 node dist/cli/rules-validate.js` once the mailroom container is rebuilt on main.
-2. **Phase 7** — Madison CLAUDE.md rewrite + Obsidian symlink.
-3. **Phase 8** — retire legacy (auto-labeler script, `:07` hourly task, `*/15` health check).
-4. **Phase 9** — verify end-to-end + graduate findings to permanent lode.
+1. **Phase 7** — Madison's `CLAUDE.md` rewrite:
+   - Drop the top-of-file "Current limitation" callout (Phase 1 temporary) — writes ARE available now via `mcp__inbox__*`.
+   - Rewrite the "Actions" subsection under "Inboxes to sweep" to reference the new tools (`apply_action`, `delete`, `send_reply`, `send_message`).
+   - Rewrite the "Tools" line (line 274-ish) similarly.
+   - Add a new "Mail rules maintenance" section covering: tool location (`/workspace/extra/mailroom/rules.json`), schema pointer (to `src/rules/schema.md` inside the mailroom container), edit → validate → save flow, diff-before-confirm convention, changelog append convention.
+   - Update the classification-taxonomy section so it reflects that urgent is now rule-driven at ingest — Madison still classifies for the rare case an unknown-sender urgent item comes through without a matching rule.
+   - Symlink `~/Documents/Obsidian/Main/NanoClaw/Inbox/rules.json` → `~/containers/data/mailroom/rules.json` (and possibly accounts.json) so Jeff can edit from iPad/phone via Obsidian sync.
+2. **Phase 8** — retire legacy: delete `imap_autolabel.py` (backup to `/archive/` first), remove `:07 hourly triage` + `*/15 auto-labeler health check` from `telegram_inbox/current_tasks.json` (keep `7 AM morning brief`), decide fate of the `qcm_alerts.jsonl` scheduled task (probably retire — `urgent: true` direct dispatch supersedes it).
+3. **Phase 9** — verify end-to-end (rebuild both mailroom containers + nanoclaw restart; send test DocuSign + test routine; measure spawn reduction over 24h; graduate findings to permanent lode/architecture/ files; move plan to lode/plans/complete/).
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
 
@@ -299,3 +298,33 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - The pre-commit hook in this repo runs `prettier --write` and re-formats files. It does NOT run `tsc`. So a commit can succeed with type errors. Always run `npx tsc --noEmit` separately when adding new test files; vitest's transpilation doesn't catch this.
    - Tests that wait on a polling subscriber are slow (1.2s per test for a 1s poller). Tolerate it for now; if it becomes a constraint, parametrize the poll interval via env or constructor option.
 5. **What have I done?** 2 nanoclaw commits: `f5be6f0` (Phase 5 body, 5 files +383/-19) + `5d84dde` (mock-typing tsc fix). 303 tests passing.
+
+## 2026-04-22 — Phase 6: seed rules.json + accounts.json
+
+### Actions
+
+- Read `~/containers/data/NanoClaw/groups/telegram_inbox/imap_autolabel.py` to capture the live 27-rule list.
+- Inspected the running `mailroom-ingestor-1` container's environment to get the canonical Proton address roster (`docker inspect`). Result: 5 Proton addresses (matches tracker count) — `jeff@jstone.pro`, `jeff@thestonefamily.us`, `registrations@thestonefamily.us`, `stone.jeffrey@protonmail.com`, `stone.jeffrey@pm.me`. Madison's stale CLAUDE.md listed extras (`alice@thestonefamily.us`, `stone.jeffrey@proton.me`) that aren't actually configured in env.
+- Wrote `~/containers/data/mailroom/rules.json`: 28 rules total. Auto-archive (silent label + archive, no Madison spawn) on the categories where Jeff's historical pattern is "archive without reading": Subscriptions (15), Free Books (1), Job Postings (3). NOT auto-archived: Shopping, Household, T-Mobile, Finances, Personal — those still need surfacing. New urgent rules at the bottom of the array (positional priority): `urgent-docusign` (no label, stays in INBOX) and `urgent-qcm-notifications` (label + qcm_alert side-channel; supersedes the plain-label QCM rule from imap_autolabel.py).
+- Wrote `~/containers/data/mailroom/accounts.json`: 6 entries with the tag scheme from the tracker (`work`/`avp` for the AVP Gmail; `personal` plus per-address tags `primary`/`family`/`low-priority`/`alias` for Proton).
+- Wrote `~/containers/data/mailroom/rules-changelog.md`: format spec (newest at bottom, who/what/why per entry) plus the seed entry documenting auto-archive judgment calls, the QCM enrichment, and related commit hashes for traceability.
+- Built mailroom dist locally and ran `MAILROOM_DATA_DIR=~/containers/data/mailroom node dist/cli/rules-validate.js` — returned `ok: true` for both files (28 rules, 6 accounts).
+- All three files live in the data volume; not under git. They're live state — when the mailroom container restarts to pick up Phases 3+4, the loader will hot-load them on first poll.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `npx tsc` (mailroom build) | pass | clean |
+| `node dist/cli/rules-validate.js` against seeded files | pass | `{ok:true, rules:28, accounts:6}` |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 6 done. Three files seeded in `~/containers/data/mailroom/`: rules.json (28 rules), accounts.json (6 entries), rules-changelog.md. CLI validates clean.
+2. **Where am I going?** Phase 7 — rewrite Madison's CLAUDE.md to reflect the new write surface + add the rules-maintenance section + Obsidian symlink. Then 8 (retire legacy scheduled tasks + script), then 9 (verify + graduate).
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling.
+4. **What have I learned?**
+   - The running container's env is the authoritative source for runtime config (PROTONMAIL_ADDRESSES). Tracker counts and stale CLAUDE.md docs can drift — `docker inspect` is the cheapest way to verify.
+   - Per CLAUDE.md "no features beyond what was asked": resist the urge to seed every rule with `auto_archive: true`. The conservative default (label-only) is reversible at any time; over-aggressive auto-archive silently hides mail Jeff might have wanted to see.
+   - Seeded files live in the data volume — they survive container rebuilds. The rules-validate CLI is the right verification tool both for seed-time and for Madison's edit-time use.
+5. **What have I done?** Three on-disk files in `~/containers/data/mailroom/` (rules.json, accounts.json, rules-changelog.md). All validate clean. No git commits in this phase since the files don't live in either repo — they ARE the system state.
