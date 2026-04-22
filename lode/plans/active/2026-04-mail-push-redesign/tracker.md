@@ -131,10 +131,11 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **7.4** Obsidian symlinks created *(rules.json, accounts.json, rules-changelog.md all symlinked into `~/Documents/Obsidian/Main/NanoClaw/Inbox/`; Jeff can edit from phone/iPad via Obsidian sync, hot-reload picks up within 5s)*
 - [x] **7.5** Verified — `mcp__inbox__*` is wildcard-allowlisted in `container/agent-runner/src/index.ts:752`; the four new write tools auto-appear from the existing inbox MCP server. No agent-runner change needed. Action-commands table also updated with per-row tool mapping (`unsubscribe a1` → `send_message`+`apply_action`, `reply a2 send` → `send_reply`, etc.).
 
-### Phase 8 — Retire legacy
-- [ ] **8.1** Edit `~/containers/data/NanoClaw/data/ipc/telegram_inbox/current_tasks.json` — remove the `:07 hourly triage` task and the `*/15 imap_autolabel health check` task. Keep `7 AM morning brief`.
-- [ ] **8.2** Delete `~/containers/data/NanoClaw/groups/telegram_inbox/imap_autolabel.py` (backup to `/archive/` dir first in case of revert need).
-- [ ] **8.3** `qcm_alerts.jsonl` path: decide keep (Madison still polls it for QCM alerts) or retire (subsumed by `urgent: true` direct dispatch). If retire, also remove the QCM alert scheduled task from `telegram_main`'s current_tasks.json.
+### Phase 8 — Retire legacy *(data volume + live DB; not under git)*
+- [x] **8.1** Removed retired tasks *(discovered `current_tasks.json` is REGENERATED from `~/containers/data/NanoClaw/store/messages.db.scheduled_tasks` on every container spawn — file edits get clobbered. Real fix: `DELETE FROM scheduled_tasks WHERE id IN ('task-1776031812627-2iufvk', 'task-1774900431005-dmm28r')`. Both rows backed up to `archive/retired-tasks-2026-04-22.json` first. Scheduler queries the DB live each tick — no caching — so the next tick sees the change. Morning routine `task-1775007854701-zupz0a` retained.)*
+- [x] **8.2** Deleted `imap_autolabel.py` *(backup at `~/containers/data/NanoClaw/groups/telegram_inbox/archive/imap_autolabel.py.bak-2026-04-22-mail-push-redesign`)*
+- [x] **8.3** QCM poller decision: **KEEP** for now *(the bash script `check_qcm_alerts.sh` gates spawns via `wakeAgent: false` when no pending alerts, so the 3-min cron firings are mostly cheap no-ops — not a meaningful spawn-count source. Retiring it would also change delivery topology: QCM alerts move from `telegram_main` to `telegram_inbox` only, which is a Jeff-judgment call worth deferring rather than making unilaterally. Both paths are intentionally redundant for trading-signal reliability. Documented in Madison's CLAUDE.md scheduled-tasks roster.)*
+- [x] **CLAUDE.md cleanup** — Flipped "are being retired (Phase 8)" → "were retired in mail-push-redesign Phase 8". Updated the scheduled-tasks roster table (down to one row + footnote explaining what was retired and where the backups live, plus the QCM-poller-kept rationale).
 
 ### Phase 9 — Verify + graduate
 - [ ] **9.1** Rebuild mailroom image; rebuild agent container; restart nanoclaw.
@@ -153,10 +154,10 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phases 1–7 complete.** End-to-end: rules engine, ingest-time classification, four MCP write tools, subscriber transition, Madison's container mount, seeded rules.json/accounts.json/changelog, Madison's rewritten CLAUDE.md, Obsidian symlinks. 303/303 nanoclaw tests + 81/81 mailroom tests passing.
+**Phases 1–8 complete.** End-to-end: rules engine, ingest-time classification, four MCP write tools, subscriber transition, Madison's container mount, seeded rules.json/accounts.json/changelog, Madison's rewritten CLAUDE.md, Obsidian symlinks, retired the two obsolete scheduled tasks + the auto-labeler script. 303/303 nanoclaw tests + 81/81 mailroom tests passing.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-**Safe to restart now.** The nanoclaw binary picks up Phase 5 + the container-runner mount on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4 — and when they do, they'll find `rules.json` + `accounts.json` waiting in the data volume. Madison's CLAUDE.md is loaded fresh on every Madison spawn, so her new prompt is already live.
+**Safe to restart now.** The nanoclaw binary picks up Phase 5 + the container-runner mount on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4 — and when they do, they'll find `rules.json` + `accounts.json` waiting in the data volume. Madison's CLAUDE.md is loaded fresh on every Madison spawn, so her new prompt is already live. The retired scheduled tasks are gone from the live DB; the running scheduler queries live each tick so won't fire them.
 
-Next action: **Phase 8** — retire legacy. Delete `imap_autolabel.py` (after archiving), remove the `:07 hourly triage` + `*/15 auto-labeler health check` scheduled tasks, decide fate of the `qcm_alerts.jsonl` poller in `telegram_main`. Then small CLAUDE.md cleanup to match the actually-retired roster (the Phase-7 file says "are being retired in Phase 8" — Phase 8 turns that into past tense).
+Next action: **Phase 9** — verify end-to-end. Rebuild both mailroom containers, restart nanoclaw, send a test DocuSign + a test routine email, measure spawn reduction over 24h, graduate durable findings to `lode/architecture/` and move this plan to `lode/plans/complete/`.
