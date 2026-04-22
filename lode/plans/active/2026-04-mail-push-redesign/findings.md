@@ -114,9 +114,12 @@ Madison interacts with untrusted email content. Prompt-injection risk is real. R
 - Madison's current scheduled tasks: `~/containers/data/NanoClaw/data/ipc/telegram_inbox/current_tasks.json`
 - Proton Bridge multi-user docs (for future multi-bridge expansion): https://proton.me/support/protonmail-bridge-configure-client
 
-## Graduation pointers (to fill in as findings become durable)
+## Graduation pointers
 
-When this plan completes, these findings should move to permanent lode files:
-- Mailroom rule-engine architecture → `lode/architecture/mailroom-rules.md` (to create)
-- Push-based Madison pipeline shape → `lode/architecture/madison-pipeline.md` (to create)
-- Rules schema reference → `lode/reference/rules-schema.md` (to create)
+Graduated 2026-04-22 (pre-Phase-9 verification so the permanent docs are ready when verification completes):
+
+- Mailroom rule-engine architecture → [`lode/infrastructure/mailroom-rules.md`](../../infrastructure/mailroom-rules.md) (naming follows existing `lode/infrastructure/` convention rather than the `architecture/` the tracker originally proposed)
+- Push-based Madison pipeline shape → [`lode/infrastructure/madison-pipeline.md`](../../infrastructure/madison-pipeline.md) (includes a Mermaid diagram of the end-to-end delivery path)
+- Rules schema reference → [`lode/reference/rules-schema.md`](../../reference/rules-schema.md) (digest pointing at the canonical `mailroom/src/rules/schema.md`)
+
+Lode map + summary updated to link them. The plan itself remains in `plans/active/` until Phase 9 end-to-end verification completes.
