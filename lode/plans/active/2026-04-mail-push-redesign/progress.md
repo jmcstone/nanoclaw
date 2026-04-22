@@ -70,9 +70,15 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 2.3** — `src/rules/matcher.ts`. Pure function `matches(predicate, ctx: RuleMatchContext): boolean`. Recursive eval across all leaf fields and `all`/`any`/`not`. Case-insensitive for sender/subject/body `_contains`/`_equals` (users expect substring case-insensitivity; email addresses are case-insensitive per RFC). `_matches` uses ECMAScript regex default (case-sensitive); users can add `(?i)` inline flag via `(?i:pattern)` or the `i` flag via `/pattern/i`-like convention — decision: matcher interprets `sender_matches` strings as the regex body; no flags prefix needed. If users want case-insensitive regex, they use `(?i)...` inline modifier (supported by V8). Document this in schema.md (2.7). `has_label` reads `ctx.labels_at_ingest` not accumulator state (decisions table).
-2. 2.4 evaluate → 2.5 CLI validate → 2.6 unit tests → 2.7 schema.md.
-3. Then 3 → 9 in order; 3 (apply + events) and 4 (MCP writes) are the next heaviest.
+1. **Phase 3** — apply layer + event emission wired through the ingestor. Five small files + two touches of existing code:
+   - `src/rules/apply/proton.ts` — IMAP COPY to `Labels/<name>` folder (auto-create missing), archive MOVE to `Archive`, delete MOVE to `Trash`. Reuses the existing bridge client in `proton/poller.ts` (new helper or shared imapflow connection).
+   - `src/rules/apply/gmail.ts` — `users.messages.modify` with addLabelIds / removeLabelIds; label name → ID cache per account, create-label on first-use, configurable via `GMAIL_LABEL_CACHE_TTL` env.
+   - `src/rules/apply.ts` — source-agnostic dispatcher: takes `(InboxMessage, ResolvedActions)`, routes to proton.ts or gmail.ts. Also handles the "add Trash remove INBOX" semantics for delete vs archive.
+   - `src/events/types.ts` — add `InboxUrgentEvent` and `InboxRoutineEvent` as discriminated unions on the existing `inbox:new` shape (or a new `event: 'inbox:urgent' | 'inbox:routine'` discriminator — decide during implementation).
+   - `src/events/emit.ts` — new `emitInboxUrgent` / `emitInboxRoutine` helpers mirroring the existing `emitInboxNew`.
+   - `src/ingestor.ts` (extend) — after each successful `inserted: true` ingest: build RuleMatchContext, run `evaluate`, run `apply`, emit the correct event (none for silent = `auto_archive && !urgent`). QCM alert side-channel: if `actions.qcm_alert`, append to `qcm_alerts.jsonl` before event emission.
+2. Phase 4 — MCP write tools (`apply_action`, `delete`, `send_reply`, `send_message`) + send-log with rate limit.
+3. Phases 5–9 after that.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
 
@@ -143,3 +149,35 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - Source-from-`.ts` execution under Node strip mode also requires `.ts` extensions in import specifiers (the codebase uses `.js` per ESM compile-target convention). So smoke testing source-files directly isn't viable here; build to `dist/` and run from there.
    - `setInterval(...).unref()` keeps the loader from preventing process exit when the poll timer is the only remaining work.
 5. **What have I done?** `src/rules/loader.ts` (442 lines incl. validators), `tsc` clean, smoke-tested across malformed/bad-regex/recovery paths, committed `f664d54`.
+
+## 2026-04-22 — Phases 2.3 through 2.7: rules engine complete
+
+### Actions (by sub-phase)
+
+- **2.3** — `src/rules/matcher.ts`. Pure `matches(Predicate, RuleMatchContext): boolean` recursively walks leaves and `all`/`any`/`not` combinators, short-circuiting on AND/OR. `_equals`+`_contains` for sender/subject/body are case-insensitive; `_matches`/`has_label`/`account`/`account_tag` case-sensitive. Extended `RuleMatchContext` with `sender_email`/`sender_name` (InboxMessage only carries sender_id hash; matcher needs the actual address). V8-in-Node-22 does NOT support inline flag syntax `(?i)` or `(?i:...)` — discovered via smoke test; corrected the docstring and schema.md to recommend `_contains` for case-blind substring needs. Also exports `matchingRuleIndices` for provenance. Commit `668769c`.
+- **2.4** — `src/rules/evaluate.ts`. Walks rules, accumulates actions, resolves conflict (urgent forces auto_archive false). Labels accumulate via set ops (within one rule: replace → union → subtract; across rules: array order). Exports `evaluate`, `evaluateWithProvenance` (returns resolved + matched_rule_indices), `anyRuleMatches`. Commit `edd5d96`.
+- **2.5** — `src/cli/rules-validate.ts`. Standalone CLI: emits JSON on stdout with per-file ok/error shape, exits 0 on both-valid / 1 on invalid / 2 on bad usage. Reuses `validateRulesFile` / `validateAccountsFile` / `RulesValidationError` from the loader — single validation codepath. Args: `--rules PATH`, `--accounts PATH`, `--help`. Commit `37c6593`.
+- **2.6** — vitest suites at `matcher.test.ts` (21 tests) + `evaluate.test.ts` (17 tests) + `loader.test.ts` (16 tests). All 54 passing. Covers every bullet of tracker §2.6: predicate eval with all leaf types and combinators incl. empty-predicate / empty-all / empty-any / empty-not edge cases; accumulation (label set ops + scalar last-writer-wins + missing-field-doesn't-overwrite); conflict resolution in all four urgent/auto_archive combinations; hot-reload on valid-edit / malformed-JSON / schema-violation / bad-regex / recovery-after-error; cross-source rules via source/account/account_tag; shared validator error-path cases with exact doc-path assertions. Commit `6cd7bad`.
+- **2.7** — `src/rules/schema.md`. Authoritative reference for Madison: file shapes, predicate leaf field table with case-sensitivity, combinator edge cases, action table with accumulation rules, urgent-vs-auto_archive conflict explanation, silent-event behavior (auto_archive + !urgent → no event), six common-pattern examples (urgent sender, auto-archive newsletter, multi-dim label, broad+narrow override, cross-account tag rule, QCM preservation), editing workflow with the rules-validate CLI, failure-mode cheat-sheet. Commit `3d0d582`.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `npm test` (vitest run) | pass | 54/54 across 3 files in 1.6s |
+| `tsc --noEmit` | pass | clean |
+| CLI end-to-end smoke | pass | valid / bad-regex / missing-tags / nonexistent file / --help all behaved as designed |
+| Evaluator smoke (9 cases) | pass | defaults, conflict resolution, label set ops, last-writer, provenance |
+| Matcher smoke (41 cases) | pass | every leaf + combinator path + V8-regex-behavior probe |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 2 complete — rules engine fully functional but not yet wired into the ingestor. No message currently triggers rule evaluation; next phase hooks it in.
+2. **Where am I going?** Phase 3 wires the engine into mailroom's ingest pipeline: apply/proton.ts + apply/gmail.ts + apply.ts dispatcher, new event types (inbox:urgent / inbox:routine), `emit` helpers, ingestor.ts call that evaluates and applies on every successful insert.
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling. See top-level tracker Goal.
+4. **What have I learned?**
+   - Node 22's V8 does NOT support inline regex flag syntax (`(?i)`, `(?i:...)`, `(?-i:...)`). Only the full RegExp constructor `i` flag, which is not exposed through a pattern-string API. The realistic workaround for case-blind substring matching is the `_contains` operator (already case-insensitive). Pattern-level case folding requires explicit character classes like `[Dd][Ss][Ee]`.
+   - Node strip-only mode (when running `.ts` files directly) does NOT support TS parameter properties — `constructor(public readonly x: T)` — and requires `.ts` in import specifiers rather than the `.js`-target-convention the codebase uses. For modules loaded via `node --input-type=module` (like the CLI will be in prod via `node dist/cli/rules-validate.js`), always compile to `dist/` first and run from there; keep class fields in plain-assignment form.
+   - InboxMessage carries `sender_id` (a hash), not the email address. Anything evaluating sender-based predicates needs the denormalized email+name. Updated `RuleMatchContext` accordingly; ingestor.ts will populate these at the same point it builds the InboxNewEvent payload.
+   - Vitest runs TS sources directly via Vite transform — no build step needed for test running.
+5. **What have I done?** 7 mailroom commits (a5896fe, f664d54, 668769c, edd5d96, 37c6593, 6cd7bad, 3d0d582), roughly 1800 lines of code + tests + docs. All committed to ConfigFiles main.
