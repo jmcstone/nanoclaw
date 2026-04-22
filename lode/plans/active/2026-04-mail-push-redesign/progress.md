@@ -70,15 +70,18 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 7** — Madison's `CLAUDE.md` rewrite:
-   - Drop the top-of-file "Current limitation" callout (Phase 1 temporary) — writes ARE available now via `mcp__inbox__*`.
-   - Rewrite the "Actions" subsection under "Inboxes to sweep" to reference the new tools (`apply_action`, `delete`, `send_reply`, `send_message`).
-   - Rewrite the "Tools" line (line 274-ish) similarly.
-   - Add a new "Mail rules maintenance" section covering: tool location (`/workspace/extra/mailroom/rules.json`), schema pointer (to `src/rules/schema.md` inside the mailroom container), edit → validate → save flow, diff-before-confirm convention, changelog append convention.
-   - Update the classification-taxonomy section so it reflects that urgent is now rule-driven at ingest — Madison still classifies for the rare case an unknown-sender urgent item comes through without a matching rule.
-   - Symlink `~/Documents/Obsidian/Main/NanoClaw/Inbox/rules.json` → `~/containers/data/mailroom/rules.json` (and possibly accounts.json) so Jeff can edit from iPad/phone via Obsidian sync.
-2. **Phase 8** — retire legacy: delete `imap_autolabel.py` (backup to `/archive/` first), remove `:07 hourly triage` + `*/15 auto-labeler health check` from `telegram_inbox/current_tasks.json` (keep `7 AM morning brief`), decide fate of the `qcm_alerts.jsonl` scheduled task (probably retire — `urgent: true` direct dispatch supersedes it).
-3. **Phase 9** — verify end-to-end (rebuild both mailroom containers + nanoclaw restart; send test DocuSign + test routine; measure spawn reduction over 24h; graduate findings to permanent lode/architecture/ files; move plan to lode/plans/complete/).
+1. **Phase 8** — retire legacy:
+   - Backup `~/containers/data/NanoClaw/groups/telegram_inbox/imap_autolabel.py` to a sibling `/archive/` dir first, then delete the live script. The mailroom rule engine has fully superseded its 27-rule classification + the qcm_alert side-channel.
+   - Edit `~/containers/data/NanoClaw/data/ipc/telegram_inbox/current_tasks.json`: remove `task-1776031812627-2iufvk` (`:07 hourly triage`) and `task-1774900431005-dmm28r` (`*/15 auto-labeler health check`). Keep `task-1775007854701-zupz0a` (`7am morning routine`).
+   - Decide fate of the `telegram_main` group's `qcm_alerts.jsonl` poller scheduled task. Now that mailroom emits `inbox:urgent` events for QCM directly to Madison, the side-channel poller is largely redundant. Probably retire; double-check first that nothing else reads the file.
+   - Tiny CLAUDE.md cleanup: change "are being retired (Phase 8)" → "have been retired" in the "Scheduled email checks" line. Update the scheduled-tasks roster table at the bottom to reflect just the morning routine.
+2. **Phase 9** — verify end-to-end:
+   - Rebuild both mailroom containers (`./container/build.sh && dcc up -d`) and restart nanoclaw (systemctl --user restart nanoclaw).
+   - Send a test DocuSign-style email; verify `inbox:urgent` event fires within one ingest cycle (<2 min) and Madison spawns immediately.
+   - Send a test routine email (e.g. an Amazon shipping notification); verify it's labeled but waits for the next polling cycle, then routine spawn.
+   - Measure spawn count over the next 24h vs the historical ~180/day baseline.
+   - Graduate durable findings to permanent lode files: `lode/architecture/mailroom-rules.md`, `lode/architecture/madison-pipeline.md`, `lode/reference/rules-schema.md` (per `findings.md` "Graduation pointers").
+   - Move this plan from `lode/plans/active/` to `lode/plans/complete/`.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
 
@@ -328,3 +331,40 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - Per CLAUDE.md "no features beyond what was asked": resist the urge to seed every rule with `auto_archive: true`. The conservative default (label-only) is reversible at any time; over-aggressive auto-archive silently hides mail Jeff might have wanted to see.
    - Seeded files live in the data volume — they survive container rebuilds. The rules-validate CLI is the right verification tool both for seed-time and for Madison's edit-time use.
 5. **What have I done?** Three on-disk files in `~/containers/data/mailroom/` (rules.json, accounts.json, rules-changelog.md). All validate clean. No git commits in this phase since the files don't live in either repo — they ARE the system state.
+
+## 2026-04-22 — Phase 7: Madison CLAUDE.md rewrite + Obsidian symlinks
+
+### Actions
+
+- Read the current Madison CLAUDE.md (291 lines from Phase 1; data volume; not under git).
+- **7.1 Drop the temporary callout, document the new write surface** — Removed the entire `## Current limitation (2026-04-22 — pending Phase 4)` section that Phase 1 inserted as a band-aid. Replaced it with a new `## How mail reaches you (post mail-push-redesign)` section explaining the three event outcomes (urgent / routine / silent), what mailroom does at ingest, and how Madison's job has changed (no more initial classification for the 28 seeded rules; she classifies novel patterns + acts on what reaches her).
+- Rewrote the "Actions" subsection under "Inboxes to sweep" with full docs for the four `mcp__inbox__*` write tools — signatures, semantics, the 20/hour rate limit + `SendRateLimitError.retry_after_ms`, the send-log audit at `/workspace/extra/mailroom/send-log.jsonl`. Also corrected the account-IDs list to match the live `PROTONMAIL_ADDRESSES` env (dropped stale `alice@thestonefamily.us` and `stone.jeffrey@proton.me`).
+- **7.2 Mail rules maintenance section** — New ~50-line section covering: schema summary (predicates / combinators / actions / array-order priority / urgent-vs-archive conflict / silent semantics), edit→validate→save→changelog workflow, the `docker exec ... rules-validate.js` command pattern, accounts.json edit considerations, the diff-before-confirm convention, and the Obsidian-sync ground-truth note (Jeff's iPad edits override Madison's drafts via mtime hot reload).
+- **7.3 Classification taxonomy update** — Added a "backend classifies first" preamble: trust `inbox:urgent` arrivals (rule-driven, don't re-classify); classify `inbox:routine` yourself; silents never reach you. Updated the pre-classification consult-list with `rules.json` as the new authoritative first-check (was sender-preferences.md). Added a "promote to rules.json" note for the N=3 promotion target — the goal of Madison's learning loop is to eventually fold every recurring pattern into the backend so she stops seeing it.
+- **Action commands table refresh** — Updated the table with a third column mapping each command to its underlying tool call (`unsubscribe a1` → `mcp__inbox__send_message` for mailto + `apply_action({auto_archive: true})`; `delete a1` → `mcp__inbox__delete`; etc.). Added new commands: `untag a3 #foo` (remove_label) and `delete a1`.
+- **Tools list refresh** — Replaced the stale "temporarily unavailable" line with the actual write-tools enumeration + a pointer to the maintenance section.
+- **"What this group is for" preface** — Honest current-state phrasing: "the legacy `:07` hourly sweep and `*/15` auto-labeler health check are being retired (Phase 8)." Phase 8 will flip that to past tense.
+- **7.4 Obsidian symlinks** — Created three symlinks in `~/Documents/Obsidian/Main/NanoClaw/Inbox/` pointing at the live data-volume files: `rules.json`, `accounts.json`, `rules-changelog.md`. Jeff can now edit any of them from phone/iPad via Obsidian sync; the loader picks up changes within 5s.
+- **7.5 Agent-runner verification** — Confirmed `mcp__inbox__*` is wildcard-allowlisted in `container/agent-runner/src/index.ts:752`. The four new write tools auto-register on the existing inbox MCP server (`http://host.docker.internal:18080/mcp`), so no agent-runner code change needed.
+- Final check: `grep -iE 'mcp__gmail|temporarily unavailable|imap_autolabel.*health|Current limitation'` against the rewritten file returns zero hits — no residual stale references.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| residual-stale-reference grep | pass | zero matches |
+| symlink read-through (rules.json + accounts.json) | pass | both render the live file content via Obsidian path |
+| agent-runner wildcard allowlist | pass | `mcp__inbox__*` present at line 752 |
+
+CLAUDE.md grew 291 → 355 lines (+64 net: dropped Phase-1 callout, added "How mail reaches you" + "Mail rules maintenance" + write-tools docs + per-row tool mappings in the action commands table).
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 7 done. Madison's CLAUDE.md is fully rewritten to reflect the new write surface; Obsidian symlinks are live. The configuration / behavior changes for Madison take effect on her next spawn (CLAUDE.md is loaded fresh per spawn).
+2. **Where am I going?** Phase 8 (retire legacy: delete imap_autolabel.py, remove the two retired scheduled tasks, decide qcm_alerts.jsonl poller fate, flip CLAUDE.md "are being retired" → "have been retired") then Phase 9 (verify end-to-end + graduate to permanent lode + move plan to complete).
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling.
+4. **What have I learned?**
+   - Madison's CLAUDE.md and the mailroom CLAUDE.md / docs co-evolve. When mailroom adds a tool, Madison needs to know how to call it AND what the safety rails are. When the rules schema changes, Madison's maintenance docs need to mirror it. The schema lives in mailroom (`src/rules/schema.md`) and Madison's CLAUDE.md mostly summarizes; pointing at the canonical source via `docker exec ... cat /app/dist/rules/schema.md` keeps Madison's doc lean.
+   - Action commands work better when the command-to-tool mapping is explicit. The previous Madison-CLAUDE.md table was action-only; agents do better when the tool path is named in-table because they don't have to chain "what tool does archive use?" → "find it in another section."
+   - Live data-volume files (CLAUDE.md, rules.json, accounts.json, etc.) are NOT under git but ARE part of the system. Symlinks from Obsidian into the data volume create a third edit path (Jeff via Obsidian, Madison via Edit, this AI via Edit) that all converge on one file, hot-reloaded by mailroom's mtime poll. Worth documenting in Madison's CLAUDE.md so she knows the convergence behavior and treats Jeff's edits as ground truth.
+5. **What have I done?** CLAUDE.md edits (data volume; not under git). Three Obsidian symlinks created. No new git commits required for the file content; lode bookkeeping commit follows.

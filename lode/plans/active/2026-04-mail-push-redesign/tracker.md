@@ -124,12 +124,12 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **6.5** Create `rules-changelog.md` *(seed entry covers: which imap_autolabel.py rules were ported, which got auto_archive and why, the QCM enrichment, the DocuSign addition, related commit hashes, validation command)*
 - [x] **validation** `node dist/cli/rules-validate.js` against the seeded files returns `ok: true` — 28 rules + 6 accounts.
 
-### Phase 7 — Madison CLAUDE.md rewrite + Obsidian symlink
-- [ ] **7.1** Remove M5/M6.2-orphaned tool references; document that all email writes go through `mcp__inbox__*`.
-- [ ] **7.2** Add "Mail rules maintenance" section (~40 lines): tool location, schema pointer, edit/validate/save flow, diff-before-confirm convention.
-- [ ] **7.3** Update classification taxonomy section to reflect urgent-is-backend-rule-driven-now (Madison still classifies for the rare case unknown-sender urgent items come through without a matching rule).
-- [ ] **7.4** Symlink `~/Documents/Obsidian/Main/NanoClaw/Inbox/rules.json` → `~/containers/data/mailroom/rules.json` (and same for accounts.json if wanted).
-- [ ] **7.5** Verify Madison's agent-runner MCP server list stays as it is (inbox, a-mem, trawl, context-mode, nanoclaw) — no new MCP wiring needed; the 4 new inbox tools appear on the existing inbox MCP.
+### Phase 7 — Madison CLAUDE.md rewrite + Obsidian symlink *(data volume; not under git)*
+- [x] **7.1** Remove M5/M6.2-orphaned tool references; document that all email writes go through `mcp__inbox__*` *(dropped the Phase-1 "Current limitation" callout; replaced "Actions" subsection with full `apply_action`/`delete`/`send_reply`/`send_message` docs incl. signatures, rate-limit semantics, send-log path)*
+- [x] **7.2** Add "Mail rules maintenance" section *(~50 lines: schema summary, edit→validate→save→changelog workflow, diff-before-confirm convention, accounts.json edits, Obsidian-sync ground-truth note)*
+- [x] **7.3** Update classification taxonomy *(now leads with "backend classifies first" — Madison trusts `inbox:urgent` arrivals, classifies `inbox:routine` herself; "promote pattern to rules.json" is the new N=3 promotion target instead of sender-preferences.md only; pre-classification consult-list reordered with rules.json as the authoritative first-check)*
+- [x] **7.4** Obsidian symlinks created *(rules.json, accounts.json, rules-changelog.md all symlinked into `~/Documents/Obsidian/Main/NanoClaw/Inbox/`; Jeff can edit from phone/iPad via Obsidian sync, hot-reload picks up within 5s)*
+- [x] **7.5** Verified — `mcp__inbox__*` is wildcard-allowlisted in `container/agent-runner/src/index.ts:752`; the four new write tools auto-appear from the existing inbox MCP server. No agent-runner change needed. Action-commands table also updated with per-row tool mapping (`unsubscribe a1` → `send_message`+`apply_action`, `reply a2 send` → `send_reply`, etc.).
 
 ### Phase 8 — Retire legacy
 - [ ] **8.1** Edit `~/containers/data/NanoClaw/data/ipc/telegram_inbox/current_tasks.json` — remove the `:07 hourly triage` task and the `*/15 imap_autolabel health check` task. Keep `7 AM morning brief`.
@@ -153,10 +153,10 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phases 1–6 complete.** Rules engine + ingest-time classification + MCP write surface + subscriber transition + Madison's container mount + seeded rules.json/accounts.json are all in place. 303/303 nanoclaw tests + 81/81 mailroom tests passing. rules-validate CLI returns `ok: true` on the seeded files.
+**Phases 1–7 complete.** End-to-end: rules engine, ingest-time classification, four MCP write tools, subscriber transition, Madison's container mount, seeded rules.json/accounts.json/changelog, Madison's rewritten CLAUDE.md, Obsidian symlinks. 303/303 nanoclaw tests + 81/81 mailroom tests passing.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-**Safe to restart now.** The nanoclaw binary picks up Phase 5 on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4 — and when they do, they'll find `rules.json` + `accounts.json` waiting in the data volume (seeded Phase 6). With Phase 5 live, the subscriber handles both the legacy `inbox:new` prefix (for any in-flight events) and the new typed prefixes.
+**Safe to restart now.** The nanoclaw binary picks up Phase 5 + the container-runner mount on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4 — and when they do, they'll find `rules.json` + `accounts.json` waiting in the data volume. Madison's CLAUDE.md is loaded fresh on every Madison spawn, so her new prompt is already live.
 
-Next action: **Phase 7** — rewrite Madison's `CLAUDE.md` to reflect the new surface (drop the Phase-1 "Current limitation" section, document `mcp__inbox__*` write tools, add "Mail rules maintenance" section, point at the changelog). Plus the Obsidian symlink so Jeff can edit `rules.json` from phone/iPad.
+Next action: **Phase 8** — retire legacy. Delete `imap_autolabel.py` (after archiving), remove the `:07 hourly triage` + `*/15 auto-labeler health check` scheduled tasks, decide fate of the `qcm_alerts.jsonl` poller in `telegram_main`. Then small CLAUDE.md cleanup to match the actually-retired roster (the Phase-7 file says "are being retired in Phase 8" — Phase 8 turns that into past tense).
