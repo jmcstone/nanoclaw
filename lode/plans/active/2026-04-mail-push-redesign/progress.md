@@ -70,15 +70,14 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 3** — apply layer + event emission wired through the ingestor. Five small files + two touches of existing code:
-   - `src/rules/apply/proton.ts` — IMAP COPY to `Labels/<name>` folder (auto-create missing), archive MOVE to `Archive`, delete MOVE to `Trash`. Reuses the existing bridge client in `proton/poller.ts` (new helper or shared imapflow connection).
-   - `src/rules/apply/gmail.ts` — `users.messages.modify` with addLabelIds / removeLabelIds; label name → ID cache per account, create-label on first-use, configurable via `GMAIL_LABEL_CACHE_TTL` env.
-   - `src/rules/apply.ts` — source-agnostic dispatcher: takes `(InboxMessage, ResolvedActions)`, routes to proton.ts or gmail.ts. Also handles the "add Trash remove INBOX" semantics for delete vs archive.
-   - `src/events/types.ts` — add `InboxUrgentEvent` and `InboxRoutineEvent` as discriminated unions on the existing `inbox:new` shape (or a new `event: 'inbox:urgent' | 'inbox:routine'` discriminator — decide during implementation).
-   - `src/events/emit.ts` — new `emitInboxUrgent` / `emitInboxRoutine` helpers mirroring the existing `emitInboxNew`.
-   - `src/ingestor.ts` (extend) — after each successful `inserted: true` ingest: build RuleMatchContext, run `evaluate`, run `apply`, emit the correct event (none for silent = `auto_archive && !urgent`). QCM alert side-channel: if `actions.qcm_alert`, append to `qcm_alerts.jsonl` before event emission.
-2. Phase 4 — MCP write tools (`apply_action`, `delete`, `send_reply`, `send_message`) + send-log with rate limit.
-3. Phases 5–9 after that.
+1. **Phase 4** — MCP write tools. Four tools on the existing HTTP MCP server at `http://host.docker.internal:18080/mcp`:
+   - `mcp__inbox__apply_action(message_id, actions)` — reuses the rule-engine apply layer. Needs a Message-ID → UID lookup for Proton (can't reuse poller's UID for out-of-band calls).
+   - `mcp__inbox__delete(message_id)` — Gmail `messages.trash` or Proton IMAP MOVE to Trash.
+   - `mcp__inbox__send_reply(thread_id, body_markdown, options?)` — fetches thread headers from the store for In-Reply-To/References auto-fill; Gmail API send for Gmail threads, Proton SMTP via bridge for Proton threads.
+   - `mcp__inbox__send_message(from_account, to, subject, body_markdown)` — new outbound; validates `from_account` against accounts.json; routes by source.
+2. Plus `src/mcp/send-log.ts` — append-per-send JSONL with 20/hour per-from-account rate check; explicit error return above limit.
+3. Phase 5 subscriber update on nanoclaw side (the REAL one — can hold the mailroom container restart until this is in).
+4. Phases 6–9 after that.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
 
@@ -181,3 +180,43 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - InboxMessage carries `sender_id` (a hash), not the email address. Anything evaluating sender-based predicates needs the denormalized email+name. Updated `RuleMatchContext` accordingly; ingestor.ts will populate these at the same point it builds the InboxNewEvent payload.
    - Vitest runs TS sources directly via Vite transform — no build step needed for test running.
 5. **What have I done?** 7 mailroom commits (a5896fe, f664d54, 668769c, edd5d96, 37c6593, 6cd7bad, 3d0d582), roughly 1800 lines of code + tests + docs. All committed to ConfigFiles main.
+
+## 2026-04-22 — Phase 3: rules engine wired into ingest pipeline
+
+### Actions
+
+- **Pre-Phase-3 design fix** (commit `8b21b87`) — Discovered while planning the apply layer that `ResolvedActions.labels: string[]` collapsed every label primitive into a single "final set" output, which lost `remove_label` intent. Refactored to two disjoint sets — `labels_to_add` and `labels_to_remove` — that survive the evaluation pass intact. Updated evaluator (set ops keep them disjoint by construction), tests (added explicit remove-intent and add↔remove cancellation cases), and schema.md (documented the two-set model). 56 tests passing after refactor.
+- **Inspected existing pollers** to understand connection/client lifecycles:
+  - Proton: ephemeral IMAP connection per address per poll cycle (closes after); poller holds INBOX lock during message processing. New apply happens INSIDE the poller iteration so we can reuse the same client + UID. Multiple sessions per Proton account work fine on the bridge.
+  - Gmail: long-lived `OAuth2Client` + `gmail_v1.Gmail` instance owned by `GmailPoller`. Apply reuses both.
+  - Both use `ingestMessage` returning `{message_id, inserted}`. Extended additively to also return the canonical `InboxMessage` shape so pollers don't have to rebuild it for the rule engine.
+- **3.1 Proton apply** (`src/rules/apply/proton.ts`): COPY to `Labels/<name>` with auto-create-if-missing (per-account `Set<string>` cache; ignores "already exists" errors), Archive MOVE for `auto_archive`, ordered correctly (COPY first while UID is valid in INBOX, MOVE last). `remove_label` intent recorded in apply-result but not applied at ingest time — would need a lock switch to the `Labels/<name>` folder + EXPUNGE; deferred to a follow-up. Logged loudly so the gap is observable.
+- **3.2 Gmail apply** (`src/rules/apply/gmail.ts`): batched `users.messages.modify` per message with resolved IDs. Per-account `Map<string,string>` name→ID cache with two phases — eager `users.labels.list` on first use, then lazy `users.labels.create` for unknown names. `auto_archive` = `removeLabelIds: ['INBOX']` in the same modify call. `remove_label` for an unknown label is a silent no-op (no point creating-then-removing).
+- **3.3 Apply dispatcher** (`src/rules/apply.ts`): discriminated `ApplyContext` union (`{source: 'gmail', gmail, account_email}` or `{source: 'protonmail', client, uid, account_address}`). TS prevents callers from passing the wrong shape. Returns a uniform `ApplyResult` shape with the per-source-specific `labels_remove_skipped` field for Proton's deferred-remove case.
+- **3.4 Event types + emitters** (`src/events/types.ts`, `src/events/emit.ts`): added `InboxClassifiedBase` + `InboxUrgentEvent` + `InboxRoutineEvent`, where the base carries an `applied: { labels_added, labels_removed, archived, qcm_alert, matched_rule_indices }` summary so the subscriber and the future `mcp__inbox__why` tool can explain the decision without re-running the engine. `emitInboxUrgent` and `emitInboxRoutine` write files prefixed `inbox-urgent-`/`inbox-routine-` so the subscriber can glob by priority. Legacy `emitInboxNew` retained for the Phase-5 transition window.
+- **3.5 Ingestor wiring**:
+  - `src/ingestor.ts`: starts the rules loader at bootstrap and passes it into both pollers; calls `loader.stop()` on shutdown.
+  - `src/proton/poller.ts` + `src/gmail/poller.ts`: accept `rulesLoader` opt; each `processMessage` now calls `processIngestedMessage` instead of `emitInboxNew`. Proton passes `labels_at_ingest: []` (per-message cross-folder search would be expensive; deferred). Gmail builds a lazy reverse `id→name` cache from `users.labels.list` to translate `msg.data.labelIds` → canonical names for `has_label` predicates.
+- **3.6 QCM side-channel** (`src/rules/qcm.ts`): appends a JSON record to `${MAILROOM_QCM_ALERTS_PATH:-$MAILROOM_DATA_DIR/qcm_alerts.jsonl}` BEFORE the event fires (so any downstream poller of that file sees the alert no later than the subscriber). Best-effort — write failures log and return without throwing.
+- **process-ingested orchestrator** (`src/rules/process-ingested.ts`): single per-message function called by both pollers. Builds `RuleMatchContext`, runs `evaluateWithProvenance`, runs `applyActions`, runs the QCM side-channel, emits the correct event (urgent / routine / silent). Apply errors are caught and logged but the event still fires — ingest contract says "we always tell you about new mail unless you explicitly archived it silently."
+- **3.7 Integration tests** (`src/rules/process-ingested.test.ts`, 8 tests): real rules.json through the loader, real evaluator, real event-file emission to a temp `MAILROOM_DATA_DIR`, apply layer stubbed via `vi.hoisted` (had to use `vi.hoisted` because `vi.mock` is hoisted above plain `const` declarations — first attempt with a top-level mock fn threw `Cannot access 'applyActionsMock' before initialization`). Covers: urgent rule → urgent event, routine rule → routine event, silent (auto_archive + !urgent) → no event but apply still runs, urgent overrides auto_archive in conflict, qcm_alert writes JSONL before event, empty rules → routine with empty applied, apply failure non-blocking, account_tag predicate firing for tagged vs untagged accounts.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` after Phase 3 | pass | clean |
+| `npm test` (vitest) | pass | 64 / 64 (4 files: matcher, evaluate, loader, process-ingested) |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 3 done. Mailroom now classifies and acts on every newly-ingested message. The container will emit `inbox-urgent-*.json` / `inbox-routine-*.json` files instead of `inbox-new-*.json` after the next rebuild — but the nanoclaw subscriber won't pick them up until Phase 5 ships. Hold the container restart.
+2. **Where am I going?** Phase 4 — MCP write tools (`apply_action` / `delete` / `send_reply` / `send_message`) on the existing HTTP MCP at `http://host.docker.internal:18080/mcp`, plus a send-log JSONL with 20/hour per-from-account rate limit.
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling + give Madison the four write tools she needs to actually act on mail.
+4. **What have I learned?**
+   - Big design fix discovered while planning Phase 3 implementation: a "final-set" model for resolved labels loses `remove_label` intent. Two-set model (add + remove disjoint) is the right shape. Lesson: when a contract collapses information at a stage, look hard at what the next stage needs before declaring it final.
+   - `vi.mock` calls hoist to the top of the file, ABOVE plain top-level `const` declarations. To share a mock fn between the factory and test code, use `vi.hoisted(() => ({ ... }))` — that hoists the destructured const alongside the mock.
+   - `ingestMessage` was a clean hook to extend additively for Phase 3 (returning the full InboxMessage from a single insert avoids upstream rebuilding). When designing return shapes for shared functions, prefer returning the canonical row over computed scalars — future consumers usually want the row.
+   - Proton bridge supports multiple IMAP sessions per account — the existing poller holds an INBOX lock on its connection but apply can either reuse that connection (since we're inside the poller iteration) or open another session without contention. We picked reuse for simplicity at ingest time.
+   - The Proton `remove_label` operation (delete from `Labels/<name>` folder) is awkward to do at ingest time because it requires a lock switch to the destination folder. Recorded as a known gap in `apply/proton.ts` for a Phase-4-or-later follow-up; for now the intent is reported but not applied.
+5. **What have I done?** Phase 3 body in commit `a493fcb` (12 files, +1251/-64). Plus the design-fix prereq `8b21b87` (5 files, +142/-114). 64 tests across 4 files passing.

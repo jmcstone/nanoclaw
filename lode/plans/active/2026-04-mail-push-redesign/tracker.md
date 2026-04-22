@@ -90,14 +90,15 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **2.6** Unit tests: predicate eval (all/any/not/combinators, all predicate types), accumulation (label set ops, last-writer scalars), conflict resolution, hot-reload on valid/invalid files, cross-source rules with `source`/`account`/`account_tag` *(2026-04-22, ConfigFiles `6cd7bad`; 54 tests across matcher/evaluate/loader via vitest, all passing)*
 - [x] **2.7** `src/rules/schema.md` — machine + human-readable schema doc for Madison *(2026-04-22, ConfigFiles `3d0d582`; full predicate + action + combinator tables, accumulation rules, conflict resolution, common patterns, editing workflow, failure-mode cheat-sheet)*
 
-### Phase 3 — Rule apply + event emission
-- [ ] **3.1** `src/rules/apply/proton.ts` — IMAP label COPY to `Labels/<name>` folder (auto-create if missing), archive MOVE, delete MOVE to Trash
-- [ ] **3.2** `src/rules/apply/gmail.ts` — Gmail API `users.messages.modify` with addLabelIds/removeLabelIds; label name→ID cache per account; create labels on first-use
-- [ ] **3.3** `src/rules/apply.ts` — source-agnostic dispatcher that routes to proton.ts or gmail.ts
-- [ ] **3.4** `src/events/types.ts` — add `inbox:urgent` and `inbox:routine` event types (can be a discriminator field on the existing InboxNewEvent)
-- [ ] **3.5** `src/ingestor.ts` — after successful ingest, call evaluate → apply → emit appropriate event (or none for auto-archived + not-urgent)
-- [ ] **3.6** QCM alert preservation: if `actions.qcm_alert === true`, append to `qcm_alerts.jsonl` (path configurable via env; default `/var/mailroom/data/qcm_alerts.jsonl`) before event emission
-- [ ] **3.7** Integration test with real rules.json against in-memory store
+### Phase 3 — Rule apply + event emission *(ConfigFiles `a493fcb` + prereq `8b21b87`)*
+- [x] **3.1** `src/rules/apply/proton.ts` — IMAP label COPY to `Labels/<name>` folder (auto-create if missing), archive MOVE, delete MOVE to Trash *(COPY + Archive MOVE implemented; delete is Phase-4 MCP; `remove_label` intent recorded in apply-result but not yet acted on — needs a lock switch to `Labels/<name>`; deferred + documented)*
+- [x] **3.2** `src/rules/apply/gmail.ts` — Gmail API `users.messages.modify` with addLabelIds/removeLabelIds; label name→ID cache per account; create labels on first-use *(both add and remove implemented; cache prepopulates via `users.labels.list`, then lazy create on first-use for unknown names)*
+- [x] **3.3** `src/rules/apply.ts` — source-agnostic dispatcher that routes to proton.ts or gmail.ts *(discriminated `ApplyContext` union with per-source fields; TS prevents building the wrong shape)*
+- [x] **3.4** `src/events/types.ts` — add `inbox:urgent` and `inbox:routine` event types *(new event discriminator on a shared `InboxClassifiedBase` that carries an `applied` diagnostic summary so subscriber + future `mcp__inbox__why` can explain the decision; legacy `InboxNewEvent` retained until Phase 5 subscriber cutover)*
+- [x] **3.5** `src/ingestor.ts` — after successful ingest, call evaluate → apply → emit appropriate event *(new `src/rules/process-ingested.ts` orchestrator handles the chain; both pollers updated to call it instead of the old `emitInboxNew`; `ingestMessage` now additively returns the canonical `InboxMessage` so pollers don't rebuild the shape)*
+- [x] **3.6** QCM alert preservation *(new `src/rules/qcm.ts`; appends to `${MAILROOM_QCM_ALERTS_PATH:-$MAILROOM_DATA_DIR/qcm_alerts.jsonl}` before event emission; best-effort — failures logged but never block the event)*
+- [x] **3.7** Integration test with real rules.json against in-memory store *(8 new tests in `src/rules/process-ingested.test.ts`: real rules.json through the loader, real evaluator, real event-file emission to a temp `MAILROOM_DATA_DIR`, apply layer stubbed via `vi.hoisted`; covers urgent/routine/silent branching, urgent-over-archive conflict, qcm side-channel write order, empty-rules path, apply-failure non-blocking, account_tag predicate)*
+- [x] **prereq** ResolvedActions two-set model refactor *(ConfigFiles `8b21b87`; dropped single-set `labels: string[]` in favor of `labels_to_add` + `labels_to_remove` disjoint sets so `remove_label` intent survives the evaluation pass intact)*
 
 ### Phase 4 — Write MCP surface
 - [ ] **4.1** `src/mcp/tools/apply_action.ts` — validates args, looks up message, calls `apply.ts` with given actions
@@ -150,8 +151,10 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phases 1 and 2 complete.** The rules engine is end-to-end: types → loader → matcher → evaluate → CLI validator → 54-test vitest suite → schema reference, all committed in ConfigFiles (`a5896fe`, `f664d54`, `668769c`, `edd5d96`, `37c6593`, `6cd7bad`, `3d0d582`). Loader hot-reloads and preserves last-valid on any failure. Evaluator honours every locked decision (array-order priority, last-writer-wins for scalars, label set ops, urgent-forces-auto_archive-false). CLI emits parseable JSON with doc-pathed errors. Schema doc covers every field + common patterns + editing workflow + failure modes.
+**Phases 1, 2, and 3 complete.** Rules engine ships with the full ingest chain: the pollers now call `processIngestedMessage` on every successful insert, which evaluates rules, applies per-source (Gmail modify / Proton IMAP COPY+MOVE), runs the QCM side-channel, and emits one of `inbox:urgent` / `inbox:routine` / no-event. 64-test vitest suite passes; `tsc --noEmit` clean. Eleven mailroom commits total: `a5896fe`, `f664d54`, `668769c`, `edd5d96`, `37c6593`, `6cd7bad`, `3d0d582`, `8b21b87` (two-set model refactor), `a493fcb` (Phase 3 body), plus the earlier `668769c` RuleMatchContext extension.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-Next action: **Phase 3** — apply layer + event emission wired into the ingestor. `src/rules/apply/proton.ts` (IMAP COPY to Labels/ + archive/delete MOVEs), `src/rules/apply/gmail.ts` (Gmail API messages.modify + label ID cache), `src/rules/apply.ts` source-dispatcher, extend event types + emit.ts for `inbox:urgent`/`inbox:routine`, and the ingestor.ts hook that chains evaluate → apply → emit.
+**Operator note:** Phase 3 changes the events mailroom emits. If the container restarts before Phase 5 updates the nanoclaw subscriber, `inbox-urgent-*.json` and `inbox-routine-*.json` files will accumulate in `ipc-out/` (the subscriber globs `inbox-new-*.json` today). The subscriber is not broken — Madison just won't see events until Phase 5 lands. Hold the container restart until Phase 5 is also ready.
+
+Next action: **Phase 4** — MCP write tools. Four new tools on the existing HTTP MCP server: `mcp__inbox__apply_action`, `mcp__inbox__delete`, `mcp__inbox__send_reply`, `mcp__inbox__send_message`. Plus the send-log JSONL with 20/hour per-from-account rate limit.
