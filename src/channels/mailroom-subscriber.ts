@@ -12,16 +12,34 @@ const DEFAULT_IPC_DIR = path.join(
   'containers/data/mailroom/ipc-out',
 );
 const POLL_INTERVAL_MS = 1000;
-const EVENT_FILE_PREFIX = 'inbox-new-';
+
+// Mailroom emits two file kinds (post-mail-push-redesign Phase 3):
+//   inbox-urgent-*.json  → priority dispatch (immediate spawn)
+//   inbox-routine-*.json → normal store + polling-window dispatch
+// The legacy inbox-new-*.json prefix is still recognized so any files
+// that landed before mailroom restarts to the Phase-3 build are not
+// quarantined as garbage. Mailroom no longer emits that name.
 const EVENT_FILE_SUFFIX = '.json';
+const URGENT_PREFIX = 'inbox-urgent-';
+const ROUTINE_PREFIX = 'inbox-routine-';
+const LEGACY_NEW_PREFIX = 'inbox-new-';
 
 function ipcDir(): string {
   return process.env.MAILROOM_IPC_OUT_DIR || DEFAULT_IPC_DIR;
 }
 
-// Shape emitted by mailroom/src/events/emit.ts — keep in sync.
-interface InboxNewEvent {
-  event: 'inbox:new';
+// Common payload across the typed events. `applied` carries the
+// rule-engine summary (which rules matched, what got labeled/archived,
+// whether qcm fired) — useful for logs and the future explainer tool.
+interface AppliedSummary {
+  labels_added: string[];
+  labels_removed: string[];
+  archived: boolean;
+  qcm_alert: boolean;
+  matched_rule_indices: number[];
+}
+
+interface InboxClassifiedBase {
   version: 1;
   source: 'gmail' | 'protonmail';
   account_id: string;
@@ -32,13 +50,26 @@ interface InboxNewEvent {
   sender: { email: string; name: string | null };
   received_at: string;
   body_preview: string;
+  applied?: AppliedSummary; // optional for legacy inbox:new compat
 }
 
-function isInboxNewEvent(x: unknown): x is InboxNewEvent {
+type InboxEventKind = 'urgent' | 'routine' | 'legacy';
+
+interface ClassifiedEvent extends InboxClassifiedBase {
+  event: 'inbox:urgent' | 'inbox:routine' | 'inbox:new';
+}
+
+function isClassifiedEvent(x: unknown): x is ClassifiedEvent {
   if (!x || typeof x !== 'object') return false;
   const e = x as Record<string, unknown>;
+  if (
+    e.event !== 'inbox:urgent' &&
+    e.event !== 'inbox:routine' &&
+    e.event !== 'inbox:new'
+  ) {
+    return false;
+  }
   return (
-    e.event === 'inbox:new' &&
     (e.source === 'gmail' || e.source === 'protonmail') &&
     typeof e.message_id === 'string' &&
     typeof e.source_message_id === 'string' &&
@@ -48,6 +79,14 @@ function isInboxNewEvent(x: unknown): x is InboxNewEvent {
     e.sender != null &&
     typeof (e.sender as { email?: unknown }).email === 'string'
   );
+}
+
+function fileKind(name: string): InboxEventKind | null {
+  if (!name.endsWith(EVENT_FILE_SUFFIX)) return null;
+  if (name.startsWith(URGENT_PREFIX)) return 'urgent';
+  if (name.startsWith(ROUTINE_PREFIX)) return 'routine';
+  if (name.startsWith(LEGACY_NEW_PREFIX)) return 'legacy';
+  return null;
 }
 
 class MailroomSubscriber implements Channel {
@@ -115,19 +154,28 @@ class MailroomSubscriber implements Channel {
     } catch {
       return;
     }
-    const files = entries.filter(
-      (f) => f.startsWith(EVENT_FILE_PREFIX) && f.endsWith(EVENT_FILE_SUFFIX),
-    );
-    for (const file of files) {
+    for (const file of entries) {
       if (this.stopped) return;
+      const kind = fileKind(file);
+      if (!kind) continue;
       const filePath = path.join(dir, file);
       try {
         const raw = await fs.promises.readFile(filePath, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (!isInboxNewEvent(parsed)) {
+        if (!isClassifiedEvent(parsed)) {
           throw new Error('event failed schema validation');
         }
-        this.dispatch(parsed);
+        // The filename prefix and the event.event field must agree —
+        // if they don't, prefer the in-payload discriminator (single
+        // source of truth) but log it.
+        const payloadKind = mapEventKind(parsed.event);
+        if (payloadKind !== kind && !(kind === 'legacy' && payloadKind === 'legacy')) {
+          logger.warn(
+            { file, payloadKind, fileKind: kind },
+            'mailroom event filename prefix and payload event field disagree — using payload',
+          );
+        }
+        this.dispatch(parsed, payloadKind);
         await fs.promises.unlink(filePath);
       } catch (err) {
         logger.error(
@@ -148,11 +196,11 @@ class MailroomSubscriber implements Channel {
     }
   }
 
-  private dispatch(event: InboxNewEvent): void {
+  private dispatch(event: ClassifiedEvent, kind: InboxEventKind): void {
     const targetJid = findEmailTargetJid(this.opts.registeredGroups());
     if (!targetJid) {
       logger.debug(
-        { messageId: event.message_id },
+        { messageId: event.message_id, kind },
         'No email target group registered — dropping mailroom event',
       );
       return;
@@ -162,13 +210,30 @@ class MailroomSubscriber implements Channel {
     const senderDisplay = event.sender.name
       ? `${event.sender.name} <${event.sender.email}>`
       : event.sender.email;
-    const content = [
-      `[${sourceLabel} email from ${senderDisplay}]`,
+    const priorityTag =
+      kind === 'urgent' ? 'URGENT ' : kind === 'routine' ? '' : '';
+    const headerLine = `[${priorityTag}${sourceLabel} email from ${senderDisplay}]`;
+    const lines = [
+      headerLine,
       `Subject: ${event.subject ?? '(no subject)'}`,
       `Preview: ${event.body_preview}`,
-      '',
-      `Use mcp__inbox__search, mcp__inbox__thread, or mcp__inbox__recent to read more.`,
-    ].join('\n');
+    ];
+    // Surface what the rule engine did so Madison's prompt has the
+    // context without re-running the engine on her side.
+    if (event.applied) {
+      const a = event.applied;
+      const summary: string[] = [];
+      if (a.labels_added.length > 0) summary.push(`labeled ${a.labels_added.join(', ')}`);
+      if (a.labels_removed.length > 0) summary.push(`unlabeled ${a.labels_removed.join(', ')}`);
+      if (a.archived) summary.push('archived');
+      if (a.qcm_alert) summary.push('QCM alert recorded');
+      if (summary.length > 0) lines.push(`Rules applied: ${summary.join('; ')}`);
+    }
+    lines.push('');
+    lines.push(
+      `Use mcp__inbox__search, mcp__inbox__thread, or mcp__inbox__recent to read more; mcp__inbox__apply_action / delete / send_reply / send_message to act.`,
+    );
+    const content = lines.join('\n');
 
     const message: NewMessage = {
       id: event.source_message_id,
@@ -181,15 +246,32 @@ class MailroomSubscriber implements Channel {
       thread_id: event.thread_id,
     };
     this.opts.onMessage(targetJid, message);
+
+    // Urgent: bypass the main-loop POLL_INTERVAL and request an
+    // immediate spawn. Routine/legacy fall through to the normal
+    // polling cadence (currently 2s; acts as the implicit batch window).
+    if (kind === 'urgent' && this.opts.requestImmediateProcessing) {
+      this.opts.requestImmediateProcessing(targetJid);
+    }
+
     logger.info(
       {
         source: event.source,
         subject: event.subject,
         targetJid,
+        kind,
       },
       'Mailroom event dispatched',
     );
   }
+}
+
+function mapEventKind(
+  event: 'inbox:urgent' | 'inbox:routine' | 'inbox:new',
+): InboxEventKind {
+  if (event === 'inbox:urgent') return 'urgent';
+  if (event === 'inbox:routine') return 'routine';
+  return 'legacy';
 }
 
 registerChannel(

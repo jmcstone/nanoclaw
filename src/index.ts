@@ -666,6 +666,12 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    requestImmediateProcessing: (chatJid: string) => {
+      // Skip if the group isn't registered (no-op safety) — happens when
+      // an event arrives before the group is wired up.
+      if (!registeredGroups[chatJid]) return;
+      queue.enqueueMessageCheck(chatJid);
+    },
   };
 
   // Create and connect all registered channels.
