@@ -70,12 +70,16 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 5** — nanoclaw subscriber event-type branch + the Madison RW mount:
-   - `src/channels/mailroom-subscriber.ts` — read the event's `type` field; route by it. Currently the subscriber globs `inbox-new-*.json`; change to `inbox-urgent-*.json` + `inbox-routine-*.json`. Urgent events call the group-queue with a priority flag; routine events batch as today.
-   - `src/group-queue.ts` (or equivalent) — add a `priority: 'urgent'` parameter to the onMessage path that bypasses the N-message batch threshold, immediately spawning Madison.
-   - `src/container-runner.ts` — add `~/containers/data/mailroom → /workspace/extra/mailroom` RW mount gated on `folder === EMAIL_TARGET_FOLDER` from `src/inbox-routing.ts`.
-   - Stub-file tests: spawn a temp ipc-out dir, write `inbox-urgent-*.json`, verify immediate dispatch; write 4 × `inbox-routine-*.json`, verify batching; write 5th, verify batch triggers.
-2. Phases 6–9 after that: initial rules.json + accounts.json, Madison CLAUDE.md rewrite + symlink, retire legacy, verify + graduate.
+1. **Phase 6** — seed the on-disk config files:
+   - Port the 27 `imap_autolabel.py` RULES to `~/containers/data/mailroom/rules.json`. Most become `{match: {sender_contains: "X"}, actions: {add_label: "Y"}}`. For the newsletters Jeff has been archiving (Subscriptions, Job Postings, Promos), append `auto_archive: true` so they stay silent post-Phase-3.
+   - Add the DocuSign urgent rule: `{match: {sender_contains: "docusign"}, actions: {urgent: true}}`.
+   - Add the QCM rule: `{match: {sender_equals: "euclid.qcm.llc@gmail.com"}, actions: {urgent: true, add_label: "QCM Notifications", qcm_alert: true}}`.
+   - Build `accounts.json` from the current config: 1 Gmail (`jeff@americanvoxpop.com` with tags `work`, `avp`), 5 Proton addresses with per-address tags.
+   - Create `rules-changelog.md` with an initial entry noting the port from `imap_autolabel.py` + this plan's commits.
+   - Validate via `docker exec mailroom-ingestor-1 node dist/cli/rules-validate.js` once the mailroom container is rebuilt on main.
+2. **Phase 7** — Madison CLAUDE.md rewrite + Obsidian symlink.
+3. **Phase 8** — retire legacy (auto-labeler script, `:07` hourly task, `*/15` health check).
+4. **Phase 9** — verify end-to-end + graduate findings to permanent lode.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
 
@@ -260,3 +264,38 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - nodemailer's `streamTransport: true, buffer: true` mode builds a Buffer of the RFC 5322 message without sending it — exactly what Gmail's base64url-raw API needs. Same composer, two transports.
    - Store helpers are the right abstraction boundary. Every time I wrote an inline `db.prepare('SELECT ...').get(...)` in a tool, I was making the tool harder to test and duplicating a pattern. Promoted `getMessageById` + `getSenderEmailById` to `queries.ts`; the follow-on tools stayed clean.
 5. **What have I done?** 2 mailroom commits: `dfbe804` (Phase 4a, 789 lines) + `e5ff729` (Phase 4b, 866 lines). 81 tests passing across 7 files.
+
+## 2026-04-22 — Phase 5: nanoclaw subscriber transition
+
+### Actions
+
+- Read the existing subscriber + `index.ts` `onMessage` handler + `group-queue.ts` to understand the actual architecture. **Discovery:** there is NO existing N-message / T-timer batch threshold for routine events — the tracker §5.2 wording assumed one that doesn't exist. Today every stored message → main loop's POLL_INTERVAL (2s) polling cycle → spawn (for `requiresTrigger: false` groups, which is how the email target is configured). The implicit batch window IS the 2s polling interval.
+- This changed the design: instead of wiring "bypass N-msg threshold", the urgent path bypasses the 2s POLL_INTERVAL by enqueueing immediately. Routine just stores; the next poll cycle picks it up. Explicit routine batching deferred — most spawn-rate reduction comes from mailroom's silent-event filtering (`auto_archive && !urgent` → no event), which Phase 3 already shipped. If post-deploy measurements show routine spawns are still too frequent, a real batch threshold becomes a focused follow-up.
+- Extended `ChannelOpts` with `requestImmediateProcessing?: (jid) => void` callback. Wired in `index.ts` to call `queue.enqueueMessageCheck(chatJid)`. Defensive no-op when the target group isn't registered (handles the boot race where events arrive before group config loads).
+- Rewrote `src/channels/mailroom-subscriber.ts`:
+  - Glob both `inbox-urgent-*.json` and `inbox-routine-*.json`. Keeps the legacy `inbox-new-*.json` glob during transition so any in-flight events from the previous emit version aren't quarantined.
+  - Discriminates by the `event.event` field in the payload (single source of truth). Logs a warning when filename prefix and payload event field disagree; payload wins.
+  - Surfaces the rule-engine `applied` summary in Madison's prompt content (labels added/removed/archived/qcm_alert), so she has the rule decision context without re-running the engine.
+  - Urgent triggers `requestImmediateProcessing(targetJid)` after `onMessage`; routine and legacy don't.
+- Added the gated RW mount in `src/container-runner.ts`: when `group.folder === EMAIL_TARGET_FOLDER`, mount `~/containers/data/mailroom → /workspace/extra/mailroom`. Gated by group folder check (not the external mount allowlist) since this is a system integration, not a Madison-configured choice. Logs a warning if the host dir is missing rather than failing container startup.
+- Wrote 9 vitest cases in `src/channels/mailroom-subscriber.test.ts`: temp `MAILROOM_IPC_OUT_DIR`, mock `ChannelOpts.onMessage` + `requestImmediateProcessing` via `vi.fn<T>()`. Covers urgent + routine + legacy + filename-payload mismatch + unknown-prefix-ignored + invalid-JSON-quarantined + schema-invalid-quarantined + multiple-routine-don't-spawn + no-target-group-silent-drop. Each test waits 1.2s for the 1s poll cycle (the test takes ~11s total because of polling latency; acceptable for now — could parametrize POLL_INTERVAL_MS for tests if it gets annoying).
+- `tsc --noEmit` initially failed on the inline factory call in the "no email target group" test because `vi.fn()` returns `Mock<Procedure | Constructable>` which TS can't narrow to specific channel-callback signatures. Fixed by switching to `vi.fn<OnMessageFn>()` typed generics — both the helper-built and inline call sites type-check cleanly while assertions keep working. (Footnote: vitest doesn't enforce strict TS during test runs, so this only surfaced when I re-ran tsc after the prettier pre-commit hook reformatted the file.)
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` after Phase 5 | pass | clean |
+| `npm test` | pass | 303 / 303 (was 294 before; +9 subscriber tests) |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 5 done. Both halves of the event-type transition are live. The system is now safe to restart in any order: nanoclaw picks up Phase 5 on process restart; mailroom containers (`ingestor` + `inbox-mcp`) need `./container/build.sh` + restart for Phases 3 + 4.
+2. **Where am I going?** Phase 6 — seed `rules.json` + `accounts.json` with the actual Jeff content (port 27 imap_autolabel.py rules, add DocuSign + QCM urgents, build accounts roster, seed changelog). Then Phase 7 (Madison CLAUDE.md rewrite), Phase 8 (retire legacy), Phase 9 (verify + graduate).
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling. Sub-minute urgent surface latency. ~5-10x reduction in Madison spawn count via silent-event filtering at mailroom + retired scheduled tasks.
+4. **What have I learned?**
+   - **Verify the architecture before honoring tracker assumptions.** The tracker §5.2 mentioned "bypass the N-message batch threshold" but no such threshold exists today; the implicit batch is the 2s POLL_INTERVAL. Reading the actual code before designing saved me from building a fake threshold to bypass.
+   - `vi.fn()` without generics returns `Mock<Procedure | Constructable>` which TS won't narrow at the call site of a function that wants a specific callable signature. Use `vi.fn<MyFn>()` to give the mock the precise signature; assertions still work and the factory call type-checks.
+   - The pre-commit hook in this repo runs `prettier --write` and re-formats files. It does NOT run `tsc`. So a commit can succeed with type errors. Always run `npx tsc --noEmit` separately when adding new test files; vitest's transpilation doesn't catch this.
+   - Tests that wait on a polling subscriber are slow (1.2s per test for a 1s poller). Tolerate it for now; if it becomes a constraint, parametrize the poll interval via env or constructor option.
+5. **What have I done?** 2 nanoclaw commits: `f5be6f0` (Phase 5 body, 5 files +383/-19) + `5d84dde` (mock-typing tsc fix). 303 tests passing.
