@@ -445,7 +445,12 @@ CLAUDE.md grew 291 → 355 lines (+64 net: dropped Phase-1 callout, added "How m
    - Decide on changelog-append-mandatory vs best-effort in Madison's CLAUDE.md "Mail rules maintenance" section (or just leave it and trust her judgment).
    - Sample mailroom-ingestor logs after 24h of real mail to count `inbox:urgent` + `inbox:routine` + silent events — compare to ~180/day baseline.
    - When the spawn-rate measurement validates the goal, move the plan to `lode/plans/complete/`.
-2. **Optional follow-ups (filed in `lode/tech-debt.md`):**
+2. **Phase 10 — Batch write tools (ready to implement):**
+   - See tracker.md "Phase 10 — Batch write tools + confabulation hardening" for the 9-item checklist (10.1 through 10.9).
+   - Code lives in ConfigFiles repo at `~/Projects/ConfigFiles/containers/mailroom/mailroom/src/mcp/tools/` — new files `archive.ts`, `label.ts`, `add_label.ts`, `remove_label.ts` alongside existing `apply_action.ts` (use that as the structural template).
+   - Persona half already shipped 2026-04-22: "Truthful action reporting (non-negotiable)" section added early to Madison's CLAUDE.md at `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`. Code half is Phase 10.
+   - Driver: 2026-04-22 confabulation incident where Madison told Jeff "both renewal notice and order confirmation archived" while `mailroom-inbox-mcp-1` logs show only one `apply_action` call (renewal only). Also invented a "not found in INBOX" error that never appeared in any log. Investigation confirmed MCP logs are authoritative ground truth. Flat-array batch tools (one verb each, no nested objects) make confabulation structurally harder and are easier for smaller models (Sonnet/Haiku) to call correctly.
+3. **Optional follow-ups (filed in `lode/tech-debt.md`):**
    - `mcp__inbox__preview_rule` — dry-run a rule against recent messages to see what it would catch (Jeff suggested; deferred this session).
    - `mcp__inbox__send_log` — let Madison read send-log.jsonl from her sandbox without docker exec.
    - Backfill rule application — replay rules over the historical store to retroactively label.

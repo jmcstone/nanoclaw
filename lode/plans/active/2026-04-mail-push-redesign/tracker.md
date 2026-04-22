@@ -145,6 +145,24 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [ ] **9.5** Graduate durable findings from findings.md to `lode/architecture/mailroom-rules.md` and `lode/architecture/madison-pipeline.md`.
 - [ ] **9.6** Move this plan to `lode/plans/complete/`.
 
+### Phase 10 — Batch write tools + confabulation hardening
+
+**Motivation:** 2026-04-22 incident. Madison told Jeff "both renewal notice and order confirmation archived" when `mailroom-inbox-mcp-1` logs show only ONE `apply_action` call was made (renewal only). In a follow-up attempt she claimed "not found in INBOX" errors that never appear in any log — fabricated to explain away messages she didn't attempt. Tools were honest; the agent's reporting was not.
+
+Two complementary fixes: (a) tool-contract change that makes confabulation structurally harder, (b) persona edit that requires grounded reporting. The persona edit landed in the Madison Inbox CLAUDE.md on 2026-04-22 as the "Truthful action reporting (non-negotiable)" section. The tool-contract work is captured here.
+
+Design picks `archive / label / add_label / remove_label` — four verb-named tools, each taking a flat `message_ids: string[]` — over a monolithic `apply_actions(ops: [{message_id, actions}])` batch. The flat shape is easier for smaller models to call correctly (no nested objects, no `string | string[]` unions), and tool-name-as-verb makes Madison's action log auditable at a glance ("called `archive` on 3 ids" vs parsing a nested ops array). The existing `apply_action` stays for heterogeneous per-message work and for `urgent` / `qcm_alert` flag flips.
+
+- [ ] **10.1** `mcp__inbox__archive(message_ids: string[])` — loop over ids, group by `(source, account_address)` for Proton connection reuse, call existing `applyActions()` engine with `{auto_archive: true}` per id, record per-id result. Returns `{attempted, succeeded, failed: [{message_id, error}]}`. File: `mailroom/src/mcp/tools/archive.ts`. Mirror the logging shape used by `apply_action` so the MCP log stays audit-ready.
+- [ ] **10.2** `mcp__inbox__label(message_ids: string[], labels: string[])` — replace-set semantics. Same skeleton as 10.1 with `{label: labels}` as the Actions.
+- [ ] **10.3** `mcp__inbox__add_label(message_ids: string[], label: string)` — union semantics. Actions = `{add_label: label}`.
+- [ ] **10.4** `mcp__inbox__remove_label(message_ids: string[], label: string)` — subtract semantics. Gmail only; Proton remove-label is v1 no-op (surface via `labels_remove_skipped` per id).
+- [ ] **10.5** Register the four tools in `mailroom/src/mcp/server.ts`. The agent-runner wildcard `mcp__inbox__*` should already cover the allowlist.
+- [ ] **10.6** Unit tests mirrored from `apply.test.ts` patterns into `archive.test.ts`, `label.test.ts`. Partial-failure case required (at least one id that doesn't exist in store → goes into `failed[]`, other ids still succeed).
+- [ ] **10.7** Update Madison's `CLAUDE.md` Writes section: direct her to the four verb tools for bulk work ("archive N messages" → `archive([id1, id2, …])`, not N separate `apply_action` calls). Keep `apply_action` documented as the escape hatch for heterogeneous per-message work and flag-flipping.
+- [ ] **10.8** Rebuild mailroom image; restart `mailroom-inbox-mcp-1`. Verify Madison's next archive sweep uses `archive` instead of looping `apply_action`.
+- [ ] **10.9** Audit check: 24h after deploy, compare `apply_action complete` vs `archive complete` log counts in `mailroom-inbox-mcp-1`. Expect heavy shift to batch for bulk work.
+
 ## Errors
 
 | Error | Resolution |
