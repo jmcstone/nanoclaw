@@ -15,18 +15,44 @@ Backend classifier + actor for inbound mail. Runs inside the `mailroom-ingestor`
 
 ## On-disk artifacts
 
-- `~/containers/data/mailroom/rules.json` — rule list, hot-reloaded on mtime (5s poll)
-- `~/containers/data/mailroom/accounts.json` — account roster + tags (feeds `account_tag` predicates)
-- `~/containers/data/mailroom/rules-changelog.md` — append-only edit history
-- Symlinked into Obsidian at `~/Documents/Obsidian/Main/NanoClaw/Inbox/` so Jeff can edit from phone/iPad
+**Source of truth — Obsidian vault** (sync'd to Jeff's phone / iPad / other Macs via Obsidian Sync):
+
+- `~/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/rules.json` — rule list
+- `~/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/accounts.json` — account roster + tags
+- `~/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/rules-changelog.md` — append-only edit history
+
+These are REAL files (not symlinks) so Obsidian Sync transports them as bytes to other devices. Jeff can edit from mobile; the loader picks up changes within 5s via mtime poll.
+
+**Mailroom's view** — per-file bind mounts in `docker-compose.yml` overlay the Obsidian paths into the mailroom data dir (both ingestor and inbox-mcp services):
+
+```yaml
+- ${HOME}/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/rules.json:/var/mailroom/data/rules.json:ro
+- ${HOME}/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/accounts.json:/var/mailroom/data/accounts.json:ro
+```
+
+Readonly on the mailroom side — mailroom only reads. Madison writes via her own Obsidian mount (`/workspace/extra/obsidian/_Settings/`), which is an independent bind mount on her container. Host filesystem is the integration point.
+
+**Mailroom data dir** (`~/containers/data/mailroom/`, mounted at `/var/mailroom/data/`) still holds:
+- `store.db` (SQLCipher-encrypted inbox)
+- `gmail-mcp/` (OAuth creds — readable only by the mailroom containers)
+- `ipc-out/` (event files — consumed by nanoclaw's subscriber)
+- `send-log.jsonl` (write audit; appended by inbox-mcp)
+- `qcm_alerts.jsonl` (dormant; no producer, no consumer after Phase 8)
+- `backfill-cursor.json`, `backfill-errors.log`
 
 Bad edits (malformed JSON, schema violation, uncompilable regex) log loudly and keep the previously-valid rule set in memory — the ingestor never crash-loops on config.
 
+## Pattern — `_Settings/` per group
+
+The `_Settings/` subfolder under each group's Obsidian vault is the conventional home for config files that a backend service reads at runtime AND the human wants to edit from any device. When another group eventually needs the same pattern (e.g. per-group rule engines), add a `NanoClaw/<Group>/_Settings/` folder + per-file compose mounts into the relevant container. The underscore prefix keeps it sorted to the top of the Obsidian file tree alongside `_attachments/` and `_digests/`.
+
 ## Operational gotcha — compose CWD vs realpath
 
-The compose volume mount in `docker-compose.yml` is `../data/mailroom:/var/mailroom/data` — a **relative** path. Docker Compose resolves it against the **process CWD's symlink chain**, NOT the compose file's `realpath`. The repo lives at `~/Projects/ConfigFiles/containers/mailroom/mailroom/docker-compose.yml`, but `~/containers/mailroom` is a symlink into that path, and the real data lives at `~/containers/data/mailroom/`.
+The compose volume mount `../data/mailroom:/var/mailroom/data` is **relative**. Docker Compose resolves it against the **process CWD's symlink chain**, NOT the compose file's `realpath`. The repo lives at `~/Projects/ConfigFiles/containers/mailroom/mailroom/docker-compose.yml`, but `~/containers/mailroom` is a symlink into that path, and the real data lives at `~/containers/data/mailroom/`.
 
-**Always run `dcc` from the symlinked path:** `cd ~/containers/mailroom && dcc up ingestor inbox-mcp`. Running from the realpath (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) makes `..` resolve to `~/Projects/ConfigFiles/containers/mailroom/`, where Docker silently auto-creates an empty `data/mailroom/` directory as root and starts a fresh empty `store.db` — losing access to the real 4GB+ encrypted store, the seeded `rules.json`, and the Gmail OAuth creds. Recovery: `dcc down`, `sudo rm -rf ~/Projects/ConfigFiles/containers/mailroom/data`, then `cd ~/containers/mailroom && dcc up ...` from the right CWD.
+**Always run `dcc` from the symlinked path:** `cd ~/containers/mailroom && dcc up ingestor inbox-mcp`. Running from the realpath (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) makes `..` resolve to `~/Projects/ConfigFiles/containers/mailroom/`, where Docker silently auto-creates an empty `data/mailroom/` directory as root and starts a fresh empty `store.db` — losing access to the real 4GB+ encrypted store and the Gmail OAuth creds. Recovery: `dcc down`, `sudo rm -rf ~/Projects/ConfigFiles/containers/mailroom/data`, then `cd ~/containers/mailroom && dcc up ...` from the right CWD.
+
+(The `${HOME}/...` per-file Obsidian mounts are absolute paths, so they're immune to this gotcha — Docker Compose expands `${HOME}` the same way regardless of CWD.)
 
 ## Action model
 

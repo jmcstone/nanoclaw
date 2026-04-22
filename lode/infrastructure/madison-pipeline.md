@@ -37,8 +37,7 @@ flowchart LR
 **Madison container** — spawned per-need. Bind mounts (`src/container-runner.ts`):
 - `~/containers/data/NanoClaw/groups/telegram_inbox/` → `/workspace/group` (RW, the CLAUDE.md lives here)
 - `~/containers/data/NanoClaw/a-mem/telegram_inbox/` → `/workspace/extra/a-mem` (RW)
-- `~/Documents/Obsidian/Main/NanoClaw/Inbox/` → `/workspace/extra/obsidian` (RW)
-- **Gated on `folder === EMAIL_TARGET_FOLDER`:** `~/containers/data/mailroom/` → `/workspace/extra/mailroom` (RW) — gives Madison direct access to `rules.json` + `accounts.json` + `rules-changelog.md`
+- `~/Documents/Obsidian/Main/NanoClaw/Inbox/` → `/workspace/extra/obsidian` (RW) — Madison reads + writes `rules.json` / `accounts.json` / `rules-changelog.md` via the `_Settings/` subfolder here. No dedicated mailroom mount on her container (an earlier attempt exposed `gmail-mcp/` OAuth creds + the encrypted store.db, which Madison doesn't need).
 - Standard: `.claude/`, downloads, IPC, agent-runner source
 
 ## Prompt shape

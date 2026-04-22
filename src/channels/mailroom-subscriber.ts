@@ -169,7 +169,10 @@ class MailroomSubscriber implements Channel {
         // if they don't, prefer the in-payload discriminator (single
         // source of truth) but log it.
         const payloadKind = mapEventKind(parsed.event);
-        if (payloadKind !== kind && !(kind === 'legacy' && payloadKind === 'legacy')) {
+        if (
+          payloadKind !== kind &&
+          !(kind === 'legacy' && payloadKind === 'legacy')
+        ) {
           logger.warn(
             { file, payloadKind, fileKind: kind },
             'mailroom event filename prefix and payload event field disagree — using payload',
@@ -223,11 +226,14 @@ class MailroomSubscriber implements Channel {
     if (event.applied) {
       const a = event.applied;
       const summary: string[] = [];
-      if (a.labels_added.length > 0) summary.push(`labeled ${a.labels_added.join(', ')}`);
-      if (a.labels_removed.length > 0) summary.push(`unlabeled ${a.labels_removed.join(', ')}`);
+      if (a.labels_added.length > 0)
+        summary.push(`labeled ${a.labels_added.join(', ')}`);
+      if (a.labels_removed.length > 0)
+        summary.push(`unlabeled ${a.labels_removed.join(', ')}`);
       if (a.archived) summary.push('archived');
       if (a.qcm_alert) summary.push('QCM alert recorded');
-      if (summary.length > 0) lines.push(`Rules applied: ${summary.join('; ')}`);
+      if (summary.length > 0)
+        lines.push(`Rules applied: ${summary.join('; ')}`);
     }
     lines.push('');
     lines.push(

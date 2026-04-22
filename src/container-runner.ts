@@ -19,7 +19,6 @@ import {
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
-import { EMAIL_TARGET_FOLDER } from './inbox-routing.js';
 import { logger } from './logger.js';
 import {
   CONTAINER_HOST_GATEWAY,
@@ -191,29 +190,10 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Mailroom data dir — only for the email-triage group (telegram_inbox).
-  // Gives Madison read/write access to rules.json + accounts.json so she
-  // can edit them inline via her Edit tool. The rules-validate CLI lives
-  // in the mailroom container and is invoked via `docker exec`; see
-  // lode/plans/active/2026-04-mail-push-redesign/tracker.md (AC-9, AC-11).
-  // Read-write is intentional: gate is the group folder check, enforced
-  // here rather than via the external mount allowlist because the path
-  // isn't something Madison configures.
-  if (group.folder === EMAIL_TARGET_FOLDER) {
-    const mailroomDir = path.join(os.homedir(), 'containers', 'data', 'mailroom');
-    if (fs.existsSync(mailroomDir)) {
-      mounts.push({
-        hostPath: mailroomDir,
-        containerPath: '/workspace/extra/mailroom',
-        readonly: false,
-      });
-    } else {
-      logger.warn(
-        { mailroomDir, group: group.folder },
-        'EMAIL_TARGET_FOLDER group but mailroom data dir missing — skipping mount (rules.json editing unavailable)',
-      );
-    }
-  }
+  // (Madison reads/edits rules.json + accounts.json via her existing
+  // Obsidian mount at /workspace/extra/obsidian/_Settings/. The earlier
+  // attempt to mount ~/containers/data/mailroom/ wholesale into Madison
+  // exposed gmail-mcp/ OAuth creds + the encrypted store.db — too broad.)
 
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other

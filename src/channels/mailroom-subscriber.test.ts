@@ -33,7 +33,9 @@ async function flushSchedulers(): Promise<void> {
 
 type OnMessageFn = ChannelOpts['onMessage'];
 type OnChatMetadataFn = ChannelOpts['onChatMetadata'];
-type RequestImmediateFn = NonNullable<ChannelOpts['requestImmediateProcessing']>;
+type RequestImmediateFn = NonNullable<
+  ChannelOpts['requestImmediateProcessing']
+>;
 
 let tmpDir: string;
 let onMessage: ReturnType<typeof vi.fn<OnMessageFn>>;
