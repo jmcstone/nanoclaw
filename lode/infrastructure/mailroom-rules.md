@@ -23,14 +23,15 @@ Backend classifier + actor for inbound mail. Runs inside the `mailroom-ingestor`
 
 These are REAL files (not symlinks) so Obsidian Sync transports them as bytes to other devices. Jeff can edit from mobile; the loader picks up changes within 5s via mtime poll.
 
-**Mailroom's view** — per-file bind mounts in `docker-compose.yml` overlay the Obsidian paths into the mailroom data dir (both ingestor and inbox-mcp services):
+**Mailroom's view** — a whole-directory bind mount of `_Settings/` at a dedicated config path (both ingestor and inbox-mcp services):
 
 ```yaml
-- ${HOME}/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/rules.json:/var/mailroom/data/rules.json:ro
-- ${HOME}/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/accounts.json:/var/mailroom/data/accounts.json:ro
+- ${HOME}/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings:/var/mailroom/config:ro
 ```
 
-Readonly on the mailroom side — mailroom only reads. Madison writes via her own Obsidian mount (`/workspace/extra/obsidian/_Settings/`), which is an independent bind mount on her container. Host filesystem is the integration point.
+Loader reads from `${MAILROOM_CONFIG_DIR:-/var/mailroom/config}/rules.json` (and `accounts.json`). `MAILROOM_DATA_DIR` is the legacy fallback for pre-2026-04-22 deploys. Readonly on the mailroom side — mailroom only reads; Madison writes via her own Obsidian mount (`/workspace/extra/obsidian/_Settings/`).
+
+**Why a directory mount, not per-file:** per-file bind mounts in Docker pin a specific inode at mount time. Atomic-rename writes — what Claude Code's `Edit` tool, vim's `:wq`, etc. do — produce a new inode for the same path. The container's per-file mount keeps pointing at the old inode and goes silently stale. Directory mounts re-resolve names per-syscall and propagate atomic-rename edits cleanly. (Discovered live mid-Phase-9: Madison's first successful rule edit landed on the host but mailroom kept seeing the prior 28-rule snapshot.)
 
 **Mailroom data dir** (`~/containers/data/mailroom/`, mounted at `/var/mailroom/data/`) still holds:
 - `store.db` (SQLCipher-encrypted inbox)
