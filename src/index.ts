@@ -336,10 +336,7 @@ async function runAgent(
     const ageHours = ageMs / (1000 * 60 * 60);
     const maxAgeHours = resolveSessionMaxAgeHours(group.folder);
     const maxMessages = resolveSessionMaxMessages(group.folder);
-    if (
-      ageHours > maxAgeHours ||
-      sessionInfo.message_count >= maxMessages
-    ) {
+    if (ageHours > maxAgeHours || sessionInfo.message_count >= maxMessages) {
       logger.info(
         {
           group: group.folder,

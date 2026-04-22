@@ -311,7 +311,11 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const modelOverride = resolveGroupModel(group.folder);
-  const containerArgs = buildContainerArgs(mounts, containerName, modelOverride);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    modelOverride,
+  );
 
   logger.debug(
     {

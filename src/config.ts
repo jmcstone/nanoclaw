@@ -141,19 +141,23 @@ export function getGroupOverride(folder: string): GroupOverride {
 
 export function resolveSessionMaxMessages(folder: string): number {
   const override = getGroupOverride(folder).sessionMaxMessages;
-  if (typeof override === 'number' && override > 0) return Math.max(1, override);
+  if (typeof override === 'number' && override > 0)
+    return Math.max(1, override);
   return SESSION_MAX_MESSAGES;
 }
 
 export function resolveSessionMaxAgeHours(folder: string): number {
   const override = getGroupOverride(folder).sessionMaxAgeHours;
-  if (typeof override === 'number' && override > 0) return Math.max(1, override);
+  if (typeof override === 'number' && override > 0)
+    return Math.max(1, override);
   return SESSION_MAX_AGE_HOURS;
 }
 
 export function resolveGroupModel(folder: string): string | undefined {
   const override = getGroupOverride(folder).model;
-  return typeof override === 'string' && override.trim() ? override.trim() : undefined;
+  return typeof override === 'string' && override.trim()
+    ? override.trim()
+    : undefined;
 }
 
 function escapeRegex(str: string): string {
