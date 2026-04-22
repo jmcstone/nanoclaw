@@ -83,7 +83,7 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ### Phase 2 — Rule engine (read + evaluate)
 - [x] **2.1** `src/rules/types.ts` — `Rule`, `Predicate`, `Actions`, `AccountEntry`, `AccountsFile`, `RulesFile` types *(2026-04-22, ConfigFiles `a5896fe`; also adds `ResolvedActions` for the apply-layer contract and `RuleMatchContext` to make the "predicates see ingest-time labels, not accumulator" decision explicit at the type level)*
-- [ ] **2.2** `src/rules/loader.ts` — load + validate rules.json and accounts.json from data dir; hot-reload on mtime change; keep last-valid on error
+- [x] **2.2** `src/rules/loader.ts` — load + validate rules.json and accounts.json from data dir; hot-reload on mtime change; keep last-valid on error *(2026-04-22, ConfigFiles `f664d54`; validator throws `RulesValidationError` with precise doc-path strings like `rules[2].match.all[1].subject_matches` for CLI/log consumers; `getAccountTags(id)` cache rebuilt per accounts reload; smoke-tested: malformed JSON / bad regex preserve last-valid, subsequent valid writes hot-reload within one poll cycle)*
 - [ ] **2.3** `src/rules/matcher.ts` — recursive predicate eval against a message (fields: sender, subject, body, labels, source, account, account_tag)
 - [ ] **2.4** `src/rules/evaluate.ts` — walk rules, accumulate actions, resolve conflicts, return final Actions
 - [ ] **2.5** `src/cli/rules-validate.ts` — standalone CLI for Madison to invoke via `docker exec` before saving a rules edit
@@ -150,8 +150,8 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phase 1 complete; Phase 2.1 complete.** Phase 1 patched Madison's CLAUDE.md to remove stale Gmail-MCP and Proton-bridge write references (lives in the data volume; not under git). Phase 2.1 added `src/rules/types.ts` to the mailroom repo (ConfigFiles, `a5896fe`) — schema for `rules.json` + `accounts.json` plus `RuleMatchContext` and `ResolvedActions` for downstream consumers. `tsc --noEmit` clean.
+**Phases 1, 2.1, 2.2 complete.** Phase 1 patched Madison's CLAUDE.md (data volume). Phase 2.1 added `src/rules/types.ts` in mailroom (`a5896fe`). Phase 2.2 added `src/rules/loader.ts` in mailroom (`f664d54`) — JSON load + full schema validation + regex compile-check + mtime hot-reload + last-valid-on-error, API `startRulesLoader` returning `{getRules, getAccounts, getAccountTags(id), stop}`, and exported `validateRulesFile`/`validateAccountsFile` for the Phase 2.5 CLI. `tsc --noEmit` clean; smoke-tested against `dist/`.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-Next action: **Phase 2.2** — `src/rules/loader.ts` in the mailroom repo. Load + validate `rules.json` and `accounts.json`, hot-reload on mtime, keep last-valid in memory on bad edits.
+Next action: **Phase 2.3** — `src/rules/matcher.ts`. Recursive predicate evaluator against a `RuleMatchContext`, covering every leaf field + `all`/`any`/`not` combinators. Case-insensitive for sender/subject/body contains/equals; regex semantics per ECMAScript default.

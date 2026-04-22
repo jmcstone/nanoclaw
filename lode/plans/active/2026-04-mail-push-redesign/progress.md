@@ -70,8 +70,8 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 2.2** — `src/rules/loader.ts` in the mailroom repo. Load + parse rules.json + accounts.json from `~/containers/data/mailroom/` (env-overridable path), validate against the types.ts schema, compile any regex predicates eagerly so a bad regex fails the load instead of crashing matcher.ts later, watch file mtime for hot-reload. Keep last-valid in memory on any failure (parse / schema / regex compile) and log the error — never crash-loop. Surface a small API: `getRules(): RulesFile`, `getAccounts(): AccountsFile`, plus a `subscribe(cb)` for ingestor.ts to hook into.
-2. 2.3 matcher → 2.4 evaluate → 2.5 CLI validate → 2.6 unit tests → 2.7 schema.md.
+1. **Phase 2.3** — `src/rules/matcher.ts`. Pure function `matches(predicate, ctx: RuleMatchContext): boolean`. Recursive eval across all leaf fields and `all`/`any`/`not`. Case-insensitive for sender/subject/body `_contains`/`_equals` (users expect substring case-insensitivity; email addresses are case-insensitive per RFC). `_matches` uses ECMAScript regex default (case-sensitive); users can add `(?i)` inline flag via `(?i:pattern)` or the `i` flag via `/pattern/i`-like convention — decision: matcher interprets `sender_matches` strings as the regex body; no flags prefix needed. If users want case-insensitive regex, they use `(?i)...` inline modifier (supported by V8). Document this in schema.md (2.7). `has_label` reads `ctx.labels_at_ingest` not accumulator state (decisions table).
+2. 2.4 evaluate → 2.5 CLI validate → 2.6 unit tests → 2.7 schema.md.
 3. Then 3 → 9 in order; 3 (apply + events) and 4 (MCP writes) are the next heaviest.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
@@ -107,3 +107,39 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - Mailroom repo (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) is on `main`, not on a feature branch — every mailroom commit goes to ConfigFiles main. Only the lode and the nanoclaw-side subscriber/runner edits live on the `mail-push-redesign` branch.
    - Bookkeeping pattern: the cross-repo commit hash gets backfilled into the nanoclaw lode tracker so the audit trail crosses the repo boundary cleanly.
 5. **What have I done?** Created `src/rules/types.ts` (138 lines), tsc clean, committed.
+
+## 2026-04-22 — Phase 2.2: rules loader
+
+### Actions
+
+- Inspected `events/emit.ts`, `ingestor.ts`, `logger.ts`, and the `MAILROOM_DATA_DIR` env pattern used across `store/db.ts`, `gmail/poller.ts`, `proton/poller.ts`. Standardized on the same `process.env.MAILROOM_DATA_DIR ?? '/var/mailroom/data'` resolver.
+- Wrote `src/rules/loader.ts`. Public surface: `startRulesLoader({dataDir?, pollIntervalMs?})` returning `{getRules(), getAccounts(), getAccountTags(account_id), stop()}`. Also exports `validateRulesFile`, `validateAccountsFile`, `RulesValidationError` for the Phase 2.5 CLI.
+- Validation walks the entire document and throws `RulesValidationError(docPath, reason)` with paths like `rules[2].match.all[1].subject_matches`. Validates: top-level `version: 1`, every leaf predicate field, `all`/`any`/`not` combinators recursively, every action field (boolean vs. StringMatcher), source enum, account-entry shape, duplicate account ids, regex compilability via `new RegExp(s)`. Unknown fields anywhere in rules / predicates / actions / accounts are rejected (catches typos like `actoins`).
+- Hot reload via 5s mtime poll (configurable, `interval.unref()` so it doesn't pin the event loop). On parse / schema / regex failure, last-valid stays in memory and an error is logged. ENOENT for either file is treated as "empty defaults" plus a one-shot warning so first boot before files exist is not fatal.
+- `getAccountTags` lookup-cache rebuilt per accounts reload (`Map<id, tags[]>`). Returns `[]` for unknown ids — matcher.ts can call without a presence check.
+- TS strip-only mode (Node `--input-type=module` against `.ts` source) doesn't support parameter properties; refactored `RulesValidationError` to plain field assignments so the file works under any TS-strip runtime, including the CLI in Phase 2.5.
+- Smoke tests against `dist/`:
+  - Initial load with valid rules + accounts: parsed, account-tag map populated, unknown id → `[]`.
+  - Malformed JSON write: last-valid (2 rules) preserved.
+  - Bad regex write (`sender_matches: '(unclosed'`): last-valid preserved.
+  - Subsequent valid write: hot-reloaded within one poll cycle (250ms wait, 100ms poll).
+  - Direct `validateRulesFile` rejections: version mismatch, unknown rule key (`actoins`), unknown predicate field, unknown action field, non-boolean for boolean action, non-enum source value — all returned doc-pathed error messages.
+  - Edge case: empty `match: {}` accepted as a catch-all (matches every message; intentional — useful for trailing default-action rules).
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` after refactor | pass | exit 0 |
+| smoke test against `dist/rules/loader.js` | pass | 7 schema-rejection cases + 4 hot-reload cases all behaved as designed |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 2.2 done. Loader compiles and behaves correctly across malformed-edit / bad-regex / hot-reload paths.
+2. **Where am I going?** Phase 2.3 matcher → 2.4 evaluate → 2.5 CLI validate → 2.6 unit tests → 2.7 schema.md, then Phase 3+.
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling. See top-level tracker Goal.
+4. **What have I learned?**
+   - Node 22's TS strip-only mode cannot parse parameter properties (`constructor(public readonly x: T)`). For modules that may be loaded via `node --input-type=module` (the CLI in Phase 2.5 will), keep `class` fields in plain assignment form.
+   - Source-from-`.ts` execution under Node strip mode also requires `.ts` extensions in import specifiers (the codebase uses `.js` per ESM compile-target convention). So smoke testing source-files directly isn't viable here; build to `dist/` and run from there.
+   - `setInterval(...).unref()` keeps the loader from preventing process exit when the poll timer is the only remaining work.
+5. **What have I done?** `src/rules/loader.ts` (442 lines incl. validators), `tsc` clean, smoke-tested across malformed/bad-regex/recovery paths, committed `f664d54`.
