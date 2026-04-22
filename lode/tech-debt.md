@@ -63,6 +63,37 @@ If the #17 item resurfaces from memory or transcript, add it here.
 
 ---
 
+## Mailroom / Madison ecosystem
+
+### TD-MAILROOM-PREVIEW-RULE — `mcp__inbox__preview_rule` dry-run tool
+- **Repo**: `~/Projects/ConfigFiles/containers/mailroom/mailroom/`
+- **Scope**: S
+- **Trigger**: Madison or Jeff draft a rule with non-trivial matcher logic (regex, combinators, account_tag scopes) and can't easily predict what it would catch. Or a rule ships that over-matches / under-matches in production.
+- **Why deferred**: Schema validation (`mcp__inbox__validate_rules`) covers syntactic correctness. Semantic preview is pure bonus; the simple rules we've seeded so far (sender_contains) are intuitive enough to skip the dry-run.
+- **Done looks like**: `mcp__inbox__preview_rule({rule, against?: {since?, limit?, account_id?, source?}, mode?: 'this_rule_only' | 'as_appended'})` → `{messages_evaluated, matches: [{message_id, sender, subject, applied: {...}}], summary: {matched, urgent, auto_archive, top_labels}}`. Reuses `evaluateWithProvenance`; scans recent messages from the store. `labels_at_ingest` left as `[]` in v1 (we don't preserve historical ingest-time labels).
+
+### TD-MAILROOM-SEND-LOG-TOOL — `mcp__inbox__send_log` read tool
+- **Repo**: `~/Projects/ConfigFiles/containers/mailroom/mailroom/`
+- **Scope**: S
+- **Trigger**: Jeff asks Madison "what have you been sending from me lately?" and she has to say "I can't see that from my sandbox." Or any incident review where the audit trail needs to flow through Madison's conversational surface.
+- **Why deferred**: The file is append-only, Jeff can `tail ~/containers/data/mailroom/send-log.jsonl` himself; no urgency.
+- **Done looks like**: `mcp__inbox__send_log({limit?: N, since?: ISO, from_account?})` → `{entries: [...]}` reading from `/var/mailroom/data/send-log.jsonl` with optional filters.
+
+### TD-MAILROOM-BACKFILL-RULES — Apply rules over historical store
+- **Repo**: `~/Projects/ConfigFiles/containers/mailroom/mailroom/`
+- **Scope**: M
+- **Trigger**: A rule lands that would have mattered retroactively (Jeff wants all historical Flex rent emails labeled), or a one-shot audit needs historical classification.
+- **Why deferred**: Forward-only classification is sufficient for the redesign's goal (spawn-rate reduction). Retro-labeling is nice-to-have.
+- **Done looks like**: CLI in the mailroom container that walks `store.db`, runs each message through evaluate, and applies actions via the same apply layer. Dry-run flag that just reports matches.
+
+### TD-MAILROOM-CHANGELOG-ENFORCEMENT — Decide: mandatory vs best-effort
+- **Repo**: Madison's CLAUDE.md at `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`
+- **Scope**: S
+- **Trigger**: Madison skipped a changelog append for her first real rule (Flex). Observe a few more edits — if she keeps skipping, audit trail degrades.
+- **Why deferred**: Observe real usage a few days before tightening the prompt or relaxing the workflow.
+- **Done looks like**: Either the CLAUDE.md "Mail rules maintenance" section says "changelog append is mandatory, never commit a rule edit without it" OR the section is softened with explicit guidance on what "non-trivial" means.
+
 ## Related
 
-- [plans/active/2026-04-trawl-mcp-integration/tracker.md](plans/active/2026-04-trawl-mcp-integration/tracker.md) — the plan that produced these deferrals
+- [plans/active/2026-04-trawl-mcp-integration/tracker.md](plans/active/2026-04-trawl-mcp-integration/tracker.md) — the plan that produced the Trawl deferrals
+- [plans/active/2026-04-mail-push-redesign/tracker.md](plans/active/2026-04-mail-push-redesign/tracker.md) — the plan that produced the Mailroom/Madison deferrals

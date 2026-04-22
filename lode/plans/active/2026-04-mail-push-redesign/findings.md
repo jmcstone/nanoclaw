@@ -114,6 +114,20 @@ Madison interacts with untrusted email content. Prompt-injection risk is real. R
 - Madison's current scheduled tasks: `~/containers/data/NanoClaw/data/ipc/telegram_inbox/current_tasks.json`
 - Proton Bridge multi-user docs (for future multi-bridge expansion): https://proton.me/support/protonmail-bridge-configure-client
 
+## Mid-Phase-9 deployment lessons (2026-04-22 evening)
+
+Surfaced during the actual rebuild + restart + first-real-edit sequence. Captured here AND in the relevant `lode/infrastructure/*.md` files.
+
+- **`dcc` / docker-compose mount paths follow CWD's symlink chain, not realpath.** `~/containers/mailroom` is a symlink into `~/Projects/ConfigFiles/containers/mailroom/mailroom/`. Running `dcc` from the realpath makes `../data/mailroom` resolve to the wrong place; Docker silently auto-creates an empty data dir as root. Always run `dcc` from `~/containers/mailroom`. Captured in `lode/infrastructure/mailroom-rules.md` "Operational gotcha" section.
+- **Stdin-attached agent containers DIE on parent restart, contrary to the `GroupQueue.shutdown` "detach not kill" comment.** When nanoclaw exits, the docker-run child's stdin closes, the container exits, and `--rm` cleans up. So a `systemctl --user restart nanoclaw` ends Madison's session immediately. Captured in `lode/infrastructure/madison-pipeline.md`.
+- **Obsidian Sync doesn't transport symlink targets.** Symlinks in the vault (target = host absolute path like `/home/jeff/...`) get sync'd as symlink metadata only; on iPad/iOS the path doesn't resolve. Real bytes in the vault are required for cross-device editing. Drove the `_Settings/` migration.
+- **Per-file bind mounts pin an inode at mount time and silently go stale on atomic-rename writes.** Claude Code's `Edit` tool, vim's `:wq`, etc. all rename-over the target path. Container keeps seeing the old inode. Use directory mounts instead — they re-resolve names per-syscall. Drove the `MAILROOM_CONFIG_DIR` redesign.
+- **Madison's sandbox has no docker socket** (correct privilege boundary), so any `docker exec ...` instruction in her CLAUDE.md is unreachable. Three references existed pre-fix:
+  - `docker exec ... rules-validate.js` → fixed by adding `mcp__inbox__validate_rules`
+  - `docker exec ... cat schema.md` → reworded; the in-CLAUDE.md schema digest covers common cases, validate_rules iteration covers the rest
+  - `docker exec ... tail send-log.jsonl` → flagged as a future tool (`mcp__inbox__send_log`); for now, "ask Jeff to grep the file" is the workaround
+- **The `_Settings/` pattern transfers.** `~/Documents/Obsidian/Main/<Group>/_Settings/` is the conventional home for backend-readable config that should also Obsidian-sync. Other groups (AlgoTrader, AVP) can adopt the same pattern when they need similar config files.
+
 ## Graduation pointers
 
 Graduated 2026-04-22 (pre-Phase-9 verification so the permanent docs are ready when verification completes):

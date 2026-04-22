@@ -154,10 +154,15 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phases 1–8 complete.** End-to-end: rules engine, ingest-time classification, four MCP write tools, subscriber transition, Madison's container mount, seeded rules.json/accounts.json/changelog, Madison's rewritten CLAUDE.md, Obsidian symlinks, retired the two obsolete scheduled tasks + the auto-labeler script. 303/303 nanoclaw tests + 81/81 mailroom tests passing.
+**Phases 1–8 complete; Phase 9 partially done.** End-to-end pipeline live; mid-deploy fixes layered in. Containers rebuilt + restarted; Madison successfully created her first rule (Flex → Family + Finances + auto_archive) end-to-end. 303/303 nanoclaw tests + 81/81 mailroom tests passing.
+
+**Mid-Phase-9 fixes shipped:**
+- Symlinks → real Obsidian files at `_Settings/`: discovered Obsidian Sync doesn't transport symlink targets to mobile; moved rules.json + accounts.json + rules-changelog.md to `~/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/` as real bytes. Reverted Phase-5.4 mailroom mount on Madison (was exposing gmail-mcp creds). nanoclaw `304292f`, ConfigFiles `2f0f513`.
+- `MAILROOM_CONFIG_DIR` + dir mount: per-file bind mounts went stale on Madison's atomic-rename `Edit`. Switched mailroom to a whole-dir mount of `_Settings/` at `/var/mailroom/config`; loader reads from `${MAILROOM_CONFIG_DIR:-/var/mailroom/config}` with `MAILROOM_DATA_DIR` legacy fallback. ConfigFiles `05961ca`, lode `732d112`.
+- `mcp__inbox__validate_rules` tool: Madison's container has no docker socket, so the `docker exec ... rules-validate.js` instruction in CLAUDE.md was unreachable. New MCP tool exposes the same code path. Validates live or draft strings; returns `{ok, rule_count, account_count, doc_path on errors}`. ConfigFiles `999b23c`.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
 **Safe to restart now.** The nanoclaw binary picks up Phase 5 + the container-runner mount on the next process restart (systemd/launchd). The mailroom `ingestor` + `inbox-mcp` containers need `./container/build.sh` + restart to pick up Phases 3 + 4 — and when they do, they'll find `rules.json` + `accounts.json` waiting in the data volume. Madison's CLAUDE.md is loaded fresh on every Madison spawn, so her new prompt is already live. The retired scheduled tasks are gone from the live DB; the running scheduler queries live each tick so won't fire them.
 
-Next action: **Phase 9** — verify end-to-end. Rebuild both mailroom containers, restart nanoclaw, send a test DocuSign + a test routine email, measure spawn reduction over 24h, graduate durable findings to `lode/architecture/` and move this plan to `lode/plans/complete/`.
+Next action: **finish Phase 9.** Done so far: containers rebuilt + restarted (twice — once for the original Phase-3+4 deploy, once for the per-file→dir-mount fix); Madison's first rule edit (`family-flex-rent`) successfully ran end-to-end; mailroom hot-reload verified via `touch`; lode infra docs graduated. Still pending: (a) Madison didn't append a changelog entry for the Flex rule — workflow tightening needed or accept casual edits; (b) measure 24h spawn-rate reduction vs ~180/day baseline once enough mail has flowed; (c) move plan from `active/` to `complete/` after the spawn-rate measurement validates the goal.

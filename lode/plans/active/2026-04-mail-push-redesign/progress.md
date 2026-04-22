@@ -394,3 +394,58 @@ CLAUDE.md grew 291 → 355 lines (+64 net: dropped Phase-1 callout, added "How m
    - **Direct SQLite writes against a running app are safe under WAL mode** — better-sqlite3 + WAL handles single-writer + concurrent readers cleanly. Only acceptable when the action is in-scope of what the user asked for and recoverable. Always dump rows to a backup file first via `sqlite3 -mode json` (one-shot recovery target).
    - **QCM poller decision was a topology question, not a spawn-count question.** The 3-min poll fires a Bash check that gates further work; almost zero spawn cost. The interesting question was "where do QCM alerts surface" (telegram_main vs telegram_inbox) — that's a Jeff-judgment call I should not unilaterally make.
 5. **What have I done?** Two backups in `archive/` (script + retired-tasks JSON). DB DELETE of 2 task rows. Live script deleted. CLAUDE.md "are being retired" → past-tense + scheduled-tasks roster trimmed. No git commits for these (data volume + live DB); lode bookkeeping commit follows.
+
+## 2026-04-22 evening — Phase 9 deploy + mid-deploy fixes
+
+### Actions
+
+- **QCM poller retired** (Jeff confirmed Euclid's source system pushes to Telegram directly; the 3-min email-side poller was redundancy on top of redundancy). DB DELETE + row backup + stripped `qcm_alert: true` from rules.json + changelog appended + CLAUDE.md flipped past-tense. Lode `53481b2`.
+- **Lode graduation** (pre-Phase-9): wrote `lode/infrastructure/mailroom-rules.md`, `lode/infrastructure/madison-pipeline.md`, `lode/reference/rules-schema.md`. Updated `lode-map.md` + `summary.md`. Replaced findings.md "to create" pointers with where-it-landed links. Lode `3220f9e`.
+- **Container rebuild + restart sequence (attempt 1):**
+  - `dcc build` + `dcc down` + `dcc up` from `~/Projects/ConfigFiles/containers/mailroom/mailroom/` — wrong cwd; mounted bogus auto-created `data/mailroom/` dir; logs showed "rules.json missing".
+  - Recovered by running from `~/containers/mailroom` (the symlink). Real data mounted; 28 rules + 6 accounts loaded; `inbox-mcp` healthy.
+  - Restarted nanoclaw via `systemctl --user restart nanoclaw`. Old Madison container died with stdin-attached parent (contrary to the GroupQueue "detach not kill" comment).
+  - Lode lessons committed `095d724` (mount-CWD-symlink, stdin-attached-die-with-parent).
+- **Symlink → real-file Obsidian migration** (Jeff feedback: Obsidian Sync doesn't transport symlink targets to mobile). Moved rules.json + accounts.json + rules-changelog.md from `~/containers/data/mailroom/` to `~/Documents/Obsidian/Main/NanoClaw/Inbox/_Settings/` as real bytes. Reverted Phase-5.4 mailroom mount on Madison (was exposing gmail-mcp/store.db). docker-compose.yml first attempt: per-file bind mounts overlaying `_Settings/{rules,accounts}.json` into `/var/mailroom/data/`. Rebuilt + restarted. nanoclaw `304292f`, ConfigFiles `2f0f513`.
+- **Madison's first rule edit hit the per-file inode trap.** She added `family-flex-rent` (getflex.com → Family + Finances + auto_archive); host file = 29 rules, but mailroom container kept seeing 28. Stat confirmed inode mismatch — Claude Code's `Edit` tool atomic-renames, breaking the per-file mount.
+- **`MAILROOM_CONFIG_DIR` redesign:** dropped per-file overlays, added a whole-`_Settings/` dir mount at `/var/mailroom/config`. Loader + CLI + tests updated. ConfigFiles `05961ca`. Lode `732d112`. Verified: 29 rules visible from inside both containers; `touch` triggers a `rules.json loaded` log within 5s.
+- **Madison referenced "docker validation isn't reachable from the sandbox"** — confirmed her container has no docker socket (correct privilege boundary). Three `docker exec` references in her CLAUDE.md were unreachable. Added `mcp__inbox__validate_rules` tool: validates live files OR draft strings (rules_content / accounts_content args), returns same `{ok, rule_count, doc_path on errors}` shape as the CLI. Wired into MCP server, registered as a write-tool. Verified by direct invocation inside the rebuilt MCP container — returns `ok: true, rule_count: 29`. CLAUDE.md `docker exec ... rules-validate` references replaced; the other two `docker exec` references (send-log + schema.md) reworded honestly. ConfigFiles `999b23c`.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` (mailroom) | pass | clean after every refactor |
+| `npm test` (vitest) | pass | 81/81 mailroom; 303/303 nanoclaw — both held steady |
+| `mcp__inbox__validate_rules` direct call | pass | `{ok:true, rule_count:29, account_count:6}` |
+| Hot-reload via `touch` | pass | `rules.json loaded` log within 5s |
+| Madison's first rule landed on disk | pass | 29 rules; mailroom sees them post-config-dir-fix |
+| Containers rebuilt + restarted | pass | both ingestor + inbox-mcp healthy from symlinked-cwd dcc up |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phases 1–8 fully complete; Phase 9 is partially done. The pipeline is live: mailroom rebuilt, nanoclaw restarted, Madison can edit rules.json end-to-end (validated via the new `mcp__inbox__validate_rules` MCP tool, hot-reload works via dir-mount of `_Settings/` from Obsidian).
+2. **Where am I going?** Three things left for Phase 9 to graduate:
+   (a) Tighten Madison's CLAUDE.md to make changelog appends mandatory (she skipped one for the Flex rule). Or accept casual edits and rewrite the workflow as "best effort" — Jeff's call.
+   (b) Measure 24h spawn count vs the historical ~180/day baseline once enough mail flows.
+   (c) Move plan from `lode/plans/active/2026-04-mail-push-redesign/` to `lode/plans/complete/`.
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling. Sub-minute urgent surface latency. ~5–10x reduction in Madison spawn count. Inbound to Madison is now event-driven (urgent/routine/silent at ingest), Madison can read + write + label + archive + reply + send + edit-rules, all without polling.
+4. **What have I learned?**
+   - Five mid-deploy lessons captured in `findings.md` "Mid-Phase-9 deployment lessons" + relevant infrastructure docs: dcc-cwd-symlink-resolution, stdin-attached-die-with-parent, Obsidian-sync-doesn't-transport-symlinks, per-file-bind-mount-inode-trap, no-docker-socket-in-Madison's-sandbox.
+   - The `_Settings/` pattern is the right home for backend-readable config that should sync via Obsidian. Documented as a transferable pattern in `lode/infrastructure/mailroom-rules.md`.
+   - `MAILROOM_CONFIG_DIR` cleanly separates source-of-truth config (Obsidian, rare edits, schema-validated) from runtime data (`MAILROOM_DATA_DIR`: store.db, ipc-out, send-log, gmail creds).
+5. **What have I done?** 18 commits across nanoclaw `mail-push-redesign` branch + ConfigFiles main. Roughly:
+   - nanoclaw branch (10 commits): `923ba1e` (Phase 1) through `732d112` (mid-Phase-9 lode lesson).
+   - ConfigFiles main (8 commits): `a5896fe` (Phase 2.1 types) through `999b23c` (validate_rules tool).
+   - Plus three lode infrastructure files graduated, Madison's CLAUDE.md fully rewritten + corrected mid-deploy, mailroom containers rebuilt twice, nanoclaw restarted twice, all tests passing.
+
+## Next steps (to resume)
+
+1. **Pick up Phase 9 final steps:**
+   - Decide on changelog-append-mandatory vs best-effort in Madison's CLAUDE.md "Mail rules maintenance" section (or just leave it and trust her judgment).
+   - Sample mailroom-ingestor logs after 24h of real mail to count `inbox:urgent` + `inbox:routine` + silent events — compare to ~180/day baseline.
+   - When the spawn-rate measurement validates the goal, move the plan to `lode/plans/complete/`.
+2. **Optional follow-ups (filed in `lode/tech-debt.md`):**
+   - `mcp__inbox__preview_rule` — dry-run a rule against recent messages to see what it would catch (Jeff suggested; deferred this session).
+   - `mcp__inbox__send_log` — let Madison read send-log.jsonl from her sandbox without docker exec.
+   - Backfill rule application — replay rules over the historical store to retroactively label.
