@@ -138,8 +138,25 @@ Cursor race note from the Gmail agent's port: both backfills write the same `bac
 Landed on `unified-inbox`, hash pending commit. Implemented inline (4 small edits across 3 files + 1 new file). 394/394 tests pass; agent container rebuilt; nanoclaw service restarted; end-to-end verified (subscriber dispatched 9 queued events + spawned Madison's container on the `mailroom_shared` network).
 
 - [x] **M4.1** `src/channels/mailroom-subscriber.ts` — Channel implementation watching `~/containers/data/mailroom/ipc-out/` via `setTimeout` polling (1000ms; matches the existing `src/ipc.ts` pattern, avoids adding chokidar dep). On each `inbox-new-*.json`: reads, validates shape, dispatches to the email target group via `findEmailTargetJid` + `opts.onMessage`, unlinks the file. Bad events move to `../ipc-errors/` to avoid retry loops. Dispatched content is a `[Gmail|Proton email from …]` block with sender + subject + body_preview, closing with a pointer to `mcp__inbox__search|thread|recent`. `ownsJid` returns false (it's a feeder, not an outbound channel); `sendMessage` throws. Registered via `registerChannel('mailroom-subscriber', …)`, imported from `src/channels/index.ts`.
-- [x] **M4.2** `src/container-runner.ts` — gates `args.push('--network', 'mailroom_shared')` on `group.folder === EMAIL_TARGET_FOLDER`, placed immediately after `hostGatewayArgs()`. Default bridge → user-defined `mailroom_shared` is a safe swap because (a) `--add-host=host.docker.internal:host-gateway` is orthogonal to network driver, so the credential proxy + ollama + host.docker.internal all keep working, and (b) user-defined bridges forward non-container DNS queries to host DNS exactly like the default bridge.
-- [x] **M4.3** `container/agent-runner/src/index.ts` — two changes: (i) `hasInbox` sentinel switched from `fs.existsSync('/workspace/inbox/store.db')` to `containerInput.groupFolder === 'telegram_inbox'` (the bind mount is vestigial until M5 removes it, but we stop gating on it now); (ii) inbox MCP registration swapped from `{command: 'node', args: ['/opt/inbox-mcp/dist/index.js'], env: {INBOX_DB_PATH, INBOX_DB_KEY}}` to `{type: 'http', url: 'http://inbox-mcp:8080/mcp'}` (same shape trawl uses).
+- [x] **M4.2** ~~`src/container-runner.ts` — gates `args.push('--network', 'mailroom_shared')` on `group.folder === EMAIL_TARGET_FOLDER`~~ **Reverted 2026-04-21** (see M4+ post-mortem below). The mailroom_shared bridge can't reach the host's credential proxy on this machine (nftables block), and `docker run` rejects mixing a user-defined bridge with the default bridge. Madison now stays on default bridge; inbox-mcp is published on `172.31.0.1:18080` (default-bridge gateway only) for reach from her container via `host.docker.internal:18080`.
+- [x] **M4.3** `container/agent-runner/src/index.ts` — two changes: (i) `hasInbox` sentinel switched from `fs.existsSync('/workspace/inbox/store.db')` to `containerInput.groupFolder === 'telegram_inbox'` (the bind mount is vestigial until M5 removes it, but we stop gating on it now); (ii) inbox MCP registration swapped from stdio subprocess to HTTP. Final URL (post-M4+ correction): `http://host.docker.internal:18080/mcp` (was briefly `http://inbox-mcp:8080/mcp` under the reverted mailroom_shared scheme).
+
+### Phase M4+ — Network-path correction (2026-04-21 post-restart)
+
+**Symptom discovered post-M5:** Madison's container timed out on first Claude API call every invocation (32 consecutive failures, ~5min each). Other groups (main, trading) were healthy.
+
+**Root cause:** The M4.2 assumption that "`--add-host=host.docker.internal:host-gateway` is orthogonal to network driver" was **wrong on this host**. From a container on `mailroom_shared` (192.168.128.0/20), TCP to the host's `:3002` credential proxy hangs indefinitely — nftables (or Docker's bridge isolation) blocks cross-bridge → host-service traffic. Default bridge (172.31.0.0/16) reaches the same port in 43ms.
+
+**Fix applied:** Revert M4.2's `--network mailroom_shared` swap. Publish `inbox-mcp` at `172.31.0.1:18080` (Docker default-bridge gateway, loopback-equivalent scope for default-bridge containers only — not LAN, not Tailnet, not host loopback, not other bridges). Madison reaches it via `host.docker.internal:18080`. Same pattern as the credential proxy + ollama, minus the `0.0.0.0` broadness.
+
+**Files touched (revert):**
+- `~/containers/mailroom/docker-compose.yml` — added `ports: ["172.31.0.1:18080:8080"]` to inbox-mcp.
+- `src/container-runner.ts` — removed the `if (group.folder === EMAIL_TARGET_FOLDER) args.push('--network', 'mailroom_shared')` block; dropped unused `EMAIL_TARGET_FOLDER` import.
+- `container/agent-runner/src/index.ts` — URL now `http://host.docker.internal:18080/mcp`.
+- `src/container-runner.test.ts` — removed the three-case `mailroom_shared network gating` describe block (tested behavior no longer exists).
+- Agent container rebuilt; nanoclaw restarted 19:39 CDT.
+
+**Decision added:** Default-bridge gateway bind (172.31.0.1:N:8080) is the new pattern for mailroom → nanoclaw HTTP reach. Tightest scope available without architectural rework. If a future host exhibits the same nftables block on default bridge (it shouldn't — Docker's default bridge gets auto-generated FORWARD rules), we'd need to containerize the credential proxy and put everything on one user-defined bridge.
 - [x] **M4.4** Audit of Madison's `/home/jeff/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`: tool surface is already `mcp__inbox__{search,thread,recent}` — identical across stdio and HTTP backends. **No change required** — the tool names are preserved; only the transport changed underneath her.
 
 ### End-to-end verification
@@ -180,9 +197,16 @@ Landed on `unified-inbox` as commit `87e658b` (2026-04-21). 7,153 lines deleted,
 
 ### Phase M6 — Bridge hardening
 
-- [ ] **M6.1** Verify no host process still reaches `protonmail-bridge` at `127.0.0.1:1143`. `ss -tnp | grep 1143` should show only docker-proxy.
-- [ ] **M6.2** Edit `~/containers/protonmail/docker-compose.yml`: change `ports: ["1143:143/tcp", "1025:25/tcp"]` → `ports: ["127.0.0.1:1143:143/tcp", "127.0.0.1:1025:25/tcp"]`. `dcc up protonmail` to apply. Intermediate step — keeps loopback available in case of surprise host consumers.
-- [ ] **M6.3** After 24h of stable operation with loopback binding, drop the `ports:` stanza entirely. Bridge is now reachable ONLY via `protonmail_default` Docker network. `dcc up protonmail` to apply.
+- [x] **M6.1** `ss -tnp` shows zero established host→bridge connections on 1143. Listener was `0.0.0.0:1143` (docker-proxy only, no non-docker consumer). Cutover in M5 fully detached nanoclaw from the loopback bridge port; no surprise host consumers found. (2026-04-21)
+- [x] **M6.2** Edited `~/containers/protonmail/docker-compose.yml` — both ports now bound to `127.0.0.1`. Applied via `docker compose up -d` directly (bridge is non-stow; `dcc up protonmail` can't resolve it via the stow lookup). Container recreated cleanly; mailroom ingestor kept running (restart count 0), continued ingesting through the bridge restart via `protonmail-bridge:143` service DNS on `protonmail_default`. 24h soak started 2026-04-21. (2026-04-21)
+- [ ] **M6.3** After 24h of stable loopback operation (earliest 2026-04-22), drop the `ports:` stanza entirely. Bridge then reachable ONLY via `protonmail_default` Docker network. Apply via `docker compose up -d` from `~/containers/protonmail/`.
+
+### Side cleanup during M6 (2026-04-21)
+
+Two pre-M5 residues surfaced during pre-M6 Lode-vs-code audit and were cleaned up alongside M6.1/M6.2:
+
+- **`container/inbox-mcp/` directory removed** — M5.4 deleted the source files but left `dist/` + `node_modules/` on disk (untracked, harmless, but cruft). `rm -rf` cleared it.
+- **`.env` ASSISTANT_NAME / INBOX_DB_KEY concatenation fixed** — the pre-existing quoted-value parser bug flagged in M4/M5 had left `ASSISTANT_NAME="Madison"INBOX_DB_KEY=<hex>` as one malformed line. M5.7 had archived the key to `.archived-key` but the stray hex stayed embedded in ASSISTANT_NAME's value. Fixed by dropping the trailing `INBOX_DB_KEY=<hex>` from that line; ASSISTANT_NAME is now cleanly `"Madison"`. Key remains archived for historical recovery. This also resolves the startup-log artifact (`@"Madison"INBOX_DB_KEY=<hex>`) for free.
 
 ### Phase M7 — Lode graduation
 
@@ -215,7 +239,7 @@ Landed on `unified-inbox` as commit `87e658b` (2026-04-21). 7,153 lines deleted,
 
 ## Current status
 
-**Phases M0 + M1 + M2 + M3 + M4 + M5 complete.** Mailroom is the sole source of truth for inbox email. Nanoclaw is lean: router + orchestrator + chat channels + mailroom-subscriber. No more duplicate Gmail race, no more ENOTFOUND, no more vendored inbox-store/queries code. Agent container slimmer (inbox-mcp COPY+RUN stanza removed). Deps down by 7 npm packages.
+**Phases M0–M5 complete; M6.1+M6.2 complete; M6.3 in 24h soak (earliest 2026-04-22).** Mailroom is the sole source of truth for inbox email. Nanoclaw is lean: router + orchestrator + chat channels + mailroom-subscriber. No more duplicate Gmail race, no more ENOTFOUND, no more vendored inbox-store/queries code. Agent container slimmer (inbox-mcp COPY+RUN stanza removed). Deps down by 7 npm packages. Protonmail bridge now publishes to loopback only (`127.0.0.1:1143 / 1025`); host-external reach eliminated.
 
 End-to-end flow (live on jarvis):
 

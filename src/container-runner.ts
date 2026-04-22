@@ -28,7 +28,6 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
-import { EMAIL_TARGET_FOLDER } from './inbox-routing.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -264,18 +263,15 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Runtime-specific args for host gateway resolution
+  // Runtime-specific args for host gateway resolution. Every group
+  // (including telegram_inbox) stays on the default Docker bridge so it
+  // can reach host services via host.docker.internal — credential proxy
+  // on :3002, ollama on :11434, mailroom inbox-mcp on :8080. We tried
+  // attaching telegram_inbox to mailroom_shared directly (M4.2, reverted
+  // 2026-04-21): user-defined bridges can't reach the host's :3002 on
+  // this machine (nftables block), and `docker run` rejects mixing a
+  // user-defined bridge with the default bridge.
   args.push(...hostGatewayArgs());
-
-  // Inbox-group only: attach to mailroom_shared so the container can reach
-  // the mailroom inbox-mcp service via Docker service DNS
-  // (http://inbox-mcp:8080/mcp). Docker run accepts only one --network;
-  // switching from the default bridge to mailroom_shared is safe because
-  // --add-host=host.docker.internal:host-gateway is orthogonal and keeps
-  // host.docker.internal resolving (used by the credential proxy + ollama).
-  if (group.folder === EMAIL_TARGET_FOLDER) {
-    args.push('--network', 'mailroom_shared');
-  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),

@@ -667,10 +667,10 @@ async function runQuery(
   const hasContextMode = fs.existsSync('/workspace/extra/context-mode');
   log(`context-mode: ${hasContextMode ? 'enabled' : 'disabled'}`);
   // Inbox MCP is enabled only for Madison Inbox (telegram_inbox). The
-  // mailroom stack exposes its MCP server over Streamable HTTP on the
-  // mailroom_shared Docker network at http://inbox-mcp:8080/mcp.
-  // Container-runner attaches this group to mailroom_shared (see
-  // src/container-runner.ts) so service-name DNS resolves.
+  // mailroom stack publishes its MCP server on the host at
+  // 127.0.0.1:18080 (loopback-only; host 8080 is taken by registry-ui),
+  // reachable from this container on the default Docker bridge via
+  // host.docker.internal.
   const hasInbox = containerInput.groupFolder === 'telegram_inbox';
   log(`inbox MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
 
@@ -714,7 +714,7 @@ async function runQuery(
   if (hasInbox) {
     mcpServers['inbox'] = {
       type: 'http',
-      url: 'http://inbox-mcp:8080/mcp',
+      url: 'http://host.docker.internal:18080/mcp',
     };
   }
 
