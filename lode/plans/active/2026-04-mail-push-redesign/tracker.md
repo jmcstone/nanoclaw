@@ -79,7 +79,7 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 ## Phases
 
 ### Phase 1 — Pre-work
-- [ ] **1.1** Patch Madison's CLAUDE.md to remove stale `mcp__gmail__*` and direct-Proton-IMAP references (lines 41, 274, any others). Add a `## Current Limitation` note that email writes are not yet available pending Phase 4. Single small commit on this branch. This prevents silent tool_use_error failures during the build period.
+- [x] **1.1** Patch Madison's CLAUDE.md to remove stale `mcp__gmail__*` and direct-Proton-IMAP references (lines 41, 274, any others). Add a `## Current Limitation` note that email writes are not yet available pending Phase 4. Single small commit on this branch. This prevents silent tool_use_error failures during the build period. *(2026-04-22 — file lives in data volume, not under git; live on disk. Lode bookkeeping in commit pending.)*
 
 ### Phase 2 — Rule engine (read + evaluate)
 - [ ] **2.1** `src/rules/types.ts` — `Rule`, `Predicate`, `Actions`, `AccountEntry`, `AccountsFile`, `RulesFile` types
@@ -150,8 +150,8 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Design complete, implementation not started.** All decisions locked during the 2026-04-21→22 design session; this tracker captures the agreed design. See `findings.md` for diagnostic context on why this redesign is needed (DocuSign miss investigation, auto-labeler ephemerality, Madison CLAUDE.md staleness from M5/M6.2).
+**Phase 1 complete.** Madison's CLAUDE.md patched (2026-04-22): inserted a top-of-file `## Current limitation` callout, neutralized the "Actions" subsection under *Inboxes to sweep*, and rewrote the Tools-list "Email actions" line. All three call out the M5/M6.2 cause and point at the future `mcp__inbox__*` write surface (Phase 4). The auto-labeler scheduled-task line is left intact for Phase 8 to retire.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-Next action: **Phase 1.1** — patch Madison's stale CLAUDE.md to stop pretending to have Gmail write tools.
+Next action: **Phase 2.1** — start the rule engine in the mailroom container repo (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) with `src/rules/types.ts`. Phase 2 lives outside this repo; only lode bookkeeping commits land here for it.
