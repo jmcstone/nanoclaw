@@ -70,14 +70,12 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 4** — MCP write tools. Four tools on the existing HTTP MCP server at `http://host.docker.internal:18080/mcp`:
-   - `mcp__inbox__apply_action(message_id, actions)` — reuses the rule-engine apply layer. Needs a Message-ID → UID lookup for Proton (can't reuse poller's UID for out-of-band calls).
-   - `mcp__inbox__delete(message_id)` — Gmail `messages.trash` or Proton IMAP MOVE to Trash.
-   - `mcp__inbox__send_reply(thread_id, body_markdown, options?)` — fetches thread headers from the store for In-Reply-To/References auto-fill; Gmail API send for Gmail threads, Proton SMTP via bridge for Proton threads.
-   - `mcp__inbox__send_message(from_account, to, subject, body_markdown)` — new outbound; validates `from_account` against accounts.json; routes by source.
-2. Plus `src/mcp/send-log.ts` — append-per-send JSONL with 20/hour per-from-account rate check; explicit error return above limit.
-3. Phase 5 subscriber update on nanoclaw side (the REAL one — can hold the mailroom container restart until this is in).
-4. Phases 6–9 after that.
+1. **Phase 5** — nanoclaw subscriber event-type branch + the Madison RW mount:
+   - `src/channels/mailroom-subscriber.ts` — read the event's `type` field; route by it. Currently the subscriber globs `inbox-new-*.json`; change to `inbox-urgent-*.json` + `inbox-routine-*.json`. Urgent events call the group-queue with a priority flag; routine events batch as today.
+   - `src/group-queue.ts` (or equivalent) — add a `priority: 'urgent'` parameter to the onMessage path that bypasses the N-message batch threshold, immediately spawning Madison.
+   - `src/container-runner.ts` — add `~/containers/data/mailroom → /workspace/extra/mailroom` RW mount gated on `folder === EMAIL_TARGET_FOLDER` from `src/inbox-routing.ts`.
+   - Stub-file tests: spawn a temp ipc-out dir, write `inbox-urgent-*.json`, verify immediate dispatch; write 4 × `inbox-routine-*.json`, verify batching; write 5th, verify batch triggers.
+2. Phases 6–9 after that: initial rules.json + accounts.json, Madison CLAUDE.md rewrite + symlink, retire legacy, verify + graduate.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
 
@@ -220,3 +218,45 @@ The decisions table in `tracker.md` is the implementation contract. If a decisio
    - Proton bridge supports multiple IMAP sessions per account — the existing poller holds an INBOX lock on its connection but apply can either reuse that connection (since we're inside the poller iteration) or open another session without contention. We picked reuse for simplicity at ingest time.
    - The Proton `remove_label` operation (delete from `Labels/<name>` folder) is awkward to do at ingest time because it requires a lock switch to the destination folder. Recorded as a known gap in `apply/proton.ts` for a Phase-4-or-later follow-up; for now the intent is reported but not applied.
 5. **What have I done?** Phase 3 body in commit `a493fcb` (12 files, +1251/-64). Plus the design-fix prereq `8b21b87` (5 files, +142/-114). 64 tests across 4 files passing.
+
+## 2026-04-22 — Phase 4: MCP write surface
+
+### Actions
+
+- **4a** (`dfbe804`, 9 files, +789 lines) — apply_action + delete + send-log foundation + DI refactor.
+  - `src/mcp/server.ts` refactored to accept `InboxMcpDeps = { rulesLoader, gmail?, gmailAccountEmail?, protonConfig? }`. Write tools registered conditionally; per-tool guards return clean errors when a needed dep is missing (e.g. Gmail tool against a Proton-only deploy).
+  - `src/mcp-server.ts` builds deps at startup: loads rules, best-effort Gmail client, best-effort Proton config. Same dep handles passed to every per-session `createInboxMcpServer` call.
+  - `src/mcp/tools/apply_action.ts` — validates actions via `validateActions` (re-exported from loader.ts) + runs them through `evaluate()` with a single synthetic rule so the MCP path gets the same conflict-resolution and label-set-normalization as ingest. Dispatches via `applyActions` with a discriminated `ApplyContext`. For Proton, opens an ephemeral IMAP session and searches INBOX → Archive for the message by RFC 5322 Message-ID.
+  - `src/mcp/tools/delete.ts` — Gmail `messages.trash` or Proton IMAP MOVE to Trash. Soft-delete only (locked decision).
+  - `src/mcp/proton-client.ts` — `openProtonClient(address, password)` + `findMessageByMessageId(client, rfc5322Id)`. v1 searches INBOX → Archive; Labels/* and Trash are a follow-up.
+  - `src/mcp/send-log.ts` — append-per-send JSONL at `${MAILROOM_SEND_LOG_PATH:-…/send-log.jsonl}` + per-from-account rolling-hour rate limiter (default 20, configurable via `MAILROOM_SEND_RATE_PER_HOUR`). Hydrates from disk on first check so the limit survives MCP restarts.
+  - `src/store/queries.ts` — `getMessageById(message_id)` + `getSenderEmailById(sender_id)` helpers (later 4b commit adds getSenderEmailById).
+  - `docker-compose.yml` — inbox-mcp service switched data mount to RW (send-log writes), added Gmail OAuth RW mount (token refresh), added PROTONMAIL_* envs, attached `protonmail` external network. Kept `MAILROOM_DB_READONLY=true` so MCP can't corrupt the ingestor's store writes — belt-and-suspenders.
+- **4b** (`e5ff729`, 8 files, +866 lines) — send_message + send_reply + nodemailer transport + tests.
+  - `src/mcp/sender.ts` — owns RFC 5322 assembly via nodemailer (built to a Buffer when targeting Gmail's raw API; streamed directly to the bridge SMTP transport for Proton). Rate-limit check + send-log record happen here (single place, regardless of which tool originates the call).
+  - `src/mcp/tools/send_message.ts` — fresh outbound; accepts single-string or array `to`/`cc`/`bcc`; fail-fast on empty to-list; validates `from_account` against `accounts.json`.
+  - `src/mcp/tools/send_reply.ts` — pulls thread via `getThread`, picks the latest message's sender (resolved via `getSenderEmailById`) as To:, its receiving account as From:, `"Re: <subject>"` without double-Re, `In-Reply-To: <last.source_message_id>` wrapped, `References: [last.source_id]` (v1 doesn't store full chain; mail clients are forgiving).
+  - Gmail transport: `users.messages.send` with base64url raw bytes; passes `threadId` (stripped of the `gmail:` prefix) so Gmail threads correctly.
+  - Proton transport: nodemailer SMTP to `protonmail-bridge:25`, auth with the same bridge user/password the IMAP path uses.
+  - 17 new tests: 7 send-log (rate allow + boundary-block + per-account isolation + hydrate-from-disk + stale-outside-window + append + env override), 6 send_reply (dispatch correctness + no-double-Re + already-wrapped Message-ID + cc/bcc forwarding + nonexistent-thread + missing-arg), 4 send_message (single vs array to + cc/bcc + missing-required + empty-to rejection). All mock via `vi.hoisted` (sender mock for the tool tests; send-log uses real fs with tempdir isolation).
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` after Phase 4a + 4b | pass | clean |
+| `npm test` (vitest) | pass | 81 / 81 across 7 files |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 4 done. Mailroom's inbox-mcp now exposes four write tools: apply_action, delete, send_message, send_reply. Plus send-log + rate limiter. Write tools only register when deps are supplied so backward compat for the read-only deployment is preserved.
+2. **Where am I going?** Phase 5 — nanoclaw subscriber update + the Madison RW mount for `rules.json` / `accounts.json`. That's the other half of the transition: until Phase 5 lands, mailroom emits `inbox-urgent-*.json` / `inbox-routine-*.json` files that the subscriber doesn't pick up.
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling + give Madison the four write tools she needs to actually act on mail. Rule engine is live post-Phase-3; MCP writes are live post-Phase-4; subscriber + Madison-side lands Phase 5+.
+4. **What have I learned?**
+   - `createInboxMcpServer` was called per-session; sharing stateful deps (rules loader, Gmail client, send-log rate state) across sessions means those deps must live at the process level, not the session level. The DI pattern (inject a `InboxMcpDeps` bag) keeps test isolation cheap while fixing the shared-state problem.
+   - The MCP process doesn't need write access to the SQLite store — all Phase 4 writes go to Gmail/Proton (external systems) + `send-log.jsonl` (sibling file). Keeping `MAILROOM_DB_READONLY=true` defends against future drift where a tool accidentally tries to update the store.
+   - Proton bridge accepts SMTP on `protonmail-bridge:25` with the same user/password as IMAP — nodemailer just works once the `protonmail` external network is attached.
+   - Gmail's `users.messages.send` API accepts a `threadId` to thread replies correctly, but only the raw numeric part — the store prefixes with `gmail:`, so strip before passing.
+   - nodemailer's `streamTransport: true, buffer: true` mode builds a Buffer of the RFC 5322 message without sending it — exactly what Gmail's base64url-raw API needs. Same composer, two transports.
+   - Store helpers are the right abstraction boundary. Every time I wrote an inline `db.prepare('SELECT ...').get(...)` in a tool, I was making the tool harder to test and duplicating a pattern. Promoted `getMessageById` + `getSenderEmailById` to `queries.ts`; the follow-on tools stayed clean.
+5. **What have I done?** 2 mailroom commits: `dfbe804` (Phase 4a, 789 lines) + `e5ff729` (Phase 4b, 866 lines). 81 tests passing across 7 files.

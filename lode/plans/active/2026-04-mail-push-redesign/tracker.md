@@ -100,14 +100,15 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **3.7** Integration test with real rules.json against in-memory store *(8 new tests in `src/rules/process-ingested.test.ts`: real rules.json through the loader, real evaluator, real event-file emission to a temp `MAILROOM_DATA_DIR`, apply layer stubbed via `vi.hoisted`; covers urgent/routine/silent branching, urgent-over-archive conflict, qcm side-channel write order, empty-rules path, apply-failure non-blocking, account_tag predicate)*
 - [x] **prereq** ResolvedActions two-set model refactor *(ConfigFiles `8b21b87`; dropped single-set `labels: string[]` in favor of `labels_to_add` + `labels_to_remove` disjoint sets so `remove_label` intent survives the evaluation pass intact)*
 
-### Phase 4 — Write MCP surface
-- [ ] **4.1** `src/mcp/tools/apply_action.ts` — validates args, looks up message, calls `apply.ts` with given actions
-- [ ] **4.2** `src/mcp/tools/delete.ts` — Gmail `messages.trash` or Proton IMAP MOVE to Trash
-- [ ] **4.3** `src/mcp/tools/send_reply.ts` — fetches thread headers from store, constructs RFC 5322, sends via Gmail API (for Gmail threads) or Proton SMTP (`protonmail-bridge:25`, for Proton threads)
-- [ ] **4.4** `src/mcp/tools/send_message.ts` — new outbound; validates from_account against accounts.json; routes by source
-- [ ] **4.5** `src/mcp/send-log.ts` — append JSON line per send; rate-limit check (20/hour per from-account)
-- [ ] **4.6** Register all four tools in `src/mcp/server.ts`
-- [ ] **4.7** Unit + integration tests
+### Phase 4 — Write MCP surface *(ConfigFiles `dfbe804` + `e5ff729`)*
+- [x] **4.1** `src/mcp/tools/apply_action.ts` — validates args, looks up message, calls `apply.ts` with given actions *(reuses evaluate() to run a single synthetic rule so the MCP action flow gets the same conflict-resolution + label-set-normalization as the ingest path; reuses validateActions from loader.ts for schema validation — zero drift between ingest and MCP)*
+- [x] **4.2** `src/mcp/tools/delete.ts` — Gmail `messages.trash` or Proton IMAP MOVE to Trash *(v1 searches INBOX → Archive for Proton lookup; Labels/* and Trash-origin deletes are deferred — documented)*
+- [x] **4.3** `src/mcp/tools/send_reply.ts` — fetches thread headers from store, constructs RFC 5322, sends via Gmail API or Proton SMTP (`protonmail-bridge:25`) *(picks from_account automatically from the thread's latest message's account_id; "Re: " prefix handled without doubling; In-Reply-To wrapped correctly)*
+- [x] **4.4** `src/mcp/tools/send_message.ts` — new outbound; validates from_account against accounts.json; routes by source *(string or string[] for to/cc/bcc; fail-fast on empty to-list)*
+- [x] **4.5** `src/mcp/send-log.ts` — append JSON line per send; rate-limit check (20/hour per from-account) *(hydrates from disk on first check so rate window survives MCP restarts; `SendRateLimitError.retry_after_ms` surfaced verbatim)*
+- [x] **4.6** Register all four tools in `src/mcp/server.ts` *(`createInboxMcpServer` now accepts `InboxMcpDeps`; write tools only registered when deps supplied; per-tool guard returns clear error when deps absent)*
+- [x] **4.7** Unit + integration tests *(17 new tests: 7 send-log / 6 send_reply / 4 send_message; 81/81 suite passing. Integration tests for apply_action + delete deferred since their value is in real Gmail API / IMAP transport verification — covered by Phase 9 end-to-end)*
+- [x] **prereq** MCP container plumbing *(docker-compose.yml: data dir :ro → rw for send-log writes, Gmail OAuth RW mount, PROTONMAIL_* envs, protonmail external network; store.db still opened readonly via MAILROOM_DB_READONLY=true so MCP can't corrupt the ingestor's write path)*
 
 ### Phase 5 — Nanoclaw subscriber event-type branch
 - [ ] **5.1** `src/channels/mailroom-subscriber.ts` — read event's `type` field; if `urgent`, dispatch with `priority: 'urgent'` flag; if `routine`, dispatch as today
@@ -151,10 +152,10 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phases 1, 2, and 3 complete.** Rules engine ships with the full ingest chain: the pollers now call `processIngestedMessage` on every successful insert, which evaluates rules, applies per-source (Gmail modify / Proton IMAP COPY+MOVE), runs the QCM side-channel, and emits one of `inbox:urgent` / `inbox:routine` / no-event. 64-test vitest suite passes; `tsc --noEmit` clean. Eleven mailroom commits total: `a5896fe`, `f664d54`, `668769c`, `edd5d96`, `37c6593`, `6cd7bad`, `3d0d582`, `8b21b87` (two-set model refactor), `a493fcb` (Phase 3 body), plus the earlier `668769c` RuleMatchContext extension.
+**Phases 1, 2, 3, and 4 complete.** The mailroom-side work is done: rules engine + ingest-time classification + four-tool MCP write surface. 81-test vitest suite passes; `tsc --noEmit` clean. Thirteen mailroom commits total.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-**Operator note:** Phase 3 changes the events mailroom emits. If the container restarts before Phase 5 updates the nanoclaw subscriber, `inbox-urgent-*.json` and `inbox-routine-*.json` files will accumulate in `ipc-out/` (the subscriber globs `inbox-new-*.json` today). The subscriber is not broken — Madison just won't see events until Phase 5 lands. Hold the container restart until Phase 5 is also ready.
+**Operator note (still pending):** Phase 3 changed the events mailroom emits. If the container restarts before Phase 5 updates the nanoclaw subscriber, `inbox-urgent-*.json` and `inbox-routine-*.json` files will accumulate in `ipc-out/` (the subscriber globs `inbox-new-*.json` today). Hold the container restart until Phase 5 is also ready. Phase 4's MCP changes land on the `inbox-mcp` service — a separate container — which also needs rebuilding to pick up the new write tools + the docker-compose env/network/mount changes.
 
-Next action: **Phase 4** — MCP write tools. Four new tools on the existing HTTP MCP server: `mcp__inbox__apply_action`, `mcp__inbox__delete`, `mcp__inbox__send_reply`, `mcp__inbox__send_message`. Plus the send-log JSONL with 20/hour per-from-account rate limit.
+Next action: **Phase 5** — nanoclaw subscriber update. `src/channels/mailroom-subscriber.ts` branches on the new event types; urgent bypasses the routine batch threshold; routine batches as today. Plus the `~/containers/data/mailroom → /workspace/extra/mailroom` RW mount in `src/container-runner.ts` gated on `folder === EMAIL_TARGET_FOLDER` so Madison can edit `rules.json` + `accounts.json` from her container.
