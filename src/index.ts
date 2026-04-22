@@ -11,8 +11,8 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
-  SESSION_MAX_AGE_HOURS,
-  SESSION_MAX_MESSAGES,
+  resolveSessionMaxAgeHours,
+  resolveSessionMaxMessages,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from './config.js';
@@ -326,7 +326,7 @@ async function runAgent(
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
 
-  // Session rotation: check age and message count
+  // Session rotation: check age and message count (per-group budget).
   const sessionInfo = getSessionInfo(group.folder);
   let sessionId: string | undefined = sessions[group.folder];
   if (sessionId && sessionInfo) {
@@ -334,15 +334,19 @@ async function runAgent(
       ? Date.now() - new Date(sessionInfo.created_at).getTime()
       : 0;
     const ageHours = ageMs / (1000 * 60 * 60);
+    const maxAgeHours = resolveSessionMaxAgeHours(group.folder);
+    const maxMessages = resolveSessionMaxMessages(group.folder);
     if (
-      ageHours > SESSION_MAX_AGE_HOURS ||
-      sessionInfo.message_count >= SESSION_MAX_MESSAGES
+      ageHours > maxAgeHours ||
+      sessionInfo.message_count >= maxMessages
     ) {
       logger.info(
         {
           group: group.folder,
           ageHours: Math.round(ageHours),
           messageCount: sessionInfo.message_count,
+          maxAgeHours,
+          maxMessages,
         },
         'Rotating session (age or message limit reached)',
       );

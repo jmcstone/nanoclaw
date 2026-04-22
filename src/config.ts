@@ -1,3 +1,4 @@
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -103,6 +104,57 @@ export const SESSION_MAX_MESSAGES = Math.max(
   1,
   parseInt(process.env.SESSION_MAX_MESSAGES || '50', 10) || 50,
 );
+
+// Per-group operational overrides (model, session rotation).
+// Lives in the Obsidian vault so Jeff can edit on any device.
+// Host-side only — not mounted into containers.
+export const GROUP_OVERRIDES_PATH = path.join(
+  HOME_DIR,
+  'Documents',
+  'Obsidian',
+  'Main',
+  'NanoClaw',
+  '_Settings',
+  'group-overrides.json',
+);
+
+export interface GroupOverride {
+  model?: string;
+  sessionMaxMessages?: number;
+  sessionMaxAgeHours?: number;
+}
+
+function readGroupOverrides(): Record<string, GroupOverride> {
+  try {
+    if (!fs.existsSync(GROUP_OVERRIDES_PATH)) return {};
+    const raw = fs.readFileSync(GROUP_OVERRIDES_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getGroupOverride(folder: string): GroupOverride {
+  return readGroupOverrides()[folder] ?? {};
+}
+
+export function resolveSessionMaxMessages(folder: string): number {
+  const override = getGroupOverride(folder).sessionMaxMessages;
+  if (typeof override === 'number' && override > 0) return Math.max(1, override);
+  return SESSION_MAX_MESSAGES;
+}
+
+export function resolveSessionMaxAgeHours(folder: string): number {
+  const override = getGroupOverride(folder).sessionMaxAgeHours;
+  if (typeof override === 'number' && override > 0) return Math.max(1, override);
+  return SESSION_MAX_AGE_HOURS;
+}
+
+export function resolveGroupModel(folder: string): string | undefined {
+  const override = getGroupOverride(folder).model;
+  return typeof override === 'string' && override.trim() ? override.trim() : undefined;
+}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

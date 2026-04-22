@@ -4,7 +4,6 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import {
@@ -16,6 +15,7 @@ import {
   DOWNLOADS_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  resolveGroupModel,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -190,11 +190,6 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // (Madison reads/edits rules.json + accounts.json via her existing
-  // Obsidian mount at /workspace/extra/obsidian/_Settings/. The earlier
-  // attempt to mount ~/containers/data/mailroom/ wholesale into Madison
-  // exposed gmail-mcp/ OAuth creds + the encrypted store.db — too broad.)
-
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
@@ -244,12 +239,18 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  group: RegisteredGroup,
+  modelOverride?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Per-group model override (from group-overrides.json). Falls through to
+  // Claude Code's default when absent.
+  if (modelOverride) {
+    args.push('-e', `ANTHROPIC_MODEL=${modelOverride}`);
+  }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
@@ -268,14 +269,8 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Runtime-specific args for host gateway resolution. Every group
-  // (including telegram_inbox) stays on the default Docker bridge so it
-  // can reach host services via host.docker.internal — credential proxy
-  // on :3002, ollama on :11434, mailroom inbox-mcp on :8080. We tried
-  // attaching telegram_inbox to mailroom_shared directly (M4.2, reverted
-  // 2026-04-21): user-defined bridges can't reach the host's :3002 on
-  // this machine (nftables block), and `docker run` rejects mixing a
-  // user-defined bridge with the default bridge.
+  // Default Docker bridge + host.docker.internal so containers can reach
+  // host services (credential proxy, ollama, mailroom inbox-mcp).
   args.push(...hostGatewayArgs());
 
   // Run as host user so bind-mounted files are accessible.
@@ -315,7 +310,8 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, group);
+  const modelOverride = resolveGroupModel(group.folder);
+  const containerArgs = buildContainerArgs(mounts, containerName, modelOverride);
 
   logger.debug(
     {

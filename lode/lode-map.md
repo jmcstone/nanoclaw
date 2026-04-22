@@ -32,6 +32,7 @@ Authoritative index of project memory. Read this first.
 - [infrastructure/context-mode.md](infrastructure/context-mode.md) — context-mode MCP + vendored skill baked into the agent container; per-group FTS5 DB; hook wiring + path-resolution nuances documented
 - [infrastructure/mailroom-rules.md](infrastructure/mailroom-rules.md) — backend rule engine in the mailroom-ingestor container; rules.json + accounts.json + changelog live in `~/containers/data/mailroom/` (symlinked into Obsidian)
 - [infrastructure/madison-pipeline.md](infrastructure/madison-pipeline.md) — push-driven delivery path for inbound mail: mailroom → ipc-out → subscriber → group-queue → Madison; urgent bypasses the 2s POLL_INTERVAL
+- [infrastructure/session-context-budget.md](infrastructure/session-context-budget.md) — per-group model + session rotation overrides in `~/Documents/Obsidian/Main/NanoClaw/_Settings/group-overrides.json`; `.env` supplies fallback defaults (`SESSION_MAX_MESSAGES=15`, `SESSION_MAX_AGE_HOURS=6`)
 
 ## Reference
 - [reference/rules-schema.md](reference/rules-schema.md) — mailroom rules.json schema digest (canonical source is `mailroom/src/rules/schema.md` inside the container)
