@@ -5,6 +5,7 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { NewMessage, RegisteredGroup } from '../types.js';
+import type { ChannelOpts } from './registry.js';
 import { getChannelFactory } from './registry.js';
 
 // Import for side effect: registers the 'mailroom-subscriber' factory.
@@ -30,17 +31,21 @@ async function flushSchedulers(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 1200));
 }
 
+type OnMessageFn = ChannelOpts['onMessage'];
+type OnChatMetadataFn = ChannelOpts['onChatMetadata'];
+type RequestImmediateFn = NonNullable<ChannelOpts['requestImmediateProcessing']>;
+
 let tmpDir: string;
-let onMessage: ReturnType<typeof vi.fn>;
-let onChatMetadata: ReturnType<typeof vi.fn>;
-let requestImmediateProcessing: ReturnType<typeof vi.fn>;
+let onMessage: ReturnType<typeof vi.fn<OnMessageFn>>;
+let onChatMetadata: ReturnType<typeof vi.fn<OnChatMetadataFn>>;
+let requestImmediateProcessing: ReturnType<typeof vi.fn<RequestImmediateFn>>;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'subscriber-test-'));
   process.env.MAILROOM_IPC_OUT_DIR = tmpDir;
-  onMessage = vi.fn();
-  onChatMetadata = vi.fn();
-  requestImmediateProcessing = vi.fn();
+  onMessage = vi.fn<OnMessageFn>();
+  onChatMetadata = vi.fn<OnChatMetadataFn>();
+  requestImmediateProcessing = vi.fn<RequestImmediateFn>();
 });
 
 afterEach(() => {
@@ -182,14 +187,20 @@ describe('mailroom-subscriber — event routing', () => {
     await sub.disconnect();
 
     expect(onMessage).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(tmpDir, 'inbox-urgent-bad.json'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'inbox-urgent-bad.json'))).toBe(
+      false,
+    );
     const errorsDir = path.join(tmpDir, '..', 'ipc-errors');
-    expect(fs.existsSync(path.join(errorsDir, 'inbox-urgent-bad.json'))).toBe(true);
+    expect(fs.existsSync(path.join(errorsDir, 'inbox-urgent-bad.json'))).toBe(
+      true,
+    );
     fs.rmSync(errorsDir, { recursive: true, force: true });
   });
 
   test('schema-invalid payload is quarantined', async () => {
-    writeEvent('inbox-urgent-bad2.json', { event: 'inbox:urgent' /* missing required fields */ });
+    writeEvent('inbox-urgent-bad2.json', {
+      event: 'inbox:urgent' /* missing required fields */,
+    });
     const sub = await makeSubscriber();
     await sub.connect();
     await flushSchedulers();
@@ -197,7 +208,9 @@ describe('mailroom-subscriber — event routing', () => {
 
     expect(onMessage).not.toHaveBeenCalled();
     const errorsDir = path.join(tmpDir, '..', 'ipc-errors');
-    expect(fs.existsSync(path.join(errorsDir, 'inbox-urgent-bad2.json'))).toBe(true);
+    expect(fs.existsSync(path.join(errorsDir, 'inbox-urgent-bad2.json'))).toBe(
+      true,
+    );
     fs.rmSync(errorsDir, { recursive: true, force: true });
   });
 
