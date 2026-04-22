@@ -79,7 +79,7 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 ## Phases
 
 ### Phase 1 — Pre-work
-- [x] **1.1** Patch Madison's CLAUDE.md to remove stale `mcp__gmail__*` and direct-Proton-IMAP references (lines 41, 274, any others). Add a `## Current Limitation` note that email writes are not yet available pending Phase 4. Single small commit on this branch. This prevents silent tool_use_error failures during the build period. *(2026-04-22 — file lives in data volume, not under git; live on disk. Lode bookkeeping in commit pending.)*
+- [x] **1.1** Patch Madison's CLAUDE.md to remove stale `mcp__gmail__*` and direct-Proton-IMAP references (lines 41, 274, any others). Add a `## Current Limitation` note that email writes are not yet available pending Phase 4. Single small commit on this branch. This prevents silent tool_use_error failures during the build period. *(2026-04-22, lode bookkeeping `923ba1e`; CLAUDE.md edits live on disk in `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`, not under git.)*
 
 ### Phase 2 — Rule engine (read + evaluate)
 - [ ] **2.1** `src/rules/types.ts` — `Rule`, `Predicate`, `Actions`, `AccountEntry`, `AccountsFile`, `RulesFile` types
