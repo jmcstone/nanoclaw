@@ -13,12 +13,11 @@ const DEFAULT_IPC_DIR = path.join(
 );
 const POLL_INTERVAL_MS = 1000;
 
-// Mailroom emits two file kinds (post-mail-push-redesign Phase 3):
+// Mailroom emits two file kinds:
 //   inbox-urgent-*.json  → priority dispatch (immediate spawn)
-//   inbox-routine-*.json → normal store + polling-window dispatch
-// The legacy inbox-new-*.json prefix is still recognized so any files
-// that landed before mailroom restarts to the Phase-3 build are not
-// quarantined as garbage. Mailroom no longer emits that name.
+//   inbox-routine-*.json → normal dispatch, picked up on the next poll
+// inbox-new-*.json is a pre-split prefix still accepted so stragglers
+// aren't quarantined; mailroom no longer emits that name.
 const EVENT_FILE_SUFFIX = '.json';
 const URGENT_PREFIX = 'inbox-urgent-';
 const ROUTINE_PREFIX = 'inbox-routine-';
@@ -94,7 +93,6 @@ class MailroomSubscriber implements Channel {
   private opts: ChannelOpts;
   private stopped = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private started = false;
 
   constructor(opts: ChannelOpts) {
     this.opts = opts;
@@ -109,20 +107,17 @@ class MailroomSubscriber implements Channel {
       );
       return;
     }
-    this.started = true;
     logger.info({ dir }, 'Mailroom subscriber watching');
     this.schedulePoll();
   }
 
   async sendMessage(): Promise<void> {
-    // Subscriber is read-only — routing happens via onMessage into another
-    // channel's JID space. Router uses ownsJid() to pick the outbound
-    // channel, so this should never be called.
+    // Unreachable: ownsJid() returns false, so the router never picks this channel for outbound.
     throw new Error('mailroom-subscriber does not send messages');
   }
 
   isConnected(): boolean {
-    return this.started && !this.stopped;
+    return this.timer !== null && !this.stopped;
   }
 
   ownsJid(): boolean {
@@ -165,14 +160,10 @@ class MailroomSubscriber implements Channel {
         if (!isClassifiedEvent(parsed)) {
           throw new Error('event failed schema validation');
         }
-        // The filename prefix and the event.event field must agree —
-        // if they don't, prefer the in-payload discriminator (single
-        // source of truth) but log it.
+        // Payload event field is the single source of truth; warn if the
+        // filename prefix disagrees so we can notice producer bugs.
         const payloadKind = mapEventKind(parsed.event);
-        if (
-          payloadKind !== kind &&
-          !(kind === 'legacy' && payloadKind === 'legacy')
-        ) {
+        if (payloadKind !== kind) {
           logger.warn(
             { file, payloadKind, fileKind: kind },
             'mailroom event filename prefix and payload event field disagree — using payload',
@@ -213,8 +204,7 @@ class MailroomSubscriber implements Channel {
     const senderDisplay = event.sender.name
       ? `${event.sender.name} <${event.sender.email}>`
       : event.sender.email;
-    const priorityTag =
-      kind === 'urgent' ? 'URGENT ' : kind === 'routine' ? '' : '';
+    const priorityTag = kind === 'urgent' ? 'URGENT ' : '';
     const headerLine = `[${priorityTag}${sourceLabel} email from ${senderDisplay}]`;
     const lines = [
       headerLine,
@@ -253,9 +243,8 @@ class MailroomSubscriber implements Channel {
     };
     this.opts.onMessage(targetJid, message);
 
-    // Urgent: bypass the main-loop POLL_INTERVAL and request an
-    // immediate spawn. Routine/legacy fall through to the normal
-    // polling cadence (currently 2s; acts as the implicit batch window).
+    // Urgent events request an immediate container spawn; routine/legacy
+    // rely on the main loop's polling cadence as an implicit batch window.
     if (kind === 'urgent' && this.opts.requestImmediateProcessing) {
       this.opts.requestImmediateProcessing(targetJid);
     }
