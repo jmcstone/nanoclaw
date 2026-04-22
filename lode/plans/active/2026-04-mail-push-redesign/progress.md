@@ -70,8 +70,40 @@ Full design agreed in conversation between Jeff and Claude on the `unified-inbox
 
 ## Next steps (to resume)
 
-1. **Phase 2.1** — `src/rules/types.ts` in the mailroom repo. Define `Rule`, `Predicate`, `Actions`, `AccountEntry`, `AccountsFile`, `RulesFile`. Refer to `tracker.md` AC-1 and AC-2 for the schema contract.
-2. Phases 2.2–2.7 in order — loader, matcher, evaluate, CLI validate, unit tests, schema.md.
+1. **Phase 2.2** — `src/rules/loader.ts` in the mailroom repo. Load + parse rules.json + accounts.json from `~/containers/data/mailroom/` (env-overridable path), validate against the types.ts schema, compile any regex predicates eagerly so a bad regex fails the load instead of crashing matcher.ts later, watch file mtime for hot-reload. Keep last-valid in memory on any failure (parse / schema / regex compile) and log the error — never crash-loop. Surface a small API: `getRules(): RulesFile`, `getAccounts(): AccountsFile`, plus a `subscribe(cb)` for ingestor.ts to hook into.
+2. 2.3 matcher → 2.4 evaluate → 2.5 CLI validate → 2.6 unit tests → 2.7 schema.md.
 3. Then 3 → 9 in order; 3 (apply + events) and 4 (MCP writes) are the next heaviest.
 
 The decisions table in `tracker.md` is the implementation contract. If a decision seems wrong mid-build, stop and re-plan rather than drift.
+
+## 2026-04-22 — Phase 2.1: rules engine types
+
+### Actions
+
+- Inspected mailroom `src/store/types.ts`, `src/events/types.ts`, and `src/ingestor.ts` to align on conventions: ESM `.js` imports, `import type` for type-only, 2-space indent, strict TS, snake_case field names for persisted shapes (matches the JSON file format users will edit).
+- Created `~/Projects/ConfigFiles/containers/mailroom/mailroom/src/rules/types.ts`. Exports:
+  - `StringMatcher = string | string[]` — uniform "any-of" semantics across all string predicates.
+  - `LeafPredicate` — every field operator from AC-1 (sender_equals/contains/matches, subject_*, body_contains/matches, has_label, source, account, account_tag).
+  - `Combinators` — `all` / `any` / `not`. Composed via `Predicate = LeafPredicate & Combinators`, so leaf fields and combinators on the same object are AND-ed.
+  - `Actions` — `urgent`, `auto_archive`, `qcm_alert`, plus the three label primitives (`label` replace / `add_label` union / `remove_label` subtract).
+  - `Rule` (with optional `name` + `comment`), `RulesFile`, `AccountEntry`, `AccountsFile`.
+  - `RuleMatchContext` — the matcher-visible bundle of `{message, labels_at_ingest, account_tags}`. Encodes the locked decision that `has_label` predicates evaluate against ingest-time labels, NOT against labels accumulated by earlier rules in the same pass.
+  - `ResolvedActions` — the apply-layer input: `{urgent, auto_archive, qcm_alert, labels[]}` after accumulation + conflict resolution (urgent forces auto_archive false).
+- Verified clean compile: `cd ~/Projects/ConfigFiles/containers/mailroom/mailroom && npx tsc --noEmit` exited 0.
+- Committed `a5896fe` in ConfigFiles. Mailroom repo lives on `main` (trunk-based per parent mailroom-extraction plan); no feature branch in ConfigFiles.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` against full mailroom tree | pass | exit 0 |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 2.1 done. types.ts compiles. Next is loader.ts.
+2. **Where am I going?** Through Phase 2 (loader / matcher / evaluate / CLI validate / unit tests / schema.md), then 3, 4, 5, 6, 7, 8, 9.
+3. **What is the goal?** Push-driven, rules-engine-powered mail triage replacing Madison's polling. See top-level tracker Goal.
+4. **What have I learned?**
+   - Mailroom repo (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) is on `main`, not on a feature branch — every mailroom commit goes to ConfigFiles main. Only the lode and the nanoclaw-side subscriber/runner edits live on the `mail-push-redesign` branch.
+   - Bookkeeping pattern: the cross-repo commit hash gets backfilled into the nanoclaw lode tracker so the audit trail crosses the repo boundary cleanly.
+5. **What have I done?** Created `src/rules/types.ts` (138 lines), tsc clean, committed.

@@ -82,7 +82,7 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **1.1** Patch Madison's CLAUDE.md to remove stale `mcp__gmail__*` and direct-Proton-IMAP references (lines 41, 274, any others). Add a `## Current Limitation` note that email writes are not yet available pending Phase 4. Single small commit on this branch. This prevents silent tool_use_error failures during the build period. *(2026-04-22, lode bookkeeping `923ba1e`; CLAUDE.md edits live on disk in `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`, not under git.)*
 
 ### Phase 2 — Rule engine (read + evaluate)
-- [ ] **2.1** `src/rules/types.ts` — `Rule`, `Predicate`, `Actions`, `AccountEntry`, `AccountsFile`, `RulesFile` types
+- [x] **2.1** `src/rules/types.ts` — `Rule`, `Predicate`, `Actions`, `AccountEntry`, `AccountsFile`, `RulesFile` types *(2026-04-22, ConfigFiles `a5896fe`; also adds `ResolvedActions` for the apply-layer contract and `RuleMatchContext` to make the "predicates see ingest-time labels, not accumulator" decision explicit at the type level)*
 - [ ] **2.2** `src/rules/loader.ts` — load + validate rules.json and accounts.json from data dir; hot-reload on mtime change; keep last-valid on error
 - [ ] **2.3** `src/rules/matcher.ts` — recursive predicate eval against a message (fields: sender, subject, body, labels, source, account, account_tag)
 - [ ] **2.4** `src/rules/evaluate.ts` — walk rules, accumulate actions, resolve conflicts, return final Actions
@@ -150,8 +150,8 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ## Current status
 
-**Phase 1 complete.** Madison's CLAUDE.md patched (2026-04-22): inserted a top-of-file `## Current limitation` callout, neutralized the "Actions" subsection under *Inboxes to sweep*, and rewrote the Tools-list "Email actions" line. All three call out the M5/M6.2 cause and point at the future `mcp__inbox__*` write surface (Phase 4). The auto-labeler scheduled-task line is left intact for Phase 8 to retire.
+**Phase 1 complete; Phase 2.1 complete.** Phase 1 patched Madison's CLAUDE.md to remove stale Gmail-MCP and Proton-bridge write references (lives in the data volume; not under git). Phase 2.1 added `src/rules/types.ts` to the mailroom repo (ConfigFiles, `a5896fe`) — schema for `rules.json` + `accounts.json` plus `RuleMatchContext` and `ResolvedActions` for downstream consumers. `tsc --noEmit` clean.
 
 Branch `mail-push-redesign` branches off `unified-inbox` (which contains M4+/M5 mailroom cutover + M6.1/M6.2 bridge hardening). The mailroom-extraction plan (M6.3, M7, M8, M9) remains open on `unified-inbox`; this redesign is a parallel workstream on a new branch.
 
-Next action: **Phase 2.1** — start the rule engine in the mailroom container repo (`~/Projects/ConfigFiles/containers/mailroom/mailroom/`) with `src/rules/types.ts`. Phase 2 lives outside this repo; only lode bookkeeping commits land here for it.
+Next action: **Phase 2.2** — `src/rules/loader.ts` in the mailroom repo. Load + validate `rules.json` and `accounts.json`, hot-reload on mtime, keep last-valid in memory on bad edits.
