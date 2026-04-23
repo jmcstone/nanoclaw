@@ -33,7 +33,11 @@ describe('computeGroupMcpHash', () => {
       groupFolder: 'test_group',
       hasAmem: true,
       hasContextMode: false,
-      trawl: { enabled: true, url: 'https://example.com/mcp', mode: 'wildcard' },
+      trawl: {
+        enabled: true,
+        url: 'https://example.com/mcp',
+        mode: 'wildcard',
+      },
     };
     const { hash: h1 } = computeGroupMcpHash(opts);
     const { hash: h2 } = computeGroupMcpHash(opts);
@@ -83,8 +87,8 @@ describe('computeGroupMcpHash', () => {
       hasContextMode: false,
     };
     const other: GroupMcpOptions = { ...inbox, groupFolder: 'telegram_main' };
-    expect(computeGroupMcpHash(inbox).serverNames).toContain('inbox');
-    expect(computeGroupMcpHash(other).serverNames).not.toContain('inbox');
+    expect(computeGroupMcpHash(inbox).serverNames).toContain('messages');
+    expect(computeGroupMcpHash(other).serverNames).not.toContain('messages');
     expect(computeGroupMcpHash(inbox).hash).not.toBe(
       computeGroupMcpHash(other).hash,
     );
@@ -152,7 +156,11 @@ describe('computeGroupMcpHash', () => {
     };
     const updated: GroupMcpOptions = {
       ...base,
-      trawl: { enabled: true, mode: 'explicit', allowedTools: ['tool_a', 'tool_b'] },
+      trawl: {
+        enabled: true,
+        mode: 'explicit',
+        allowedTools: ['tool_a', 'tool_b'],
+      },
     };
     expect(computeGroupMcpHash(base).hash).not.toBe(
       computeGroupMcpHash(updated).hash,
@@ -168,7 +176,11 @@ describe('computeGroupMcpHash', () => {
     };
     const updated: GroupMcpOptions = {
       ...base,
-      trawl: { enabled: true, mode: 'wildcard', excludedTools: ['save_result'] },
+      trawl: {
+        enabled: true,
+        mode: 'wildcard',
+        excludedTools: ['save_result'],
+      },
     };
     expect(computeGroupMcpHash(base).hash).not.toBe(
       computeGroupMcpHash(updated).hash,
@@ -180,11 +192,19 @@ describe('computeGroupMcpHash', () => {
       groupFolder: 'g',
       hasAmem: false,
       hasContextMode: false,
-      trawl: { enabled: true, mode: 'explicit', allowedTools: ['tool_b', 'tool_a'] },
+      trawl: {
+        enabled: true,
+        mode: 'explicit',
+        allowedTools: ['tool_b', 'tool_a'],
+      },
     };
     const b: GroupMcpOptions = {
       ...a,
-      trawl: { enabled: true, mode: 'explicit', allowedTools: ['tool_a', 'tool_b'] },
+      trawl: {
+        enabled: true,
+        mode: 'explicit',
+        allowedTools: ['tool_a', 'tool_b'],
+      },
     };
     expect(computeGroupMcpHash(a).hash).toBe(computeGroupMcpHash(b).hash);
   });
@@ -194,7 +214,11 @@ describe('computeGroupMcpHash', () => {
       groupFolder: 'g',
       hasAmem: false,
       hasContextMode: false,
-      trawl: { enabled: false, url: 'https://example.com/mcp', mode: 'wildcard' },
+      trawl: {
+        enabled: false,
+        url: 'https://example.com/mcp',
+        mode: 'wildcard',
+      },
     };
     const noTrawl: GroupMcpOptions = {
       groupFolder: 'g',

@@ -672,7 +672,7 @@ async function runQuery(
   // reachable from this container on the default Docker bridge via
   // host.docker.internal.
   const hasInbox = containerInput.groupFolder === 'telegram_inbox';
-  log(`inbox MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
+  log(`messages MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
 
   const mcpServers: Record<string, any> = {
     nanoclaw: {
@@ -712,7 +712,7 @@ async function runQuery(
     };
   }
   if (hasInbox) {
-    mcpServers['inbox'] = {
+    mcpServers['messages'] = {
       type: 'http',
       url: 'http://host.docker.internal:18080/mcp',
     };
@@ -749,7 +749,7 @@ async function runQuery(
     'mcp__nanoclaw__*',
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
-    ...(hasInbox ? ['mcp__inbox__*'] : []),
+    ...(hasInbox ? ['mcp__messages__*'] : []),
     ...trawlAllowed,
   ];
 

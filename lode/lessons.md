@@ -125,6 +125,67 @@ The `--` separator is required so flags like `-d` reach docker-compose, not env-
 
 ---
 
+## Service-level invariants (env vars / mounts) outlive the design choices that put them there
+
+**Rule**: When you add new behavior to a service that contradicts an existing service-level invariant (env var, mount mode, network constraint, port binding), audit and update the invariant in the same commit. Don't ship code that "should work" but is silently broken by an env var written months ago.
+
+**Why**: madison-read-power Wave 2C added local-DB write-through to the inbox-mcp tools (`apply_action`, `archive`, `add_label`, etc.). Wave 4.5 added `mark_read` / `mark_unread`. Both shipped tests that ran on writeable test DBs and passed. Production failed silently because Phase M2 (mailroom-extraction) had set `MAILROOM_DB_READONLY=true` on the inbox-mcp service in compose — a deliberate "inbox-mcp is read-only" property at the time. Wave 2C's writes returned `attempt to write a readonly database` errors that were either caught by upstream-call-succeeded logic or mostly invisible because the next nightly reconcile populated the same data via the ingestor's writeable connection. The bug masqueraded as eventual consistency for weeks. AC-V5 surfaced it on 2026-04-23 because the AC explicitly tests "immediate query reflects the write" (no reconcile delay). Fix: drop `MAILROOM_DB_READONLY=true` from the inbox-mcp service env (CF `5935bf9`). Wave 2C's intent is now actually realized.
+
+**How to apply**:
+- Any wave that adds write paths to a service: grep the compose file for env vars / mount modes that imply read-only behavior on that service. Update them in the same PR.
+- Integration tests that exercise the live deploy path catch this; tests against a writeable test DB do not. AC-style tests that include "via the actual MCP HTTP endpoint" are the right shape.
+- When deprecating an architectural property (e.g., "service X is read-only"), also delete the comment and env var that asserted it. Stale comments saying "stays readonly via X=true" while the code writes through is exactly the smell. Mismatch between docstring and behavior is more dangerous than no docstring.
+- Service-level invariants accumulate: each wave adds capability, often without noticing what it just contradicted. A "service capability matrix" reviewed at end-of-wave (does this service still hold the invariants the compose file claims?) would catch these.
+
+**Incident**: 2026-04-23 — AC-V5 caught Wave 2C's silent local-DB write failure that had been live for weeks. Fixed in `5935bf9`. The Wave 4.5 mark_read tool surfaced the same bug immediately on first call (no reconcile path to mask it).
+
+---
+
+## Migration scripts must self-audit the DB state against their own reported metrics
+
+**Rule**: A multi-phase migration script that mutates a production datastore must, before its own success exit, query the resulting DB and assert that observable counts match the metrics it reported. If they don't, the script must exit non-zero with a clear message naming the mismatch — never `phase=complete status=success` while the data is wrong.
+
+**Why**: madison-read-power Wave 3.4 first-attempt deploy ran a 10-minute live migration that completed cleanly per its own logs (`phase=complete drafts_purged=0 spam_purged=0 rfc822_backfilled=59677 hydrated_adds=190381 inferred_deletes=0`). Sanity SQL afterward revealed three independent silent failures: (1) `message_labels=0` despite reported 190k adds, (2) `label_catalog=0` despite the catalog being part of the same write path, (3) `deleted_inferred=60,167` despite reported 0 — every pre-existing message marked deleted. The bugs were caught only because Jeff's reflex was to query the DB after deploy. Without that, the mirror would have looked correct via Madison's tooling for hours (queries with the new default `deleted_at IS NULL` filter would just return empty results) before someone noticed. Test suites + tsc were green throughout because vitest used in-memory mocks, never the real apply chain end-to-end against expected DB state.
+
+**How to apply**:
+- Every migration phase should have an audit query that's INDEPENDENT of the metrics counter — query the actual table, count the actual rows, compare to what the script claims it did.
+- Make the audit fail loud: throw / exit 1 with a clear `audit_failed` log naming each mismatch and the rollback command (e.g., "Restore from btrfs snapshot and investigate before retrying"). Don't trust the script to recover gracefully on its own.
+- Add invariant guards beyond just-equal-numbers: e.g., "if N Proton messages exist, `message_labels` must be ≥ N (every message has ≥1 folder)"; "deleted_inferred must not exceed 50% of total (blast guard)"; "if any adds were reported, `label_catalog` cannot be empty".
+- Integration tests for migration scripts must seed synthetic state, run the script, and assert ROWS — not just counts. A test that asserts "applyLabelDelta returns adds_applied >= 1" passes for buggy code that returns the right metric but writes nothing. A test that asserts the message_labels table has rows X, Y, Z catches the silent-drop.
+- When deploying, always have a one-line sanity SQL ready to run after the migration completes. Make it a checklist item in the deploy plan.
+
+**Incident**: 2026-04-23 madison-read-power Wave 3.4 first attempt — cleanly-reported migration with 60,167 silently-wrong deleted flags + empty `message_labels` table. Rolled back via btrfs snapshot, fixed in Wave 3.5 (CF `57e631b`) which added the self-audit + integration tests that catch this class of bug.
+
+---
+
+## Cross-workstream API contracts must be specified in the orchestrator prompt, not inferred by executors
+
+**Rule**: When parallel wave executors share an API surface across workstreams (e.g., one workstream produces a function the other consumes), the orchestrator's wave prompts MUST name the public-API shape (function names, signatures, ownership) — not just each side's primitives. If only the producing side's primitives are specified, the consuming side will work around the missing composed API with defensive scaffolding (runtime late-binding, sentinel flags, silent no-ops) that hides bugs from the type system.
+
+**Why**: madison-read-power Wave 2A was prompted to "build walkers + delta builder + apply phase". Wave 2B was prompted to "fall back to per-account hydration on 404". 2A only exposed primitives; 2B couldn't import a composed `runGmailHydration` because it didn't exist, so it wrote runtime late-binding (`mod.runGmailHydration as ...`) that silently no-ops if the function is missing. Wave 3 then bypassed the gap by stubbing the reconcile scheduler's `runFn`. Production tsc failed; nightly reconcile silently broken; tests passed because vitest uses esbuild without strict tsc. Caught only by `tsc --noEmit` in design review. Required a follow-up gap-closure executor to: (1) add the composed `runFullHydration` API, (2) delete the late-binding scaffolding, (3) wire the scheduler from the composition root, (4) refactor the migration script to share the same code path. All this work could have been one cleaner Wave 2 if 2A's prompt had named "expose `runFullHydration` as the public reconcile entrypoint; primitives are internal".
+
+**How to apply**:
+- For any parallel wave with a producer/consumer split, the orchestrator's prompt to BOTH executors must name the cross-workstream API: function names, signatures, who exports it, who imports it. Consumers should be told to use direct imports — never runtime discovery via `typeof mod.fn === 'function'`.
+- Run `tsc --noEmit` (or the strict project equivalent) at end-of-wave verification, not just `npm test`. Vitest with esbuild does NOT strict-type-check by default.
+- If an executor writes late-binding scaffolding to defend against a missing dependency, treat that as a design-prompt failure and re-spec — don't ship the scaffolding.
+- Schedulers that take a `runFn` parameter should always be wired from the composition root (the entrypoint that owns the application's wiring), not by burying default imports inside the scheduler module itself.
+
+**Incident**: 2026-04-23 madison-read-power Wave 3 first pass shipped with 6 tsc errors and a no-op `runFn` stub. Gap closure committed as ConfigFiles `f398393`.
+
+---
+
+## Name things by what they ARE, not where they live
+
+**Rule**: MCP tool family names should reflect the content domain they operate on, not the implementation container or folder they happen to live in. When the service is named "inbox-mcp" but the tool family is named "inbox", you conflate the service name with a content-scope (the Inbox folder). As the service grows to include archived mail, sent mail, and eventually Slack/SMS, the "inbox" name becomes increasingly misleading.
+
+**Why**: the `mcp__inbox__*` tool family actually searched the unified message store — all ingested mail across 6 accounts, regardless of folder. A query returning an archived Proton message was correct behavior, but the name "inbox" implied it should only return current-inbox items. This forced users to add mental corrections ("when it says inbox it means the whole store"). The rename to `mcp__messages__*` plus documenting `labels: ["INBOX"]` as the explicit narrow-inbox filter makes the model match the reality.
+
+**How to apply**: when naming a tool family or service API: (a) ask "what is the data domain this operates on?" (messages/emails), not "what is the service named?" (inbox-mcp) or "what is the primary use-case today?" (triage current inbox); (b) expose orthogonal concerns (inbox filter, sent/received, date range) as parameters rather than baking them into the name; (c) if today's use-case is a subset of the data domain, make the narrow view explicit via a parameter, not implicit in the name.
+
+**Incident**: 2026-04-23 AC-V1 test — `query` returned archived Proton messages (correct behavior for the store), which looked wrong given the `mcp__inbox__` name. Renamed in Wave 5 to `mcp__messages__*` with `labels: ["INBOX"]` documented as the explicit inbox-view filter.
+
+---
+
 ## Sonnet is the right model for template-following implementation work
 
 **Rule**: When work follows a clear template (existing tool to copy, established pattern to mirror, ops script to run), delegate to Sonnet via the `lode-executor` subagent. Reserve Opus for orchestration: decomposition, trade-off acceptance, cross-agent synthesis, design review.

@@ -100,7 +100,7 @@ flowchart TD
   NanoclawDB --> Queue
   Queue --> Madison
   StoreDB --> InboxMCP
-  InboxMCP -->|mcp__inbox__*| Madison
+  InboxMCP -->|mcp__messages__*| Madison
 ```
 
 ## Hydration and reconcile

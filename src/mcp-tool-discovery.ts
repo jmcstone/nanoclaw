@@ -62,7 +62,7 @@ export interface GroupMcpOptions {
  *   - nanoclaw  — always present
  *   - context-mode — when hasContextMode
  *   - a-mem     — when hasAmem
- *   - inbox     — when groupFolder === 'telegram_inbox'
+ *   - messages  — when groupFolder === 'telegram_inbox'
  *   - trawl     — when trawl.enabled === true
  *
  * For Trawl, the hash also covers mode + allowlist fields + URL so that
@@ -73,7 +73,7 @@ export function computeGroupMcpHash(options: GroupMcpOptions): McpServerSet {
 
   if (options.hasContextMode) names.push('context-mode');
   if (options.hasAmem) names.push('a-mem');
-  if (options.groupFolder === 'telegram_inbox') names.push('inbox');
+  if (options.groupFolder === 'telegram_inbox') names.push('messages');
   if (options.trawl?.enabled === true) names.push('trawl');
 
   const sorted = [...names].sort();
@@ -93,7 +93,8 @@ export function computeGroupMcpHash(options: GroupMcpOptions): McpServerSet {
         })
       : '';
 
-  const hashInput = sorted.join('\n') + (trawlHashPart ? '\n' + trawlHashPart : '');
+  const hashInput =
+    sorted.join('\n') + (trawlHashPart ? '\n' + trawlHashPart : '');
   const hash = createHash('sha256').update(hashInput).digest('hex');
 
   return { serverNames: sorted, hash };
