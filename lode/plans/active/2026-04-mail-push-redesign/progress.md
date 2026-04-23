@@ -543,3 +543,21 @@ No nanoclaw code files were modified. No git repo received the CLAUDE.md prose c
    - `dcc build inbox-mcp` + `dcc up inbox-mcp` is the surgical MCP-only deploy (avoids touching the ingestor). ~15s offline window.
    - Sonnet executors are the right cost/capability fit for template-following work (skeleton tools, tests mirroring existing patterns, ops scripts). Reserve Opus for the orchestrator's judgment calls (decomposition, trade-off acceptance).
 5. **What have I done?** 7 ConfigFiles commits (`834aae6`, `29cb2a4`, `e92ad60`, `2784c54`, `454909b`, `0ea9e9c`, `a6900c0`); 1 nanoclaw commit (`f7470f0` — lode-only); ~1100 lines of new tool code + 25 new tests; Madison's CLAUDE.md +25 lines on data volume; mailroom inbox-mcp redeployed with all tools verified.
+
+## 2026-04-22 — Phase 9.0: Mailroom subscriber startup-order fix (Codex review)
+
+### Actions
+
+- Ran `/codex:review` against the branch diff against `main`. Codex flagged four issues across the branch — one in scope for this plan (`mailroom-subscriber.ts`), three in adjacent workstreams (session rotation count from `fcf33a3`; telegram bot pool from telegram-swarm; stale test mock).
+- **In-scope fix**: `src/channels/mailroom-subscriber.ts:101-112` — `connect()` previously returned early when `ipc-out` was missing at startup, which meant subscribers that booted before mailroom would silently drop every event forever (until a nanoclaw restart). Removed the early return; `pollOnce()` already swallows `readdir` failures, so the subscriber recovers automatically once the dir appears.
+- **Out-of-scope fixes shipped in same commit** (so the Codex review came back clean in one pass): session rotation now counts inbound messages instead of container invocations (`src/db.ts` + `src/index.ts`); telegram bot pool returns a boolean and `ipc.ts` falls back to the normal sender on failure or pool saturation (`src/channels/telegram.ts` + `src/ipc.ts`); test mock for `resolveGroupModel` (introduced in `fcf33a3` but never wired into `container-runner.test.ts`) added so the 3 pre-existing failures pass.
+- Single commit `b46620b`. 303/303 nanoclaw tests passing post-fix (was 300/303 pre-fix because of the stale mock).
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `npm run build` after edits | pass | clean |
+| `npm test` after edits | pass | 303/303 (was 300/303 before the test mock fix) |
+| `npx prettier --check` on changed files | pass | auto-fixed `src/db.ts` and `src/index.ts` then re-ran clean |
+| `npm run lint` errors caused by these changes | n/a | the 2 lint errors that exist (`spawn`/`ONECLI_URL` unused) pre-exist on `main` |

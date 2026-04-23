@@ -138,6 +138,7 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - [x] **CLAUDE.md cleanup** — Flipped "are being retired (Phase 8)" → "were retired in mail-push-redesign Phase 8". Updated the scheduled-tasks roster table (down to one row + footnote explaining what was retired and where the backups live, plus the QCM-poller-retired note pointing at its archive file).
 
 ### Phase 9 — Verify + graduate
+- [x] **9.0** Mailroom subscriber startup-order fix — Codex review surfaced that the subscriber drops events forever when nanoclaw boots before mailroom (see Errors table). nanoclaw `b46620b`.
 - [ ] **9.1** Rebuild mailroom image; rebuild agent container; restart nanoclaw.
 - [ ] **9.2** End-to-end test: send test urgent mail → urgent event → immediate Madison spawn; send test routine mail → batches → eventual spawn; verify labels applied in Proton + Gmail.
 - [ ] **9.3** Measure spawn count reduction over 24h after deploy.
@@ -167,8 +168,7 @@ Design picks `archive / label / add_label / remove_label` — four verb-named to
 
 | Error | Resolution |
 |---|---|
-
-*(none yet)*
+| Subscriber missed all events when nanoclaw started before mailroom (`ipc-out` dir absent at boot) — `connect()` returned early without scheduling polls, so even after mailroom created the dir, nothing picked events up until a nanoclaw restart. | `src/channels/mailroom-subscriber.ts` always calls `schedulePoll()` now; `pollOnce()` already tolerates a missing dir, so the subscriber recovers automatically once the dir appears. nanoclaw `b46620b` (Codex review fix). |
 
 ## Current status
 
