@@ -33,8 +33,13 @@ Authoritative index of project memory. Read this first.
 - [infrastructure/a-mem.md](infrastructure/a-mem.md) — per-group a-mem MCP baked into the agent container; host Ollama for note generation; per-group ChromaDB
 - [infrastructure/context-mode.md](infrastructure/context-mode.md) — context-mode MCP + vendored skill baked into the agent container; per-group FTS5 DB; hook wiring + path-resolution nuances documented
 - [infrastructure/mailroom-rules.md](infrastructure/mailroom-rules.md) — backend rule engine in the mailroom-ingestor container; rules.json + accounts.json + changelog live in `~/containers/data/mailroom/` (symlinked into Obsidian)
+- [infrastructure/mailroom-mirror.md](infrastructure/mailroom-mirror.md) — sync worker architecture: Gmail history.list incremental + Proton IDLE+CONDSTORE, nightly reconcile two-phase, migration orchestrator, deploy checklist. Graduate of `findings.md` 2026-04-22 design session.
 - [infrastructure/madison-pipeline.md](infrastructure/madison-pipeline.md) — push-driven delivery path for inbound mail: mailroom → ipc-out → subscriber → group-queue → Madison; urgent bypasses the 2s POLL_INTERVAL
 - [infrastructure/session-context-budget.md](infrastructure/session-context-budget.md) — Obsidian `_Settings/` layout: `defaults.json` (global ops), `group-overrides.json` (per-group model + rotation), `tasks/{folder}.json` (auto-generated task snapshots). `.env` is the legacy fallback.
+
+## Architecture
+
+- [architecture/madison-pipeline.md](architecture/madison-pipeline.md) — mirror data model (RFC-822 identity, message_labels, message_folder_uids, label_catalog, label_map), session-hash invalidation pattern, hydration/reconcile flow, locked Decisions table summary, data-flow Mermaid diagram. Graduate of `findings.md` 2026-04-22 design session.
 
 ## Reference
 - [reference/rules-schema.md](reference/rules-schema.md) — mailroom rules.json schema digest (canonical source is `mailroom/src/rules/schema.md` inside the container)

@@ -34,6 +34,45 @@
 - Commit after each substantive working change. Don't batch unrelated edits.
 - If a pre-commit hook fails, fix the underlying issue and create a **new** commit. Never `--amend` or `--no-verify`.
 
+## Mailroom deploy checklist
+
+Run these steps in order any time you rebuild or migrate mailroom containers. Reference: `lode/infrastructure/mailroom-mirror.md`.
+
+1. Take a btrfs snapshot or confirm the hourly snapshot is recent enough (check `ls ~/containers/data/.snapshots/mailroom/`).
+2. Stop mailroom containers: `cd ~/containers/mailroom && env-vault env.vault -- docker compose stop ingestor inbox-mcp`.
+3. Rebuild images: `env-vault env.vault -- docker compose build`.
+4. If a migration script exists, run with `--dry-run` first against the live DB and review reported counts.
+5. Run actual migration: `env-vault env.vault -- npx tsx scripts/migrate-mirror.ts`.
+6. Verify self-audit passes (the script exits non-zero and prints mismatch details if it fails — do not proceed on exit 1).
+7. Bring services up: `env-vault env.vault -- docker compose up -d ingestor inbox-mcp`.
+8. Verify IDLE/CONDSTORE/reconcile workers start clean (check logs — no auth errors, 5 IDLE sessions starting).
+9. Restart nanoclaw if the agent container image was also rebuilt: `systemctl --user restart nanoclaw`.
+10. Run sanity SQL: `sqlite3 ~/containers/data/mailroom/store.db "SELECT COUNT(*) FROM message_labels; SELECT COUNT(*) FROM message_folder_uids; SELECT COUNT(*) FROM label_catalog; SELECT COUNT(*) FROM messages WHERE deleted_inferred=1;"` — confirm counts are reasonable (non-zero labels, deleted_inferred << total).
+
+**Critical**: always use the `env-vault env.vault --` prefix. Without it, `INBOX_DB_KEY` is unset and both containers crash-loop. See `lode/lessons.md` — "Mailroom deploys must use env-vault prefix."
+
+**Both containers** must rebuild when `src/store/` changes; only `inbox-mcp` for `src/mcp/` changes; only `ingestor` for `src/proton/` or `src/gmail/` changes. See `lode/lessons.md` — "Both mailroom containers need rebuild when src/store/ changes."
+
+## Counter-note pattern (AC-P3)
+
+When a fix ships for an issue that Madison's a-mem holds a note about:
+
+1. After the deploy, search a-mem for notes mentioning the issue: `mcp__a-mem__search_memories({query: "<issue keyword>"})`.
+2. For each note describing the now-fixed issue: either delete it or update it with a `RESOLVED <YYYY-MM-DD>` marker and a one-line pointer to the commit or plan that closed it.
+3. This prevents future Madison spawns from citing a fixed issue as current state — a confabulation vector that compounds over time.
+
+The Wave 4.2 a-mem cleanup (2026-04-23) is the historical exemplar: scanned for "Known gap", "limitation", "broken", "watermark NaN" notes and applied RESOLVED tags.
+
+Reference: `lode/lessons.md` — "Madison's confabulation has multiple distinct patterns" (pattern #3: self-citing prior fabrications).
+
+## Cross-workstream API contracts
+
+When parallel wave executors share an API surface, the orchestrator must name the full public API shape in both prompts — function names, signatures, ownership, and import style. Consumers use direct imports, never runtime discovery. See `lode/lessons.md` — "Cross-workstream API contracts must be specified in the orchestrator prompt, not inferred by executors."
+
+## Migration self-audit
+
+A migration script that mutates a production store must query actual DB state and fail loudly (exit 1) if metric counters drift from actual row counts, or if ratio invariants break (e.g. deleted_inferred > 50% blast guard). See `lode/lessons.md` — "Migration scripts must self-audit the DB state against their own reported metrics."
+
 ## Trading work (group-specific)
 - **Adopt AlgoTrader's anti-overfit rubric.** See `~/Projects/AlgoTrader/lode/practices.md`. Single-variable testing, cross-asset validation, `.shift(1)` on daily filters, "pick one good filter, not two", no hyperparameter grid search.
 - **Strategy reports go to the synced vault** at `~/Documents/Obsidian/Main/NanoClaw/AlgoTrader/` so Jeff can read them on any device. Do **not** write to `~/Projects/AlgoTrader/obsidian_vault/` for nightly nanoclaw-authored reports.

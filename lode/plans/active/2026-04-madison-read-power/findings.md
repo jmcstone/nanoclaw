@@ -81,6 +81,15 @@ For shared code (`src/store/`, `src/rules/`), both need it.
 
 Documented in detail in section "Three layered failures uncovered" above. Fix is the session-toolset-hash invalidation in this plan's AC-3.
 
+## Graduated content
+
+The following sections from this document have been extracted to permanent lode domain files (2026-04-23, Wave 4):
+
+- **Mirror data model, session-hash pattern, Decisions table summary, hydration phases, data-flow diagram** → `lode/architecture/madison-pipeline.md`
+- **Gmail history.list incremental sync, Proton IDLE+CONDSTORE, nightly reconcile, migration orchestrator, sync wiring diagram** → `lode/infrastructure/mailroom-mirror.md`
+
+The diagnostic record above (trigger event, three layered failures, tool inventory, gap analysis) is retained here as historical context for this plan; it is not duplicated elsewhere.
+
 ## References
 
 - ConfigFiles commit `58a290f` — watermark NaN fix

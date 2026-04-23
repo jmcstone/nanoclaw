@@ -47,6 +47,16 @@ Bad edits (malformed JSON, schema violation, uncompilable regex) log loudly and 
 
 The `_Settings/` subfolder under each group's Obsidian vault is the conventional home for config files that a backend service reads at runtime AND the human wants to edit from any device. When another group eventually needs the same pattern (e.g. per-group rule engines), add a `NanoClaw/<Group>/_Settings/` folder + per-file compose mounts into the relevant container. The underscore prefix keeps it sorted to the top of the Obsidian file tree alongside `_attachments/` and `_digests/`.
 
+## Operational requirement — env-vault prefix
+
+All `docker compose` commands that start or restart `mailroom-ingestor-1` or `mailroom-inbox-mcp-1` **must** use the `env-vault env.vault --` prefix:
+
+```
+cd ~/containers/mailroom && env-vault env.vault -- docker compose up -d ingestor inbox-mcp
+```
+
+`dcc` (`/usr/local/bin/dcc`) is just a Makefile wrapper — it does NOT decrypt env.vault. Without the prefix, `INBOX_DB_KEY` is unset and both containers crash-loop with `INBOX_DB_KEY is required for inbox store encryption`. See `lode/lessons.md` — "Mailroom deploys must use env-vault prefix" for the full incident account.
+
 ## Operational gotcha — compose CWD vs realpath
 
 The compose volume mount `../data/mailroom:/var/mailroom/data` is **relative**. Docker Compose resolves it against the **process CWD's symlink chain**, NOT the compose file's `realpath`. The repo lives at `~/Projects/ConfigFiles/containers/mailroom/mailroom/docker-compose.yml`, but `~/containers/mailroom` is a symlink into that path, and the real data lives at `~/containers/data/mailroom/`.
