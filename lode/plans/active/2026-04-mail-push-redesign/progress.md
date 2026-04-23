@@ -439,6 +439,40 @@ CLAUDE.md grew 291 → 355 lines (+64 net: dropped Phase-1 callout, added "How m
    - ConfigFiles main (8 commits): `a5896fe` (Phase 2.1 types) through `999b23c` (validate_rules tool).
    - Plus three lode infrastructure files graduated, Madison's CLAUDE.md fully rewritten + corrected mid-deploy, mailroom containers rebuilt twice, nanoclaw restarted twice, all tests passing.
 
+## 2026-04-22 — Phase 10 Wave 1: four batch write tools (parallel Sonnet executors)
+
+### Actions
+
+- Orchestrator (Opus) decomposed Phase 10 into three waves: Wave 1 = four independent tool files (10.1–10.4), Wave 2 = register + tests + Madison's CLAUDE.md (10.5–10.7), Wave 3 = rebuild + restart (10.8). 10.9 (24h audit) deferred — calendar-time, not execution-time.
+- Wave 1: spawned four `lode-executor` subagents (model: Sonnet) in parallel with self-contained prompts. Each got the same Read First list (tracker, `apply_action.ts` template, `apply.ts` engine, `types.ts`, `evaluate.ts`, `server.ts`, `proton-client.ts`, `queries.ts`) plus per-tool spec.
+- All four landed in ConfigFiles main with clean tsc and the 81/81 mailroom test suite still passing:
+  - 10.1 `archive.ts` — `834aae6` (270 lines)
+  - 10.2 `label.ts` — `29cb2a4` (264 lines)
+  - 10.3 `add_label.ts` — `e92ad60` (219 lines)
+  - 10.4 `remove_label.ts` — `2784c54` (192 lines)
+- Notable patterns that emerged across the wave:
+  - All four reuse `buildApplyContext` and `extractEmailFromAccountId` exported from `apply_action.ts` rather than duplicating
+  - All four run actions through `evaluate()` with a single synthetic `{match: {}, actions}` rule so the MCP path gets the same conflict-resolution and label-set normalization as the ingest path
+  - 10.4 surfaces Proton-skip per-id via `results[i].labels_remove_skipped: string[]` (a sibling array to `labels_removed`); skipped ids stay in `results[]` and count toward `succeeded` — informational, not failure. Wave 2 test agent needs to know this contract.
+  - 10.4 deviation: skipped per-account Proton connection grouping since Proton remove is a v1 no-op — zero benefit, more complexity. Documented in the file. Match the pattern when add-back lands later.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` after each tool | pass | clean across all 4 |
+| `npm test` after each tool | pass | 81/81 held steady through the wave |
+
+### Reboot check (for next session if interrupted)
+
+1. **Where am I?** Phase 10 Wave 1 complete. Four batch write tool files exist in `~/Projects/ConfigFiles/containers/mailroom/mailroom/src/mcp/tools/` (archive, label, add_label, remove_label). Not yet registered with the MCP server (Wave 2 task 10.5). Not yet covered by unit tests (Wave 2 task 10.6). Madison doesn't know they exist yet (Wave 2 task 10.7).
+2. **Where am I going?** Wave 2 — three parallel Sonnet executors: register the four tools in `mailroom/src/mcp/server.ts` (10.5), write unit tests mirroring `apply.test.ts` patterns (10.6), update Madison's CLAUDE.md to direct her to the new batch tools for bulk work (10.7). Then Wave 3 = rebuild + restart inbox-mcp container.
+3. **What is the goal?** Make confabulation structurally harder by giving Madison flat-array verb-named tools for bulk work (auditable in the MCP log at a glance: "called archive on 3 ids" vs parsing nested ops).
+4. **What have I learned?**
+   - Wave parallelism works cleanly when the tools share a template + the orchestrator can flag the cross-tool contract details (like 10.4's skip surface) for downstream test/integration agents.
+   - The shared-helper pattern (`buildApplyContext`, `extractEmailFromAccountId`) emerged organically from all four agents independently — confirms the helpers belong in `apply_action.ts` (or eventually their own module) rather than being re-derived per tool.
+5. **What have I done?** 4 ConfigFiles commits (834aae6, 29cb2a4, e92ad60, 2784c54), 945 lines of new tool code, all behind `tsc --noEmit` + `npm test` clean.
+
 ## Next steps (to resume)
 
 1. **Pick up Phase 9 final steps:**
@@ -454,3 +488,25 @@ CLAUDE.md grew 291 → 355 lines (+64 net: dropped Phase-1 callout, added "How m
    - `mcp__inbox__preview_rule` — dry-run a rule against recent messages to see what it would catch (Jeff suggested; deferred this session).
    - `mcp__inbox__send_log` — let Madison read send-log.jsonl from her sandbox without docker exec.
    - Backfill rule application — replay rules over the historical store to retroactively label.
+
+## 2026-04-22 — Phase 10.7: Madison CLAUDE.md batch-tools docs
+
+### Actions
+
+- Read all four new batch tool files (`archive.ts`, `label.ts`, `add_label.ts`, `remove_label.ts`) for accurate signatures and return shapes before editing.
+- **Expanded the Writes subsection** under "Inboxes to sweep" with a dedicated "Batch verb tools" block documenting all four new tools:
+  - `mcp__inbox__archive(message_ids: string[])` — bulk archive; returns `{attempted, succeeded, failed}`.
+  - `mcp__inbox__label(message_ids: string[], labels: string[])` — replace-set; returns `{attempted, succeeded, failed}`.
+  - `mcp__inbox__add_label(message_ids: string[], label: string)` — union; single label string; returns `{attempted, succeeded, failed}`.
+  - `mcp__inbox__remove_label(message_ids: string[], label: string)` — subtract; Gmail applied, Proton v1 no-op surfaced via `labels_remove_skipped`; returns `{attempted, succeeded, failed, results[]}`.
+- **Directed Madison to use batch tools for bulk work.** Explicit rule: "archiving N messages → call `archive([id1, id2, ...])` ONCE, not N separate `apply_action` calls." Same pattern stated for the other three.
+- **Preserved `apply_action` as the escape hatch** with a clear scope: use it for (a) heterogeneous per-message work where each id needs a different action, and (b) flag-flipping (`urgent`/`qcm_alert`) that batch tools don't expose.
+- **Added truthfulness link sentence**: each batch tool returns a per-id `results[]` / `failed[]` with explicit success/failure — never paraphrase a bulk action without checking the actual `succeeded` count and `failed` list.
+- **Updated the action commands table** — added a `archive a1, a2, a3` row pointing at `mcp__inbox__archive([...])` for multi-message archive (keeps the single-message row intact pointing at `apply_action`).
+- **Updated the Tools section** at the bottom of the file — split email writes into single-message and batch groups so the list is scannable at a glance.
+
+### Result
+
+Madison's CLAUDE.md grew 355 → 380 lines (+25 net). The file lives in the data volume at `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md` — not under git by design. Changes take effect on Madison's next container spawn (CLAUDE.md is loaded fresh per spawn; no rebuild needed).
+
+No nanoclaw code files were modified. No git repo received the CLAUDE.md prose change directly.
