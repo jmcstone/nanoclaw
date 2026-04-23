@@ -76,6 +76,62 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 - `~/containers/data/NanoClaw/groups/telegram_inbox/imap_autolabel.py` — 27 rules to port to `rules.json` (transcribe the `RULES` list)
 - `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md` — Madison's current instructions to rewrite
 
+## Retrospective (2026-04-23)
+
+**Goal achievement: partial.** Infrastructure shipped and works. Product claim unmet.
+
+### What works (merged + deployed)
+
+- Rules engine with unified cross-source schema, hot-reload, safe-on-error (AC-1, AC-2, AC-3, AC-4).
+- `mcp__inbox__*` write tools — `apply_action`, `delete`, `send_reply`, `send_message`, `validate_rules`, plus Phase 10's batch tools `archive`/`label`/`add_label`/`remove_label` (AC-5, AC-6, AC-11).
+- Event-driven subscriber pipeline: `inbox:urgent` priority dispatch + `inbox:routine` batching (AC-7).
+- Legacy retired: `imap_autolabel.py`, `:07 hourly triage`, `*/15 auto-labeler health check`, QCM poller (AC-8).
+- Madison persona updated with all of the above + Obsidian sync for `_Settings/` (AC-9, AC-10).
+- 303/303 nanoclaw + 106/106 mailroom tests green.
+
+### What didn't work
+
+**The product claim — "Madison replaces opening your email" — failed in real-world use.** Testing revealed:
+
+- Madison did not know what was in Jeff's inbox *right now*. She'd surface messages he'd already read or deleted on his phone.
+- She couldn't answer "what's in my inbox" at all — the store has every message ever ingested but no concept of inbox membership, archived status, or delete state.
+- She'd prompt Jeff about stale items and miss items that had moved status upstream.
+- Net effect: using Madison was *more* work than opening Gmail/Proton directly.
+
+### Root cause
+
+The store is a content-only archive, not a mirror. It has no columns for:
+
+- labels / folder membership
+- archived state (Gmail `INBOX` label absence / Proton `Archive` folder)
+- deleted state (Trash membership)
+- direction (sent vs received)
+- read/unread
+
+Upstream state changes (Jeff on his phone, Gmail filters, Proton sieve rules, Madison's own writes) never propagate back to the store. The Proton backfill from `All Mail` additionally imported years of historical mail indistinguishable from current inbox mail.
+
+No amount of better rules-engine or push-latency work fixes this. A mirror is required.
+
+### Why the infrastructure still has value
+
+The rules engine, write-tool surface, event-driven subscriber, and batch tools are all building blocks that **`madison-read-power`** layers on top of a real mirror. Nothing gets ripped out. Specifically:
+
+- Write tools gain transactional write-through to the local DB (Wave 2C of `madison-read-power`).
+- Rules engine at ingest persists decisions to DB alongside upstream actions.
+- Mailroom-subscriber event dispatch continues unchanged.
+
+### Continuation
+
+`madison-read-power` (rewritten 2026-04-22) carries the unmet product goal forward with the correct foundation: full mirror (labels/folders/direction/archived/deleted), sync worker (Gmail history.list + Proton IDLE+CONDSTORE), two-phase reconcile, and `mcp__inbox__query`. See `lode/plans/active/2026-04-madison-read-power/tracker.md`.
+
+### Lessons captured permanently
+
+- **A mirror is not a snapshot.** Content-only archives cannot service inbox-triage goals regardless of how smart the agent is. Captured in `lode/lessons.md` and `lode/infrastructure/madison-pipeline.md`.
+- **Branch-proliferation pattern.** Each failed foundation produced a new branch trying to work around it (`mail-push-redesign`, `madison-upstream-mirror` proposed, `madison-read-power` original scope). Fold foundation work into one plan; stop spawning branches. Captured in `lode/lessons.md`.
+- **Infrastructure completion ≠ product completion.** Tests passing + deployment clean doesn't mean the product claim holds. Always validate against the product goal, not just the build artifacts. Captured in `lode/lessons.md`.
+
+---
+
 ## Phases
 
 ### Phase 1 — Pre-work
@@ -139,12 +195,12 @@ Replace Madison's polling-based triage (`:07` hourly task + per-arrival push + `
 
 ### Phase 9 — Verify + graduate
 - [x] **9.0** Mailroom subscriber startup-order fix — Codex review surfaced that the subscriber drops events forever when nanoclaw boots before mailroom (see Errors table). nanoclaw `b46620b`.
-- [ ] **9.1** Rebuild mailroom image; rebuild agent container; restart nanoclaw.
-- [ ] **9.2** End-to-end test: send test urgent mail → urgent event → immediate Madison spawn; send test routine mail → batches → eventual spawn; verify labels applied in Proton + Gmail.
-- [ ] **9.3** Measure spawn count reduction over 24h after deploy.
-- [ ] **9.4** Commit all changes: mailroom (ConfigFiles repo), nanoclaw (this branch), Madison CLAUDE.md (in the data volume — may need a separate commit mechanism if you version that dir).
-- [ ] **9.5** Graduate durable findings from findings.md to `lode/architecture/mailroom-rules.md` and `lode/architecture/madison-pipeline.md`.
-- [ ] **9.6** Move this plan to `lode/plans/complete/`.
+- [x] **9.1** Rebuild mailroom image; rebuild agent container; restart nanoclaw. *(completed 2026-04-22; deployment shipped. Event-driven pipeline functional end-to-end in infrastructure terms.)*
+- [x] **9.2** End-to-end test: send test urgent mail → urgent event → immediate Madison spawn; send test routine mail → batches → eventual spawn; verify labels applied in Proton + Gmail. *(completed 2026-04-22; infrastructure-level tests passed, BUT testing also surfaced the product-level failure documented in the Retrospective below: Madison could not answer "what's in my inbox," prompted Jeff on mail he'd already read/deleted, and was worse than opening mail directly. The infrastructure works; the product claim does not.)*
+- [ ] ~~**9.3** Measure spawn count reduction over 24h after deploy.~~ **Dropped 2026-04-23.** Measuring spawn-rate reduction of a product that isn't servicing its goal is not useful. The infrastructure's spawn-reduction property is real but decoupled from the goal — doesn't need 24h validation here.
+- [x] **9.4** Commit all changes. *(all substantive work previously committed across ConfigFiles + nanoclaw + data-volume changes through 2026-04-22; this close-out commit finalizes the lode bookkeeping.)*
+- [x] **9.5** Graduate durable findings. *(completed 2026-04-22 pre-verification — see `findings.md` "Graduation pointers". Landed in `lode/infrastructure/mailroom-rules.md`, `lode/infrastructure/madison-pipeline.md`, `lode/reference/rules-schema.md`.)*
+- [x] **9.6** Move this plan to `lode/plans/complete/`. *(2026-04-23)*
 
 ### Phase 10 — Batch write tools + confabulation hardening
 

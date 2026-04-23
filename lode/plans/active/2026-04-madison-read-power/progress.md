@@ -47,3 +47,31 @@
    - Session-hash invalidation: any toolset change vs only on-remove?
 2. After Phase 1 lock, switch to a fresh feature branch (`madison-read-power` off `mail-push-redesign`) and start Phase 2.
 3. Update Madison's CLAUDE.md instruction: when she suspects her tool-awareness is stale, she should ask Jeff to clear her session, NOT confabulate capabilities. (Persona reinforcement complementary to the structural session-hash fix.)
+
+## 2026-04-22 late evening — Design session: scope expanded to full mirror
+
+### Actions
+
+- Extended design discussion with Jeff, walking all 9 architecture-group edge cases (identity/dedup, label semantics, message classes, sync robustness, backfill/hydration, concurrency, operational).
+- Key reframing: Jeff's core product goal is "keep labels clean and consistent" — not just a `query` tool. Current store is content-only with no label/folder/archive/direction state, and 10k+ Proton rows from the `All Mail` backfill look identical to current inbox mail to Madison. "Thin ledger" approach was considered and rejected for this reason.
+- Code verification (not assumed): confirmed Proton `source_message_id` = RFC-822 Message-ID (`proton/poller.ts:177`); confirmed write tools resolve Proton UIDs via per-write IMAP search with an explicit v1 limitation on Labels/*-only messages (`apply_action.ts:162-184,182`); confirmed no label/folder/archive state in `messages` schema.
+- 9 decision groups locked — full list now in `tracker.md`'s Decisions section.
+- Tracker rewritten with 7 acceptance-criteria groups + 6 execution waves (Wave 2 parallelizable across 5 Sonnet subagents, minimizing Opus usage per Jeff's budget constraint).
+- btrfs hourly snapshots at `/home/jeff/containers/data/.snapshots/mailroom/` confirmed — removed backup-job and recovery-drill tasks from the plan. Key backup and startup guard remain.
+
+### Reboot check (for next session)
+
+1. **Where am I?** Design discussion complete. Tracker fully rewritten with all locked decisions. Awaiting `mail-push-redesign` Phases 9.1–9.6 before spinning branch.
+2. **Where am I going?** Wave 0 → 1 → (2A||2B||2C||2D||2E) → 3 → 4 → 5. Wave 2 is the big parallel push — 5 Sonnet executors working concurrently on hydration/reconcile, incremental sync, write-through refactor, query tool, and session-hash (nanoclaw side).
+3. **What is the goal?** Turn the store from a content-only archive into a true mirror of upstream mailbox state, so Madison can service the "keep my labels clean and consistent" goal. Plus the structured `query` tool and session/a-mem freshness fixes from the original scope.
+4. **What have I learned?**
+   - Every prior plan (`mail-push-redesign`, original `madison-read-power`, proposed `madison-upstream-mirror`) was working around the same missing foundation. Folding the mirror work into one plan on one branch stops the branch-proliferation pattern.
+   - Gmail and Proton need fundamentally different sync primitives: Gmail `history.list` vs Proton IMAP IDLE + CONDSTORE. Gmail quota is a non-issue (5,760 units/day for full sync, out of 1B budget).
+   - Write-through + sync loop act as each other's safety net: Madison's writes hit DB immediately; sync corrects any drift from foreign-origin changes. Idempotent set-ops make collisions free.
+   - Two-phase reconcile (non-blocking read → short apply tx with remove-reverify) is the pattern for correctness without blocking Madison.
+   - btrfs hourly snapshots at `~/containers/data/.snapshots/mailroom/` already provide the backup story. Key loss remains the only hard failure; mitigated via multi-location key storage + startup guard.
+5. **What have I done?**
+   - Full design discussion with Jeff (9 architecture groups).
+   - Code verification (3 critical assumptions checked against source).
+   - Tracker rewritten with 29 acceptance criteria across 8 outcome groups, 6 execution waves, and a full Decisions table.
+   - Progress + findings updates.

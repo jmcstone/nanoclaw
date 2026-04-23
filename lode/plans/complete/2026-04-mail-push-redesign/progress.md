@@ -561,3 +561,25 @@ No nanoclaw code files were modified. No git repo received the CLAUDE.md prose c
 | `npm test` after edits | pass | 303/303 (was 300/303 before the test mock fix) |
 | `npx prettier --check` on changed files | pass | auto-fixed `src/db.ts` and `src/index.ts` then re-ran clean |
 | `npm run lint` errors caused by these changes | n/a | the 2 lint errors that exist (`spawn`/`ONECLI_URL` unused) pre-exist on `main` |
+
+## 2026-04-23 — Retrospective + plan close-out
+
+### Actions
+
+- Phases 9.1 + 9.2 (rebuild/restart + end-to-end test) were completed 2026-04-22 but not marked in the tracker. Marking them done now.
+- 9.3 (24h spawn-rate measurement) dropped as not-useful: measuring a product that didn't service its goal provides no signal relevant to whether to keep the plan open.
+- Testing surfaced the real-world failure: Madison could not answer "what's in my inbox right now" and was prompting Jeff on mail he'd already read/deleted. Using her was worse than opening Gmail/Proton directly.
+- Root cause identified through architectural discussion on 2026-04-22 evening / 2026-04-23: the store is a content-only archive, not a mirror of upstream state. No label/folder/archive/delete/direction columns. Upstream changes (Jeff's phone actions, Gmail filters, Proton sieve, rules engine writes) never propagate into the DB.
+- Retrospective added to `tracker.md`. Clearly separates what shipped (infrastructure) from what failed (product goal) and points at `madison-read-power` as the continuation.
+- Findings already graduated to permanent lode on 2026-04-22 (see `findings.md` "Graduation pointers"). 9.5 marked complete.
+- Plan moved from `lode/plans/active/` to `lode/plans/complete/`.
+- `lode/lessons.md` updated with three durable lessons: mirror vs snapshot, branch-proliferation anti-pattern, infrastructure-completion vs product-completion.
+- Continuation plan `madison-read-power` was rewritten 2026-04-22 evening with the correct foundation and is ready to start Wave 0 on the next session.
+
+### Reboot check (for next session looking at this plan in complete/)
+
+1. **Where am I?** `mail-push-redesign` is closed. Plan in `lode/plans/complete/`. Infrastructure merged + live.
+2. **Where am I going?** The product goal migrates to `madison-read-power` (still in `active/`).
+3. **What is the goal?** The infrastructure goal (push-driven triage, rules engine, write tools) is met. The product goal (Madison replaces opening mail) was not — continues under `madison-read-power`.
+4. **What have I learned?** A content-only archive cannot service inbox triage. Mirror state is required. Tests passing ≠ product claim holds.
+5. **What have I done?** Shipped ~all planned infrastructure; ran real-world user test and accepted the failure; closed the plan with an honest retrospective rather than dressing up a partial outcome as full success.

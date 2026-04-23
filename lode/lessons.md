@@ -4,6 +4,51 @@ Operational and design lessons distilled from incidents, corrections, and valida
 
 ---
 
+## A mirror is not a snapshot — content-only archives cannot service inbox triage
+
+**Rule**: If the product goal is "agent manages/triages a live-state system" (inbox, ticket queue, task tracker, calendar), the local store must mirror upstream *mutable* state — labels, folder membership, archived/deleted flags, read state — not just content. A write-once-at-ingest archive is insufficient regardless of how smart the agent is or how well the rules engine runs.
+
+**Why**: `mail-push-redesign` (closed 2026-04-23) shipped a correct, tested event-driven rules engine + write-tool surface, but the store had zero label/folder/archive/direction columns. Madison could not answer "what's in my inbox right now" — she had every message ever ingested, indistinguishable from each other. When Jeff read or deleted mail on his phone, mailroom never learned. She prompted on stale items and missed upstream status changes. Net effect: using Madison was more work than opening Gmail/Proton directly. Testing exposed this at the product level even though every infrastructure metric (tests, deploys, event latency) was green.
+
+**How to apply**:
+- For any plan whose product claim is "agent replaces a live-state UI," the first question in design is "what upstream mutable state is being mirrored, and how does it stay in sync?" — not "which tool surface do we expose."
+- Accept that a mirror needs write-through (agent/rule writes update local DB in same txn as upstream call) AND a sync loop (picks up drift from foreign-origin changes).
+- Content immutable → write-once safe. Mutable state → needs a sync mechanism per source backend (Gmail `history.list`, IMAP IDLE+CONDSTORE).
+
+**Incident**: `mail-push-redesign` plan — 9 phases of infrastructure, all tests green, and the product was worse than doing nothing. Retrospective in the closed plan at `lode/plans/complete/2026-04-mail-push-redesign/tracker.md`.
+
+---
+
+## Branch-proliferation anti-pattern — fold foundation work into one plan
+
+**Rule**: When successive features keep colliding with the same missing piece of infrastructure, stop adding features and fold the foundation work into the active plan. Don't spin a new branch for every symptom.
+
+**Why**: Each feature workaround treats the symptom, not the cause. `mail-push-redesign` worked around the store's missing state by pushing labels upstream without mirroring back. The original `madison-read-power` tried to add a `query` tool over the same hole. A proposed `madison-upstream-mirror` would have been a fourth concurrent branch. Branch count grew; product goal never converged. Folding all mutable-state work into the rewritten `madison-read-power` collapsed three planned branches into one.
+
+**How to apply**:
+- At plan-design time, ask: "Is this feature relying on a foundation that doesn't exist yet? Could it be the foundation's problem?" If yes, widen the current plan's scope, don't spin a new one.
+- When a review discovers a foundation gap, the first-instinct response "let's put the fix in a separate plan" is usually wrong. That instinct produces branch sprawl. Widen instead.
+- Signal: three different pain points tracing to the same missing infrastructure = build the infrastructure.
+
+**Incident**: the chain `mail-push-redesign` → original `madison-read-power` → proposed `madison-upstream-mirror` was three branches around one missing mirror foundation. Collapsed into one rewritten `madison-read-power` plan on 2026-04-22.
+
+---
+
+## Infrastructure completion ≠ product completion
+
+**Rule**: A plan is not complete when all technical boxes are checked — it's complete when the product goal is actually achieved in real user conditions. Validate against the goal statement, not just the acceptance criteria.
+
+**Why**: `mail-push-redesign` passed every AC (rules engine ✓, write tools ✓, push dispatch ✓, legacy retired ✓, 303/303 tests ✓) and shipped to production. Product outcome: Jeff found it net-negative to use. The AC set was correct for what it named; it just didn't name "does this actually replace opening mail?" The goal statement did name that; nobody ran the product-level test.
+
+**How to apply**:
+- Every plan's Verify phase should include at least one test of the form "in the real environment, does the feature deliver the stated goal?" — not derived from AC, but written against the plain-English goal statement.
+- A 24h use-in-anger period with honest reflection ("did this make my life better?") should gate plan closure for user-facing plans.
+- When a plan ships but the user immediately starts working around it or reverting to the old way, that's a signal the goal wasn't met — not a signal to add documentation or polish.
+
+**Incident**: `mail-push-redesign` closed-with-retrospective on 2026-04-23. Infrastructure works and is carried forward; the product claim failed and migrates to `madison-read-power`.
+
+---
+
 ## Mailroom deploys must use `env-vault env.vault --` prefix
 
 **Rule**: When bringing up `mailroom-ingestor-1` or `mailroom-inbox-mcp-1` from a fresh shell, always prefix with `env-vault env.vault --`:
