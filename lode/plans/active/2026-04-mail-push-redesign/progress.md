@@ -510,3 +510,36 @@ CLAUDE.md grew 291 → 355 lines (+64 net: dropped Phase-1 callout, added "How m
 Madison's CLAUDE.md grew 355 → 380 lines (+25 net). The file lives in the data volume at `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md` — not under git by design. Changes take effect on Madison's next container spawn (CLAUDE.md is loaded fresh per spawn; no rebuild needed).
 
 No nanoclaw code files were modified. No git repo received the CLAUDE.md prose change directly.
+
+## 2026-04-22 — Phase 10 Wave 2 (10.5 + 10.6) + cleanup + Wave 3 (10.8 deploy)
+
+### Actions
+
+- **10.5 (Sonnet executor)**: Registered the four batch tools in `mailroom/src/mcp/server.ts` following the existing dep-guard pattern. Descriptors added to `writeTools` array; per-tool case in the `CallToolRequestSchema` switch throws `"<name> not available: write deps not configured"` when `!deps`. ConfigFiles `454909b`. tsc clean, 81/81 tests pre-tests-wave.
+- **10.6 (Sonnet executor)**: 25 unit tests across `archive.test.ts` (8) / `label.test.ts` (7) / `add_label.test.ts` (8) / `remove_label.test.ts` (12). Partial-failure case + the remove_label Proton-skip contract assertion both included. Mid-run correction: assertions adjusted from raw `Actions` shape to post-evaluate `ResolvedActions` (`labels_to_add`/`labels_to_remove`) because `evaluate()` transforms before `applyActions` is called. ConfigFiles `0ea9e9c`. 81 → 106 tests passing.
+- **Cleanup pass (Sonnet executor)**: `label.ts` had its own local `buildApplyContext` instead of importing from `apply_action.ts` like the other three Wave-1 tools. Refactored to use the shared helper. 265 → 157 lines (−108). `label.test.ts` mock pattern switched from mocking `proton-client.js` to mocking `apply_action.js` via `vi.hoisted`, matching `archive.test.ts`. ConfigFiles `a6900c0`. 106/106 tests held.
+  - **Behavior trade-off accepted (Jeff approved option (a))**: The local `buildApplyContext` in `label.ts` had a real Proton connection-pooling optimization (one IMAP handle per account reused across the batch via a `Map<address, handle>`). Removing it means each Proton message in a batch now opens its own IMAP session — matching the other three tools but losing the optimization. Acceptable because the Proton bridge is local (~50ms login) and typical batches are 3-5 messages. Filed mentally as a future improvement: lift connection pooling into the shared `buildApplyContext` so all four tools benefit.
+- **Wave 3 deploy (Sonnet executor)**: `dcc build inbox-mcp` from `~/containers/mailroom` symlinked path (the cwd-resolution lesson from Phase 9 commit `095d724` paid off — the agent went there directly without trial-and-error). `dcc up inbox-mcp` force-recreated the container since the image tag is the same `mailroom-local:latest`. Healthy in 12s. ~15s effective offline window for Madison's MCP. **Verified via MCP introspection**: 12 tools registered total, all four `mcp__inbox__{archive,label,add_label,remove_label}` present. **Functional smoke**: `mcp__inbox__validate_rules` returned `ok:true, 30 rules, 6 accounts`. No code changes; pure deploy operation.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| `tsc --noEmit` after each commit | pass | clean throughout Wave 2 + cleanup |
+| `npm test` after 10.6 | pass | 81 → 106 (+25) |
+| `npm test` after cleanup | pass | 106/106 held |
+| `mailroom-inbox-mcp-1` healthcheck post-restart | pass | healthy in 12s |
+| MCP tool introspection | pass | all 4 batch tools listed |
+| Functional smoke (`validate_rules`) | pass | `ok:true, 30 rules, 6 accounts` |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Phase 10 implementation work fully complete (10.1 through 10.8 all checked). Four batch write tools live on `mailroom-inbox-mcp-1` and Madison's persona directs her at them. The 10.9 audit (24h after deploy, compare `apply_action complete` vs `archive complete` log counts) is the only Phase 10 task left, and it's calendar-time.
+2. **Where am I going?** Two parallel observation windows now ticking down: (a) Phase 9 spawn-rate measurement vs ~180/day baseline (pending from earlier session); (b) Phase 10.9 batch-tool-vs-apply_action usage audit. Both ~24h from their respective deploys. After both observations complete, graduate the plan to `lode/plans/complete/`.
+3. **What is the goal?** Push-driven mail triage (achieved Phases 1-9) + structurally honest batch write tools that make confabulation harder (achieved Phase 10).
+4. **What have I learned?**
+   - Three-wave parallel execution pattern works well for plans with clear dependency tiers: Wave 1 = independent file additions (4× parallel Sonnet), Wave 2 = downstream wiring + tests + docs (3× parallel Sonnet), Wave 3 = serial deploy (1 Sonnet). Opus orchestrator stays lean — only updates trackers and surfaces trade-offs.
+   - When parallel agents diverge on minor patterns mid-wave (e.g. label.ts re-implementing a helper), catch + fix in a focused cleanup commit AFTER the wave completes rather than blocking. Cheaper than synchronizing.
+   - `dcc build inbox-mcp` + `dcc up inbox-mcp` is the surgical MCP-only deploy (avoids touching the ingestor). ~15s offline window.
+   - Sonnet executors are the right cost/capability fit for template-following work (skeleton tools, tests mirroring existing patterns, ops scripts). Reserve Opus for the orchestrator's judgment calls (decomposition, trade-off acceptance).
+5. **What have I done?** 7 ConfigFiles commits (`834aae6`, `29cb2a4`, `e92ad60`, `2784c54`, `454909b`, `0ea9e9c`, `a6900c0`); 1 nanoclaw commit (`f7470f0` — lode-only); ~1100 lines of new tool code + 25 new tests; Madison's CLAUDE.md +25 lines on data volume; mailroom inbox-mcp redeployed with all tools verified.
