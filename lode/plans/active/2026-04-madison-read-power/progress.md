@@ -1,5 +1,45 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-23 evening — Wave 5.5.1 done, fix surface corrected
+
+### Actions (5.5.1 verification)
+
+- Grepped mailroom src + sampled `mailroom-ingestor-1` logs (last 3h). Both legacy pollers (`gmail/poller.ts:269`, `proton/poller.ts:211`) are **actively ingesting** — 8 "classified" log lines in the sample. Wave 2B workers (`proton-idle`, `proton-condstore`, `gmail-history`) are up but emit **zero** `applyProtonUidAdded` / `applyLabelsAdded` lines → they're detectors on existing rows, not inserters.
+- Confirmed `ingestMessage` in `src/store/ingest.ts` writes `messages`/`threads`/`senders`/`accounts` but never `message_labels` / `label_catalog` / `message_folder_uids`. That's the hole.
+- Corrected Wave 5.5 tracker scope:
+  - 5.5.1 checked off with findings.
+  - Primary fix moves into `ingestMessage()` itself (extend signature with optional `labels[]` + `folder_uid`); both poller call sites pass their source-native data.
+  - Legacy `proton/poller.ts` promoted from "if still running" to primary fix target (5.5.3). **Added `gmail/poller.ts` as peer fix target** (5.5.4) — the original brief missed this because it focused on Wave 2B paths.
+  - Wave 2B event-applier hardening demoted to "secondary/future-proofing" (5.5.5).
+  - Watermark bump (5.5.6) moves into `ingestMessage` — one place, one tx.
+  - Audit invariant (5.5.7) clarified as Madison-callable MCP tool `audit_label_coverage`, not just log metric.
+  - 5.5.10 deploy scope widened to both containers (inbox-mcp needs the new audit tool).
+- Updated `wave-5.5-push-ingest-parity.md` brief with the corrected fix shape — single-inlined transactional extension of `ingestMessage`, not scattered across three appliers.
+
+## 2026-04-23 evening — Wave 5.5 added (push-ingest parity)
+
+### Actions
+
+- Wave 5 verification (AC-V3 / AC-V6) surfaced that push-ingest workers skip `message_labels` / `label_catalog` writes. Today's diagnostic: 21 received Proton messages, only 15 with any label entry, 8 with INBOX specifically — Madison under-counts the live inbox by ~30%.
+- Sibling tech-debt `TD-MAIL-PUSH-WATERMARK` is the same conceptual root cause (Wave 2B doesn't fully replicate migration hydration's writes).
+- Moved `lode/tmp/issue-push-ingest-labels-2026-04-23.md` → `lode/plans/active/2026-04-madison-read-power/wave-5.5-push-ingest-parity.md` so the executor brief lives with the plan.
+- Added Wave 5.5 to tracker.md with 12 sub-tasks spanning: ingest-path verification, event-applier label writes (Proton + Gmail + legacy poller), watermark bump, runtime audit invariant, integration tests, one-shot gap backfill, ingestor-only deploy, live verify, tech-debt graduation, and AC-V3/V6 re-run.
+- Current status line updated: Wave 5.5 blocks AC-V3/V6 truth → execute 5.5 before finishing Wave 5.
+
+### Reboot check (for next session)
+
+1. **Where am I?** Wave 5.5 scoped and tracker updated. Executor brief at `wave-5.5-push-ingest-parity.md`. Not yet spawned.
+2. **Where am I going?** Spawn one focused Sonnet executor on Wave 5.5 (5.5.1 → 5.5.11). Then resume Wave 5 verification (5.1, 5.2, 5.3, 5.4, 5.5, 5.7) and finally 5.9 move-to-complete.
+3. **What is the goal?** Close the push-ingest label + watermark gap so AC-V3 / AC-V6 / the whole "true mirror" promise hold end-to-end, not just on the migration-hydrated subset.
+4. **What have I learned?**
+   - Wave 2B ships rows to `messages` but not to `message_labels` / `label_catalog` — same shape as the Wave 3.5 apply.ts bug that required the self-audit invariant. Pattern: "new write path doesn't replicate everything the migration path does." Fix-shape template: make push-ingest transactional over messages + labels + catalog + watermark, with a runtime invariant to guard the promise.
+   - Symptom was quiet (under-count, not error), surfaced only because Jeff eyeballed the actual Proton UI vs Madison's response. Argues for the runtime audit invariant being a Madison-callable diagnostic tool, not just a log metric.
+5. **What have I done?**
+   - Moved tmp bug doc into plan dir.
+   - Added Wave 5.5 section with 12 sub-tasks to tracker.md.
+   - Updated tracker "Current status" to reflect Wave 5.5 ordering.
+   - This progress.md entry.
+
 ## 2026-04-22 evening — Plan created
 
 ### Actions
