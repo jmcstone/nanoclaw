@@ -43,6 +43,15 @@ Every 5 minutes, sends a `NOOP` command on the IDLE connection. Timeout of 30 se
 
 **MODSEQ monotonicity check on reconnect:** if the new `HIGHESTMODSEQ` is less than the stored value, the Proton bridge likely restarted and reset state. Action: call `hydrateProtonFolder(account, folder, deps)` to re-walk that folder. Sets `last_modseq = -1` sentinel while hydration is pending.
 
+**Folder-state seeding (Wave 5.6):** the set of folders polled is read from `proton_folder_state`. Seeding happens in two places:
+
+1. **Ingestor startup** — `seedFolderState` in `src/sync/proton-folder-discovery.ts` runs once per Proton account that has zero rows in `proton_folder_state`. It executes `IMAP LIST "" "*"`, filters out `\Noselect` mailboxes, and batch-inserts a row per folder with `last_modseq=0` via `INSERT OR IGNORE`. Best-effort: IMAP failure is logged and the ingestor falls through to INBOX-only polling for that account; next restart retries.
+2. **Hydration walker** — `src/reconcile/hydrate.ts` inserts a row for every folder it walks (same `INSERT OR IGNORE` pattern), so nightly reconcile self-heals any startup misses.
+
+The `last_modseq=0` starting point is deliberate: the first CONDSTORE poll per newly-seeded folder fires for all existing messages (`UID FETCH x:* MODSEQ>0`), which invokes the Wave 5.5-hardened `applyProtonUidAdded` → writes `message_labels` + `label_catalog` + `message_folder_uids` for every message in that folder. One-time bulk-fire gap heal. After the first cycle, `last_modseq` advances to the folder's HIGHESTMODSEQ and subsequent polls are incremental.
+
+**Deliberate non-use of `upsertFolderState`:** the seed and walker paths use `INSERT OR IGNORE` directly rather than the `upsertFolderState` helper, because that helper's `ON CONFLICT DO UPDATE SET last_modseq=excluded.last_modseq` would reset real progress back to 0 on every run.
+
 ### Event-to-DB applier
 
 `src/sync/proton-events.ts`:
@@ -143,6 +152,7 @@ env-vault env.vault -- npx tsx scripts/migrate-mirror.ts [--dry-run]
 ```mermaid
 flowchart TD
   Ingestor["ingestor.ts\n(composition root)"]
+  SeedFolderState["proton-folder-discovery.ts\nseedFolderState()\n(Wave 5.6)"]
   GmailHistory["gmail-history.ts\nhistory.list handler"]
   GmailHeartbeat["gmail-heartbeat.ts\ndaily ping"]
   ProtonIdle["proton-idle.ts\nIDLE + re-IDLE"]
@@ -151,6 +161,8 @@ flowchart TD
   Hydrate["reconcile/hydrate.ts\nrunFullHydration()"]
   Apply["reconcile/apply.ts\napply phase"]
 
+  Ingestor -->|"per account with empty\nproton_folder_state"| SeedFolderState
+  SeedFolderState -->|"INSERT OR IGNORE\nlast_modseq=0"| ProtonCondstore
   Ingestor -->|starts| GmailHistory
   Ingestor -->|starts| GmailHeartbeat
   Ingestor -->|starts per account| ProtonIdle
@@ -159,6 +171,7 @@ flowchart TD
   GmailHistory -->|"on 404"| Hydrate
   ProtonCondstore -->|"on MODSEQ regression"| Hydrate
   ReconcileSched -->|"at 04:00"| Hydrate
+  Hydrate -->|"INSERT OR IGNORE\nper folder walked"| ProtonCondstore
   Hydrate --> Apply
 ```
 

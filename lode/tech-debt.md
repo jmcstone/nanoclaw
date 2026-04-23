@@ -14,6 +14,15 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 
 ## Mailroom
 
+### TD-MAIL-CONDSTORE-NONINBOX — CLOSED 2026-04-23 (CF `aea0062` + `428e2f6` + `c939881`, Wave 5.6)
+- Surfaced when Jeff applied the "Family" label to a test message in Proton web UI (2026-04-23 during Wave 5.5.11 follow-up testing) and the change didn't propagate to the local mirror. Root cause: `proton_folder_state` was empty for every Proton account in production; `ingestor.ts` fell back to polling `['INBOX']` only, leaving label/folder changes in `Labels/*`, `Archive`, `Sent`, etc. invisible to Wave 2B CONDSTORE.
+- Wave 2B (CF `16886aa`) shipped per-folder CONDSTORE machinery (AC-S2) but never seeded the per-`(account_id, folder)` state table. Nightly reconcile was the only healing path.
+- Fix: two-pronged seeding. (1) `seedFolderState` at ingestor startup: on any Proton account with zero rows, `IMAP LIST "" "*"` → filter `\Noselect` → batched `INSERT OR IGNORE` into `proton_folder_state` with `last_modseq=0`. Best-effort; IMAP failure logs and falls through to INBOX-only without crashing. (2) Walker hookup in `src/reconcile/hydrate.ts`: every folder walked during `runFullHydration` does its own `INSERT OR IGNORE` into `proton_folder_state`, so reconcile self-heals even if startup seeding never ran.
+- `last_modseq=0` on seed is deliberate: first CONDSTORE poll per folder fires for all existing messages via `UID FETCH x:* (MODSEQ FLAGS)`, which heals accumulated non-INBOX label gaps via `applyProtonUidAdded` (Wave 5.5.5-hardened — writes `message_labels` + `label_catalog` alongside `message_folder_uids`). One-time cost accepted.
+- Deviation: used direct `INSERT OR IGNORE` instead of `upsertFolderState` helper in the walker path — the helper's `ON CONFLICT DO UPDATE` would reset real MODSEQ values back to 0 every walk.
+- Integration test `src/integration/wave-5.6-folder-seeding.test.ts` covers: empty-state-seeded, pre-populated-idempotent, IMAP-throws-handled, walker-upsert-path, duplicate-run-safe.
+- Post-deploy state: 305 rows (61 folders × 5 Proton accounts). `Labels/Family` present for every account. CONDSTORE now polls all 61 folders per account on a 5-min cycle.
+
 ### TD-MAIL-PUSH-WATERMARK — CLOSED 2026-04-23 (CF `6dfeba8`, Wave 5.5)
 - Closed alongside the push-ingest label gap as one conceptual fix: `ingestMessage()` in `src/store/ingest.ts` now bumps the per-account watermark (in the existing `watermarks` table) inside the same transaction as the message insert, whenever `inserted === true`. Push-ingest and the `getRecentMessages` read-side sweep now write to the same table; a push-only day advances the watermark naturally.
 - Deviation from the original "Done looks like" spec: watermark lives in the `watermarks` table (which `getRecentMessages` already reads), not a new `accounts.watermark_received_at` column. Same semantics, smaller footprint, no schema migration.

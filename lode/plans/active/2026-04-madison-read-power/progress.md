@@ -1,5 +1,50 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-23 late evening — Wave 5.6 code + deploy + graduation complete (5.6.1–5.6.7, 5.6.9, 5.6.10)
+
+### Actions
+
+- **Executor (lode-executor, single Sonnet, serialized)** implemented 5.6.1–5.6.6 on mailroom `madison-read-power`:
+  - `aea0062` — new `src/sync/proton-folder-discovery.ts` with `seedFolderState(accountId, getImapClient)`. LIST + `\Noselect` filter + `INSERT OR IGNORE last_modseq=0`. Error-swallow on IMAP unavailable.
+  - `428e2f6` — ingestor.ts wire-in: per-Proton-account guard (`SELECT 1 FROM proton_folder_state LIMIT 1`); if empty → `seedFolderState`. Refactored out `openImap(address)` helper so seed + CONDSTORE share one IMAP constructor.
+  - `c939881` — `src/reconcile/hydrate.ts` walker hookup: every folder walked → `INSERT OR IGNORE INTO proton_folder_state`. Deviation from plan: did NOT use existing `upsertFolderState` helper because its `ON CONFLICT DO UPDATE` would reset real MODSEQ values to 0 every walk.
+  - `aaa32fe` — 5 integration tests in `src/integration/wave-5.6-folder-seeding.test.ts`. Empty-state-seeded, pre-populated-idempotent, IMAP-throws-handled, walker-upsert, duplicate-run-safe. Test count 338 → 344 passing, 2 skipped.
+- **Parallel backfill** via `migrate-mirror.ts`: kicked in background while Wave 5.6 code was being written. Walked all folders across all accounts, applied 99 label adds + 4 removes. Healed Jeff's "Family"-labeled test message → `labels: "All Mail;INBOX;Labels/Family"`, `folder_uids: "All Mail:10207;Labels/Family:80"`. Audit passed.
+- **Deploy**: ingestor-only rebuild (`cd ~/containers/mailroom && env-vault env.vault -- docker compose build ingestor && ... up -d ingestor`). Post-recreate: 5 "proton_folder_state seeded" INFO log lines appeared within 1 sec of startup (one per Proton account); 5 IDLE + 5 CONDSTORE + reconcile scheduler all up clean. `SELECT COUNT(*) FROM proton_folder_state` = 305 rows (61 folders × 5 accounts).
+- **Graduation (5.6.9 + 5.6.10)**: `TD-MAIL-CONDSTORE-NONINBOX` entry added in `lode/tech-debt.md` as CLOSED. `lode/infrastructure/mailroom-mirror.md` CONDSTORE section extended with "Folder-state seeding (Wave 5.6)" subsection. Startup-wiring mermaid diagram refreshed to include the `seedFolderState` node + walker → CONDSTORE edge.
+
+### What's left
+
+- **5.6.8 Jeff-driven live verify**: apply any label to any Proton message in the web UI; within 5 min, DB should reflect it without any manual reconcile. The original "Family" test message was already healed by the parallel migrate-mirror run, so the CONDSTORE-push path should be exercised with a fresh action.
+
+### Test / deploy results
+
+| Check | Status | Notes |
+|---|---|---|
+| mailroom `npm test` | pass | 344 passing, 2 skipped (was 338) |
+| mailroom `tsc --noEmit` | pass | zero errors |
+| docker compose build ingestor | pass | ~90 sec |
+| post-recreate startup | clean | 5 seed INFO lines + 5 IDLE + 5 CONDSTORE + reconcile |
+| `proton_folder_state` rows | 305 | 61 folders × 5 accounts; Labels/Family present for every account |
+| migrate-mirror (parallel) | pass | 99 adds, 4 removes, audit_passed |
+| test message Family label healed | pass | `labels: "All Mail;INBOX;Labels/Family"` |
+
+### Reboot check (for next session)
+
+1. **Where am I?** Wave 5.6 code + deploy + graduation done. Only 5.6.8 live verify outstanding (Jeff-driven). Madison-read-power plan now has Waves 0–5 + 5.5 + 5.6 all code-complete; Wave 5 verification ACs (5.1/5.2/5.3/5.4/5.5/5.7, plus 5.5.13) still open.
+2. **Where am I going?** (a) Jeff verifies 5.6.8 (apply a label → propagation within 5 min). (b) Then I help close out Wave 5 ACs: V1 Bob-late-payment query, V2 toolset-hash re-verify, V4 Gmail label rename, V7 full test suites green. (c) Plan graduates to `lode/plans/complete/`.
+3. **What is the goal?** End state — any upstream mailbox change (Gmail archive, Proton label, folder rename) propagates to the local mirror within 5 min without waiting for nightly reconcile.
+4. **What have I learned?**
+   - `upsertFolderState` in `proton-condstore.ts` is destructive to `last_modseq` — use it for writes where you actively have the new MODSEQ, not for "ensure row exists" semantics. `INSERT OR IGNORE` is the right tool for the latter.
+   - Background-task parallelism with Monitor + run_in_background works well for waits of 5-10 min — no need to poll.
+   - Proton bridge's LIST returned 61 folders per account (INBOX + All Mail + Archive + Drafts + Sent + Spam + Starred + Trash + 53 `Labels/*`). Consistent across accounts because they share a virtual-folder schema.
+5. **What have I done?**
+   - 4 code commits on mailroom (`aea0062`, `428e2f6`, `c939881`, `aaa32fe`).
+   - 1 parallel migrate-mirror run (99 adds, test message healed).
+   - 1 ingestor-only deploy.
+   - 3 lode files graduated (tech-debt, infrastructure, tracker/progress).
+   - Pending commit for all the lode updates.
+
 ## 2026-04-23 evening — Wave 5.6 planned (CONDSTORE non-INBOX seeding)
 
 ### What prompted this
