@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   _initTestDatabase,
+  clearSession,
   createTask,
   deleteTask,
   getAllChats,
@@ -9,8 +10,12 @@ import {
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
+  getSessionInfo,
+  getSessionToolHash,
   getTaskById,
   setRegisteredGroup,
+  setSession,
+  setSessionToolHash,
   storeChatMetadata,
   storeMessage,
   updateTask,
@@ -568,5 +573,38 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+describe('session tool hash helpers', () => {
+  it('getSessionToolHash returns null when no session exists', () => {
+    expect(getSessionToolHash('no_such_folder')).toBeNull();
+  });
+
+  it('getSessionToolHash returns null when session has no hash stamped', () => {
+    setSession('test_group', 'session-abc');
+    expect(getSessionToolHash('test_group')).toBeNull();
+  });
+
+  it('setSessionToolHash and getSessionToolHash round-trip', () => {
+    setSession('test_group', 'session-abc');
+    setSessionToolHash('test_group', 'deadbeef1234');
+    expect(getSessionToolHash('test_group')).toBe('deadbeef1234');
+  });
+
+  it('getSessionInfo includes tool_list_hash', () => {
+    setSession('test_group', 'session-abc');
+    setSessionToolHash('test_group', 'abc123');
+    const info = getSessionInfo('test_group');
+    expect(info).toBeDefined();
+    expect(info!.tool_list_hash).toBe('abc123');
+  });
+
+  it('clearSession removes the tool hash along with the session', () => {
+    setSession('test_group', 'session-abc');
+    setSessionToolHash('test_group', 'somehash');
+    clearSession('test_group');
+    expect(getSessionToolHash('test_group')).toBeNull();
+    expect(getSessionInfo('test_group')).toBeUndefined();
   });
 });

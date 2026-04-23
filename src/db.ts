@@ -144,6 +144,12 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+  // Add tool_list_hash to sessions if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE sessions ADD COLUMN tool_list_hash TEXT`);
+  } catch {
+    /* column already exists */
+  }
 
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
@@ -571,12 +577,13 @@ export interface SessionInfo {
   session_id: string;
   created_at: string | null;
   message_count: number;
+  tool_list_hash: string | null;
 }
 
 export function getSessionInfo(groupFolder: string): SessionInfo | undefined {
   const row = db
     .prepare(
-      'SELECT session_id, created_at, message_count FROM sessions WHERE group_folder = ?',
+      'SELECT session_id, created_at, message_count, tool_list_hash FROM sessions WHERE group_folder = ?',
     )
     .get(groupFolder) as SessionInfo | undefined;
   return row ?? undefined;
@@ -601,6 +608,19 @@ export function incrementSessionMessages(groupFolder: string, count = 1): void {
 
 export function clearSession(groupFolder: string): void {
   db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+}
+
+export function getSessionToolHash(groupFolder: string): string | null {
+  const row = db
+    .prepare('SELECT tool_list_hash FROM sessions WHERE group_folder = ?')
+    .get(groupFolder) as { tool_list_hash: string | null } | undefined;
+  return row?.tool_list_hash ?? null;
+}
+
+export function setSessionToolHash(groupFolder: string, hash: string): void {
+  db.prepare(
+    'UPDATE sessions SET tool_list_hash = ? WHERE group_folder = ?',
+  ).run(hash, groupFolder);
 }
 
 export function getAllSessions(): Record<string, string> {

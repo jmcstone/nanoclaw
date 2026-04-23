@@ -45,14 +45,20 @@ import {
   getNewMessages,
   getRouterState,
   getSessionInfo,
+  getSessionToolHash,
   incrementSessionMessages,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
   setSession,
+  setSessionToolHash,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
+import {
+  computeGroupMcpHash,
+  groupMcpOptionsFromConfig,
+} from './mcp-tool-discovery.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
@@ -377,6 +383,34 @@ async function runAgent(
     }
   }
 
+  // Session toolset-hash check: if the set of active MCP servers has changed
+  // since this session was created, the session's tool self-image is stale.
+  // Clear it so Madison starts fresh with accurate knowledge of her tools.
+  const mcpOpts = groupMcpOptionsFromConfig(
+    group.folder,
+    group.containerConfig as Record<string, unknown> | undefined,
+  );
+  const { hash: currentToolHash } = computeGroupMcpHash(mcpOpts);
+  if (sessionId) {
+    const storedHash = getSessionToolHash(group.folder);
+    if (storedHash !== null && storedHash !== currentToolHash) {
+      logger.info(
+        { group: group.folder, old: storedHash, new: currentToolHash },
+        'tool_list_hash mismatch — clearing session',
+      );
+      clearSession(group.folder);
+      delete sessions[group.folder];
+      sessionId = undefined;
+    }
+  }
+  // Stamp (or update) the hash for this spawn so subsequent runs can compare.
+  if (sessionId) {
+    // Session is being resumed — update hash in case it was null (first stamp).
+    setSessionToolHash(group.folder, currentToolHash);
+  }
+  // If sessionId is undefined at this point (new session or just cleared),
+  // the hash will be stamped after the new session ID is persisted (post-spawn).
+
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
   writeTasksSnapshot(
@@ -409,6 +443,7 @@ async function runAgent(
         if (output.newSessionId) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
+          setSessionToolHash(group.folder, currentToolHash);
         }
         await onOutput(output);
       }
@@ -435,6 +470,7 @@ async function runAgent(
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
+      setSessionToolHash(group.folder, currentToolHash);
     }
 
     // Track message count for session rotation. Count inbound messages in
