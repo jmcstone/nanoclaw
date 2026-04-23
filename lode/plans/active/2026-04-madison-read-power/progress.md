@@ -1,5 +1,57 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-23 evening — Wave 5.5 code changes landed (5.5.2–5.5.8)
+
+### Actions
+
+- Spawned lode-executor on mailroom `madison-read-power` branch. Single executor, serialized, 5 atomic commits.
+- Scope: 5.5.2 (ingestMessage extension) → 5.5.3/5.5.4 (poller call sites) → 5.5.5 (Wave 2B event-applier hardening) → 5.5.6 (watermark in same tx) → 5.5.7 (audit tool) → 5.5.8 (6 integration tests).
+
+### Commits (mailroom `madison-read-power`)
+
+| Task | Commit | Description |
+|---|---|---|
+| 5.5.2 + 5.5.6 | `6dfeba8` | `ingestMessage()` accepts optional `labels[]` + `folder_uid`; writes `message_labels`, `label_catalog`, `message_folder_uids` in same tx; bumps `watermarks` table on insert |
+| 5.5.3 + 5.5.4 | `6324d2b` | Proton poller passes `labels:['INBOX'], folder_uid:{INBOX,uid}`; Gmail poller passes `msg.data.labelIds ?? []` |
+| 5.5.5 | `a92e8e8` | `applyProtonUidAdded` writes labels + catalog; `applyLabelsAdded` (gmail) writes `label_catalog` on new labelId |
+| 5.5.7 | `3b186f0` | `mcp__messages__audit_label_coverage({since_hours?})` — read-only MCP tool on inbox-mcp |
+| 5.5.8 | `44ed487` | 6 integration tests covering all paths + idempotency + audit tool |
+
+### Deviations from brief
+
+- **Watermark storage**: used the existing `watermarks` table (which `getRecentMessages` already reads) rather than adding `accounts.watermark_received_at`. No schema migration, no schema_version bump. Still closes `TD-MAIL-PUSH-WATERMARK` since the semantics are equivalent.
+- **SQLITE_BUSY wrapping**: not wrapped around the `ingestMessage` transaction. Executor's reasoning: the existing transaction is synchronous; wrapping would force async and break all callers. `withSqliteBusyRetry` is designed for per-item batch wrapping, not transactions. Accept the reasoning — the existing tx is already serialized by SQLite WAL.
+- **`applyProtonUidAdded` account_id lookup**: uses an inline `db.prepare().get()` inside the transaction instead of going through the cached stmts — it's a one-off lookup, not hot path.
+
+### Test results
+
+| Test | Status | Notes |
+|---|---|---|
+| mailroom `npm test` | pass | 338 passed, 2 skipped (was 332 passed, 2 skipped) |
+| mailroom `tsc --noEmit` | pass | zero errors |
+
+### What's left in Wave 5.5
+
+- 5.5.9 Backfill today's gap rows (hydration run)
+- 5.5.10 Deploy (rebuild + recreate ingestor + inbox-mcp, env-vault prefix)
+- 5.5.11 Verify live (test message → message_labels + watermark advances; `audit_label_coverage` returns 0)
+- 5.5.12 Update `lode/tech-debt.md` (close TD-MAIL-PUSH-WATERMARK with commit hash), `lode/infrastructure/mailroom-mirror.md` (document ingest-path invariant), Madison's CLAUDE.md (audit tool)
+- 5.5.13 Re-run Wave 5 AC-V3 + AC-V6
+
+### Reboot check (for next session)
+
+1. **Where am I?** Wave 5.5 code changes complete (5.5.2–5.5.8 checked). Awaiting Jeff-driven deploy + live verify (5.5.9–5.5.13).
+2. **Where am I going?** `/lode:execute --wave 5.5` or manual deploy. Option: spawn another executor for the backfill + deploy + verify, or Jeff drives those interactively.
+3. **What is the goal?** Push-ingest parity — new messages arriving via poller or sync event get full `message_labels` + `label_catalog` + watermark coverage, matching migration-hydration state.
+4. **What have I learned?**
+   - Both legacy pollers are the primary inserters today; Wave 2B workers run alongside as detectors on existing rows (zero event-applier log lines in production last 3h).
+   - Watermark storage was in a separate `watermarks` table all along — refactor target was `accounts` but the real lever was one table over.
+   - Pattern confirmed: "new write path doesn't replicate everything the migration path does" applies to Wave 2B too. Now covered by the audit_label_coverage tool as a runtime invariant.
+5. **What have I done?**
+   - 5 atomic commits on mailroom `madison-read-power`.
+   - Tracker + progress + brief updated.
+   - Tests 332 → 338 passing.
+
 ## 2026-04-23 evening — Wave 5.5.1 done, fix surface corrected
 
 ### Actions (5.5.1 verification)

@@ -83,7 +83,7 @@ So the gap is the **fresh-arrival ingest path** (whether via `proton/poller.ts` 
 - `src/sync/proton-events.ts:applyProtonUidAdded` — in addition to `upsertFolderUid`, also write `label_catalog` + `message_labels` entries for the folder.
 - `src/sync/gmail-events.ts:applyLabelsAdded` — confirm it does `INSERT OR IGNORE INTO label_catalog` when a new labelId is first seen.
 
-**Audit tool (5.5.7)** — `mcp__inbox__audit_label_coverage({since_hours?})` registered read-only on inbox-mcp, returns `{missing_label_count: number, sample_message_ids: string[]}`. Uses:
+**Audit tool (5.5.7)** — `mcp__messages__audit_label_coverage({since_hours?})` registered read-only on inbox-mcp, returns `{missing_label_count: number, sample_message_ids: string[]}`. Uses:
 ```sql
 SELECT message_id FROM messages m
 WHERE source IN ('protonmail','gmail')

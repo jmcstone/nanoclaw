@@ -354,15 +354,17 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
 **Brief**: `wave-5.5-push-ingest-parity.md` (full diagnosis, SQL counts, root-cause hypothesis, proposed fix shape, test + audit invariant spec).
 
 - [x] 5.5.1 Verify ingest path — **done 2026-04-23 evening**. Both legacy `proton/poller.ts` and `gmail/poller.ts` are the **primary** ingest paths today. Wave 2B workers (idle/condstore/history) are up but acting as change-detectors on existing rows; zero `applyProtonUidAdded` / `applyLabelsAdded` log lines in last 3h. Today's 6 zero-label Proton messages all came from `proton/poller.ts:211` → `ingestMessage()`, which writes `messages` but never touches `message_labels` / `label_catalog` / `message_folder_uids`. See progress.md.
-- [ ] 5.5.2 Extend `ingestMessage()` in `src/store/ingest.ts`: accept optional `labels?: string[]` and `folder_uid?: { folder: string; uid: number }` params. When present, in the same tx that inserts the message: `INSERT OR IGNORE INTO label_catalog(account_id, label, canonical, source_id, system)` per label, `INSERT OR IGNORE INTO message_labels(message_id, label, canonical, source_id)` per label, and (if `folder_uid`) `INSERT OR IGNORE INTO message_folder_uids`. Use `canonicalizeLabel` helper. Wrap with `src/store/sqlite-busy.ts` retry. Existing call sites with no labels continue to work (opt-in).
-- [ ] 5.5.3 `src/proton/poller.ts` call site (~line 211): pass `labels: [sourceFolder]` (e.g. `'INBOX'`) and `folder_uid: { folder: sourceFolder, uid }` to the extended `ingestMessage`. sourceFolder is the folder being polled — already in scope at the call site.
-- [ ] 5.5.4 `src/gmail/poller.ts` call site (~line 269): pass `labels: message.labelIds ?? []` to `ingestMessage`. Gmail's per-message fetch already returns `labelIds`; just plumb them through. No `folder_uid` for Gmail.
-- [ ] 5.5.5 Wave 2B event-applier hardening:
-  - `src/sync/proton-events.ts:applyProtonUidAdded(messageId, folder, uid)` — also write `message_labels(label=folder)` + `label_catalog` entry (`INSERT OR IGNORE`). Today it only writes `message_folder_uids`.
-  - `src/sync/gmail-events.ts:applyLabelsAdded` — verify it already writes `label_catalog` `INSERT OR IGNORE` when a new labelId is first seen; if not, add it. (Names are Wave 3.5-fixed, but catalog-coverage on event path is worth checking.)
-- [ ] 5.5.6 Watermark bump: in `ingestMessage` after a successful insert (i.e., when `res.changes > 0`), bump per-account watermark to `received_at`. Single place, single tx. Push-ingest + `recent` sweep become equivalent w.r.t. watermark advancement. Closes `TD-MAIL-PUSH-WATERMARK`.
-- [ ] 5.5.7 Runtime audit invariant: `SELECT COUNT(*) FROM messages m WHERE NOT EXISTS (SELECT 1 FROM message_labels WHERE message_id=m.message_id) AND source IN ('protonmail','gmail') AND deleted_at IS NULL AND received_at > ?` should return 0 for `received_at > today_start`. Ship as a Madison-callable MCP diagnostic tool `mcp__inbox__audit_label_coverage({since_hours?: number})` — returns `{missing_label_count, missing_message_ids: []}`. Registered read-only, no `deps` guard.
-- [ ] 5.5.8 Integration tests (new, `src/integration/wave-5.5-push-ingest-parity.test.ts`):
+- [x] 5.5.2 Extend `ingestMessage()` in `src/store/ingest.ts`: optional `labels?: string[]` + `folder_uid?: { folder, uid }`; 4 new prepared stmts; label/catalog/folder_uid writes inside existing transaction; `canonicalizeLabel` applied; existing callers unchanged. (CF `6dfeba8`)
+- [x] 5.5.3 `src/proton/poller.ts` call site: passes `labels:['INBOX'], folder_uid:{folder:'INBOX',uid}`. (CF `6324d2b`)
+- [x] 5.5.4 `src/gmail/poller.ts` call site: passes `labels: msg.data.labelIds ?? []`. (CF `6324d2b`)
+- [x] 5.5.5 Wave 2B event-applier hardening:
+  - `applyProtonUidAdded` now writes `message_labels` + `label_catalog` alongside `message_folder_uids` (CF `a92e8e8`)
+  - `applyLabelsAdded` in gmail-events.ts now also writes `label_catalog` `INSERT OR IGNORE` when new labelId first seen (CF `a92e8e8`)
+- [x] 5.5.6 Watermark bump folded into `ingestMessage` transaction. **Deviation**: used existing `watermarks` table (not a new `accounts.watermark_received_at` column) — `watermarks` is what `getRecentMessages` already reads; no schema bump needed. Closes `TD-MAIL-PUSH-WATERMARK`. (CF `6dfeba8`, same commit as 5.5.2)
+- [x] 5.5.7 `mcp__messages__audit_label_coverage({since_hours?})` registered read-only on inbox-mcp; returns `{missing_label_count, sample_message_ids[]}`. (CF `3b186f0`)
+- [x] 5.5.8 Integration tests (new, `src/integration/wave-5.5-push-ingest-parity.test.ts`): 6 new tests, 332 → 338 passing, 2 skipped. `tsc --noEmit` zero errors. (CF `44ed487`)
+
+  *Original test spec for reference:*
   - Seed: Proton poller ingest of message in INBOX → assert `messages`, `message_labels(label='INBOX', canonical='inbox')`, `label_catalog` entry, `message_folder_uids(folder='INBOX', uid=N)` all present.
   - Seed: Gmail poller ingest of message with `labelIds:['INBOX','IMPORTANT','UNREAD']` → assert three `message_labels` rows + three `label_catalog` rows.
   - Seed: push-only-day simulation — ingest N messages without calling `recent`; assert per-account watermark advanced to max `received_at`; assert subsequent `recent` call returns 0 new messages.
@@ -370,7 +372,7 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
   - Seed: audit-tool — insert a row directly in `messages` bypassing labels → `audit_label_coverage` returns non-zero with the message_id.
 - [ ] 5.5.9 Backfill today's gap rows: **choose lower-risk option at implementation time**. Preferred: kick a manual per-account `runFullHydration` run (Wave 2A path, well-tested). Fallback: one-shot SQL using the source the message was fetched from — but that needs per-message folder recall which we don't have. Go with the hydration run.
 - [ ] 5.5.10 Deploy: `ingestor` only. `inbox-mcp` ONLY if `src/store/ingest.ts` signature change or `audit_label_coverage` registers on inbox-mcp (it should — that's where read-only tools live). So: both containers rebuild. Follow `lode/practices.md` env-vault prefix.
-- [ ] 5.5.11 Verify live: send a test message to one Proton + one Gmail account; within seconds, `message_labels` populated for both and per-account watermark matches `received_at`. Run `mcp__inbox__audit_label_coverage({since_hours:24})` → returns 0.
+- [ ] 5.5.11 Verify live: send a test message to one Proton + one Gmail account; within seconds, `message_labels` populated for both and per-account watermark matches `received_at`. Run `mcp__messages__audit_label_coverage({since_hours:24})` → returns 0.
 - [ ] 5.5.12 Update `lode/tech-debt.md`: mark `TD-MAIL-PUSH-WATERMARK` CLOSED with commit hash. Update `lode/infrastructure/mailroom-mirror.md` to document the ingest-path label invariant + audit tool. Update Madison's `CLAUDE.md` to list the new audit tool (minor — one line in filter/tool section).
 - [ ] 5.5.13 Re-run Wave 5 AC-V3 (archive in Gmail web → local DB reflects) and AC-V6 (a-mem freshness sanity) now that push-ingest parity holds.
 
