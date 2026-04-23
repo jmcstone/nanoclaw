@@ -8,6 +8,7 @@ Authoritative index of project memory. Read this first.
 - [practices.md](practices.md) — patterns and invariants
 - [groups.md](groups.md) — current Telegram group roster and identities
 - [tech-debt.md](tech-debt.md) — registry of deferred work with trigger conditions
+- [lessons.md](lessons.md) — operational rules distilled from incidents (env-vault prefix, session-resume staleness, Madison confabulation patterns, watermark uniformity)
 
 ## Plans
 - `plans/active/` — in-progress trackers
@@ -16,7 +17,8 @@ Authoritative index of project memory. Read this first.
   - [2026-04-trawl-mcp-integration](plans/active/2026-04-trawl-mcp-integration/tracker.md) — expose Trawl's 40+ tools as a tailnet-reachable MCP service at `trawl.crested-gecko.ts.net`; usable from Madison, dev Claude Code, and future clients. Server-first rollout.
   - [2026-04-unified-inbox](plans/active/2026-04-unified-inbox/tracker.md) — **suspended** pending mailroom extraction. Phases 0/1/1.5/1.6 shipped in-place on nanoclaw (SQLCipher-encrypted inbox `store.db` is live); Phase 2–7 reincarnate as mailroom phases.
   - [2026-04-mailroom-extraction](plans/active/2026-04-mailroom-extraction/tracker.md) — extract mail ingestion + storage + MCP + backfill out of nanoclaw's host process into a standalone Docker stack at `~/Projects/ConfigFiles/containers/mailroom/`. Nanoclaw shrinks to router + chat channels + a `mailroom-subscriber`. Bridge drops `0.0.0.0` port publishing. 10 phases (M0 scaffolding → M9 Proton docs).
-  - [2026-04-mail-push-redesign](plans/active/2026-04-mail-push-redesign/tracker.md) — push-driven rules engine at mailroom ingest replaces Madison's polling. 9 phases complete (1–8 shipped; 9 is end-to-end verify pending container rebuild + 24h observation). See `infrastructure/mailroom-rules.md` + `infrastructure/madison-pipeline.md`.
+  - [2026-04-mail-push-redesign](plans/active/2026-04-mail-push-redesign/tracker.md) — push-driven rules engine at mailroom ingest replaces Madison's polling. Phases 1–8 + Phase 10 implementation shipped; Phase 9 + 10.9 audits pending. See `infrastructure/mailroom-rules.md` + `infrastructure/madison-pipeline.md`.
+  - [2026-04-madison-read-power](plans/active/2026-04-madison-read-power/tracker.md) — `mcp__inbox__query` (structured filters + count aggregation) for Madison's read surface, plus session-toolset-hash invalidation so MCP-tool deploys actually reach her. Driven by 2026-04-22 confabulation incident.
 - `plans/complete/` — historical reference
   - [2026-04-amem-integration](plans/complete/2026-04-amem-integration/tracker.md) — per-group a-mem in AlgoTrader + AVP + Jeff main + Inbox containers; see `infrastructure/a-mem.md` for current state
   - [2026-04-nanoclaw-migration](plans/complete/2026-04-nanoclaw-migration/tracker.md) — migrated persistent data to `~/containers/data/NanoClaw/` BTRFS subvolume; see `infrastructure/persistence.md` for convention
