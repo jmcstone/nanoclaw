@@ -181,90 +181,159 @@ Transform the mailroom store from a content-only archive into a **true mirror** 
 
 ### Wave 0 — Pre-reqs (sequential)
 
-- [ ] 0.1 `mail-push-redesign` Phases 9.1–9.6 complete
-- [ ] 0.2 Spin `madison-read-power` branch off `mail-push-redesign` in nanoclaw
-- [ ] 0.3 Spin `madison-read-power` branch in ConfigFiles mailroom
+- [x] 0.1 `mail-push-redesign` Phases 9.1–9.6 complete (`ff180f5` closed it; plan moved to `lode/plans/complete/2026-04-mail-push-redesign`)
+- [x] 0.2 Spin `madison-read-power` branch off `mail-push-redesign` in nanoclaw (tip `b866105`)
+- [x] 0.3 Spin `madison-read-power` branch in ConfigFiles mailroom (off `main`, tip `58a290f`)
 
 ### Wave 1 — Schema foundation (single agent; blocks Wave 2)
 
 **Execution model: 1 Sonnet executor, serialized.**
 
-- [ ] 1.1 Mailroom schema migration: `rfc822_message_id`, `direction`, `archived_at`, `deleted_at`, `deleted_inferred`, `message_labels`, `message_folder_uids`, `label_catalog`, `label_map`, `proton_folder_state`. Indexes on canonical forms, direction+archived, rfc822.
-- [ ] 1.2 Startup guard in `db.ts`: refuse reinit on decrypt failure.
-- [ ] 1.3 Canonicalization helper `src/labels/canonicalize.ts` + unit tests (edge cases: Labels/ prefix, ZW chars, unicode case).
-- [ ] 1.4 `accounts` table gains `last_history_id`, `last_history_refresh_at` (Gmail). `proton_folder_state` table for MODSEQ + IDLE state.
-- [ ] 1.5 Migration fails fast if run against old schema incompatibly.
+- [x] 1.1 Mailroom schema migration: `rfc822_message_id`, `direction`, `archived_at`, `deleted_at`, `deleted_inferred`, `message_labels`, `message_folder_uids`, `label_catalog`, `label_map`, `proton_folder_state`. Indexes on canonical forms, direction+archived, rfc822. (CF `f8f827e`)
+- [x] 1.2 Startup guard in `db.ts`: refuse reinit on decrypt failure (`MailroomDbDecryptError`; runs `SELECT count(*) FROM sqlite_master` after PRAGMA cipher+key, throws iff file exists + size > 0). (CF `f8f827e`)
+- [x] 1.3 Canonicalization helper `src/labels/canonicalize.ts` + unit tests (10 tests: NFC, ZW chars, `Labels/` prefix, whitespace, Unicode case-fold). (CF `f8f827e`)
+- [x] 1.4 `accounts` table gains `last_history_id`, `last_history_refresh_at` (Gmail). `proton_folder_state` table for MODSEQ + IDLE state. (CF `f8f827e`)
+- [x] 1.5 Migration fails fast if run against old schema incompatibly (`MailroomSchemaError`; new `meta(schema_version='2')` sentinel). (CF `f8f827e`)
 
 ### Wave 2 — Parallel implementation (5 concurrent agents)
 
 **Execution model: 5 Sonnet executors in parallel, one per workstream. Orchestrator merges/coordinates.**
 
-**2A: Hydration/reconcile pipeline** (mailroom)
-- [ ] 2A.1 Proton folder walker: per-folder `UID FETCH 1:* (BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])`
-- [ ] 2A.2 Gmail walker: per-label `messages.list` → `messages.get(format='metadata', metadataHeaders:['Message-ID'])` batched
-- [ ] 2A.3 In-memory delta builder: `(adds, removes, unknowns)` per source
-- [ ] 2A.4 Apply phase: adds via `INSERT OR IGNORE`; removes re-verify upstream before delete
-- [ ] 2A.5 Reconcile scheduler (node-cron 04:00 local; skip if run in last 20h)
-- [ ] 2A.6 Metrics emission (prom-format)
-- [ ] 2A.7 Tests: happy path, MODSEQ regression, race with write-through, inferred-delete, label-deletion-storm
+**2A: Hydration/reconcile pipeline** (mailroom) — CF `7afa3ab`
+- [x] 2A.1 Proton folder walker: per-folder `UID FETCH 1:* (BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])` (`src/reconcile/proton-walker.ts`, AsyncGenerator, skips `\Noselect`)
+- [x] 2A.2 Gmail walker: per-label `messages.list` → `messages.get(format='metadata', metadataHeaders:['Message-ID'])` batched (max 250) (`src/reconcile/gmail-walker.ts`)
+- [x] 2A.3 In-memory delta builder: `buildLabelDelta`, `buildFolderUidDelta`, `findInferredDeletes`, `collapseStormRemovals` (storm threshold 100) (`src/reconcile/delta.ts`)
+- [x] 2A.4 Apply phase: adds via `INSERT OR IGNORE`; removes re-verify upstream via injected callback before delete (`src/reconcile/apply.ts`)
+- [x] 2A.5 Reconcile scheduler — `setInterval` 5-min check targeting 04:00 local, skip if `meta.last_reconcile_at` within 20h (`src/reconcile/scheduler.ts`; `node-cron` not in deps)
+- [x] 2A.6 Metrics emission as JSON log line (`src/reconcile/metrics.ts`)
+- [x] 2A.7 Tests: happy path, race with write-through, inferred-delete, label-deletion-storm collapse — 33 tests. MODSEQ regression detection deferred to 2B's scope.
 
-**2B: Incremental sync worker** (mailroom)
-- [ ] 2B.1 Gmail `history.list` handler per account with event dispatch (`messagesAdded/Deleted/labelsAdded/Removed`)
-- [ ] 2B.2 404 handler → trigger per-account hydration, resume incremental
-- [ ] 2B.3 Daily heartbeat ping
-- [ ] 2B.4 Proton IDLE on INBOX with auto re-IDLE every 29 min
-- [ ] 2B.5 NOOP watchdog (every 5 min); reconnect on failure
-- [ ] 2B.6 CONDSTORE MODSEQ poller per folder
-- [ ] 2B.7 `HIGHESTMODSEQ` monotonicity check on reconnect; regression → folder hydration
-- [ ] 2B.8 Event-to-DB applier: `INSERT/DELETE message_labels`, `UPDATE messages.archived_at/deleted_at`
-- [ ] 2B.9 Tests: history expiry, MODSEQ regression, IDLE silent death, storm pagination, out-of-order events
+**2B: Incremental sync worker** (mailroom) — CF `16886aa`
+- [x] 2B.1 Gmail `history.list` handler per account, paginated, with event dispatch (`src/sync/gmail-history.ts`, `gmail-events.ts`)
+- [x] 2B.2 404 handler → calls `runGmailHydration` if 2A available, else sets `last_history_id='__needs_hydration__'` sentinel (Wave 3 resolves)
+- [x] 2B.3 Daily heartbeat ping; tracks `last_history_refresh_at` (`src/sync/gmail-heartbeat.ts`)
+- [x] 2B.4 Proton IDLE on INBOX with 29-min re-IDLE loop (`src/sync/proton-idle.ts`)
+- [x] 2B.5 NOOP watchdog every 5 min; 30s timeout → reconnect with exponential backoff
+- [x] 2B.6 CONDSTORE MODSEQ poller per folder, every 5 min (`src/sync/proton-condstore.ts`)
+- [x] 2B.7 `HIGHESTMODSEQ` monotonicity check on reconnect/SELECT; regression → calls `runProtonHydration` if 2A available, else sets `last_modseq=-1` sentinel
+- [x] 2B.8 Event-to-DB applier: typed-column updates + message_labels INSERT/DELETE (`src/sync/gmail-events.ts`, `proton-events.ts`)
+- [x] 2B.9 Tests: history expiry, MODSEQ regression, IDLE silent death, storm pagination (5000 events / 10 pages), out-of-order events — 25 tests
 
-**2C: Write-through refactor** (mailroom)
-- [ ] 2C.1 Transactional local-DB update in `apply_action.ts` after upstream success
-- [ ] 2C.2 Same for `archive`, `add_label`, `remove_label`, `label`, `delete`
-- [ ] 2C.3 Replace per-write IMAP search in `apply_action.ts:162-184` with `message_folder_uids` lookup
-- [ ] 2C.4 Remove "v1 limitation" comment at `apply_action.ts:182`; verify Labels/*-only messages are now reachable
-- [ ] 2C.5 Rules engine `src/rules/apply/{proton,gmail}.ts`: transactional local write in same logical unit as upstream action
-- [ ] 2C.6 Ingest path: skip drafts (Gmail `DRAFT` label / Proton `Drafts` folder), skip spam (Gmail `SPAM` / Proton `Spam` folder), populate `direction` from source state
-- [ ] 2C.7 `SQLITE_BUSY` retry (3x, 50/100/200ms) in batch tools
-- [ ] 2C.8 Tests: per-tool write-through, busy retry, Labels-only message reachability, rules-engine transactional integrity
+**2C: Write-through refactor** (mailroom) — CF `f6c8019`
+- [x] 2C.1 Transactional local-DB update in `apply_action.ts` after upstream success
+- [x] 2C.2 Same for `archive`, `add_label`, `remove_label`, `label` (replace-set), `delete`
+- [x] 2C.3 `getProtonFolderUids()` helper added to `src/store/queries.ts`; `apply_action.ts` UID lookup now DB-first
+- [x] 2C.4 v1 limitation comment removed from `apply_action.ts`; Labels/*-only Proton message reachability test passes
+- [x] 2C.5 Rules engine `src/rules/apply/{proton,gmail}.ts` write through after each label COPY / archive MOVE
+- [x] 2C.6 Ingest path skips Gmail DRAFT/SPAM + Proton Drafts/Spam folders; populates `direction` from source state; sets `archived_at` when Gmail INBOX label absent
+- [x] 2C.7 `SQLITE_BUSY` retry helper (3x, 50/100/200ms) in `src/store/sqlite-busy.ts`; per-item not per-batch
+- [x] 2C.8 74 new tests covering all 6 tools, ingest skip, busy retry, Labels/*-only reachability, rules-engine transactional integrity
 
-**2D: Query tool + read-tool defaults** (mailroom)
-- [ ] 2D.1 `src/store/types.ts` — `QueryArgs`, `QueryResult`
-- [ ] 2D.2 `src/store/queries.ts` — `queryMessages()` with dynamic parameterized SQL builder
-- [ ] 2D.3 `aggregateMessages()` for grouped count
-- [ ] 2D.4 `canonical_label` expansion via `label_map` (JOIN at query time)
-- [ ] 2D.5 `src/mcp/tools/query.ts` MCP wrapper; registered in `src/mcp/server.ts`
-- [ ] 2D.6 Update `search`, `recent` to apply default `direction='received' AND deleted_at IS NULL` filter (opt-out via `include_sent`/`include_deleted`)
-- [ ] 2D.7 `thread` continues ignoring direction filter
-- [ ] 2D.8 Tests: each filter alone, combinations, regex safety, limit cap, canonical_label expansion
-- [ ] 2D.9 Perf: 100k-message FTS count-by-subject <500ms
+**2D: Query tool + read-tool defaults** (mailroom) — CF `ab6febd` (with `queries.ts` portion swept into `f6c8019` due to parallel-edit attribution race; functionally complete)
+- [x] 2D.1 `src/store/types.ts` — `QueryArgs`, `QueryResult`, `AggregateResult`, `QueryGroupBy`; `Search/Recent/Thread` extended with `include_sent`/`include_deleted`
+- [x] 2D.2 `queryMessages()` in `src/store/queries.ts` with dynamic parameterized SQL builder, 18 filters
+- [x] 2D.3 `aggregateMessages()` for grouped count (subject/sender/account_id/thread_id/day/week/label)
+- [x] 2D.4 `canonical_label` expansion via `label_map` JOIN (account-scoped) with direct-canonical fallback
+- [x] 2D.5 `src/mcp/tools/query.ts` MCP wrapper; registered as read-only in `src/mcp/server.ts`
+- [x] 2D.6 `search` and `recent` apply default `direction='received' AND deleted_at IS NULL`; `include_sent`/`include_deleted` opt-outs added
+- [x] 2D.7 `thread` ignores direction filter; `include_deleted` opt-out added
+- [x] 2D.8 49 tests: each filter, combos, regex compile-safety, limit cap (1000 max), canonical_label expansion, default-filter on search/recent
+- [x] 2D.9 100k-message perf test in `queries.perf.test.ts` (`describe.skip`, manual run) — defers measurement to Wave 5 verification
 
-**2E: Session toolset-hash** (nanoclaw — independent of mailroom; parallel from start)
-- [ ] 2E.1 `sessions` table gains `tool_list_hash TEXT` (migration)
-- [ ] 2E.2 `getSessionToolHash()` / `setSessionToolHash()` helpers in `src/db.ts`
-- [ ] 2E.3 `src/mcp-tool-discovery.ts`: fetch MCP tool list, return sorted-name SHA-256
-- [ ] 2E.4 Wire hash check into `src/index.ts:345-375` rotation
-- [ ] 2E.5 Tests: stability, change detection, on-mismatch clear + log
+**2E: Session toolset-hash** (nanoclaw) — NC `c6cdd3a`
+- [x] 2E.1 `sessions` table gains `tool_list_hash TEXT` migration in `src/db.ts`
+- [x] 2E.2 `getSessionToolHash` / `setSessionToolHash` helpers in `src/db.ts`; `SessionInfo` type extended
+- [x] 2E.3 `src/mcp-tool-discovery.ts` — `computeGroupMcpHash` derives hash from sorted active MCP server names per group config (host-side derivation, no live network query)
+- [x] 2E.4 Hash check wired into `runAgent()` in `src/index.ts` after age/count rotation; clears session on mismatch with INFO log
+- [x] 2E.5 21 new tests across `src/db.test.ts` + new `src/mcp-tool-discovery.test.ts` (hash stability, change detection, mismatch clear)
 
 ### Wave 3 — Integration + migration (single agent, after Wave 2 merges)
 
 **Execution model: 1 Sonnet executor, serialized.**
 
-- [ ] 3.1 Migration orchestrator script: schema → purge drafts+spam → Proton rfc822 UPDATE → full hydration → metrics report
-- [ ] 3.2 Dry-run mode reports changes without applying
-- [ ] 3.3 Integration tests: ingest → hydrate → query end-to-end; write-through + sync round-trip; reconcile correctness
-- [ ] 3.4 Deploy: rebuild mailroom containers (env-vault prefix!); rebuild agent container; restart nanoclaw
+- [x] 3.1 Migration orchestrator script `scripts/migrate-mirror.ts`: 7 phases (open → schema → purge → rfc822 backfill → `runFullHydration` → inferred-deletes → metrics) (CF `1e46257` + `f398393` gap closure to call `runFullHydration` instead of inline composition)
+- [x] 3.2 `--dry-run` flag: walkers naturally read-only via `BODY.PEEK`; Gmail metadata-only; `dryRun` flag plumbed through `runFullHydration` (CF `1e46257` + `f398393`)
+- [x] 3.3 Integration tests: 8 in `migrate-mirror.test.ts` (end-to-end migration, dry-run idempotence, re-run idempotence, hydration label adds, inferred deletion, write-through+query round-trip, sync event applier round-trip, reconcile race re-verify) + 4 in `sync-hydrate-fallback.test.ts` (Gmail 404 → hydrate, Proton MODSEQ regression → hydrate) (CF `1e46257` + `f398393`)
+- [x] 3.4 Deploy: rebuild mailroom containers, rebuild agent container, restart nanoclaw (CF `86b9072` deploy fixes + `57e631b` Wave 3.5 audit). First attempt produced silently-wrong data (60k rows incorrectly marked deleted, message_labels empty). Rolled back via btrfs snapshot, fixed root causes (Wave 3.5), re-ran successfully.
+
+### Wave 3.5 — apply.ts audit + self-verifying migration (CF `57e631b`)
+
+Wave 3.4 first attempt completed without errors but wrote silently-wrong data. Sanity SQL revealed: `message_labels=0`, `label_catalog=0`, `deleted_inferred=60,167` (literally every row), reported metrics didn't match actual DB state. Rolled back to btrfs snapshot `2026-04-23-085005`. Spawned focused Sonnet executor to fix root causes:
+
+**Bugs identified + fixed:**
+- **A — Metrics-vs-writes mismatch:** `applyInferredDeletes` wrote rows but `hydrate.ts:280` hardcoded `inferred_deletes: 0` instead of capturing the return. Same drift in `total_inferred_deletes` plumbing. Fix: function returns `number`; hydrate captures + aggregates.
+- **B — Empty `message_labels`:** Proton accounts only called `applyFolderUidDelta`, never `applyLabelDelta`. Per Wave 1 decision, Proton folder paths are stored as label entries — call both. `applyLabelDelta` now also writes `label_catalog` via `INSERT OR IGNORE`.
+- **C — Inferred-delete blast:** comparison built `seenMessageIds` from `rfc822_message_id` strings but `applyInferredDeletes` queried `SELECT message_id` (internal UUID). Two incompatible key spaces → zero intersection → all rows marked deleted. Fix: comparison uses `source_message_id` throughout.
+- **D — Gmail rfc822 join:** Gmail walker triples dropped `gmailId` when mapped, losing the source-native id. Fix: triples carry `sourceMessageId` from the source's native id (gmailId for Gmail, rfc822 for Proton).
+
+**Self-audit added to `migrate-mirror.ts`:** runs after hydration, queries actual DB state, fails the script (exit 1) if reported metrics drift from actual, or if invariants break (`message_labels` empty when Proton messages exist; `label_catalog` empty when adds were reported; `deleted_inferred > 50%` blast guard). Future deploys can't silently produce wrong data.
+
+**Tests:** new `src/integration/apply-bugs-wave35.test.ts` (8 tests) seeds synthetic state, runs the apply chain, asserts every row matches expectation (not just counts). Pre-existing apply.test.ts mock fixed for the new key shape. Total 300/302 (2 perf skipped).
+
+### Wave 3.4 deploy results (post-Wave 3.5 retry)
+
+Live migration completed in 9.7 min. Self-audit passed. Final DB state:
+
+| Table / Column | Value |
+|---|---|
+| `messages.rfc822_message_id` NOT NULL | 59,673 (Proton rows backfilled via SQL UPDATE) |
+| `message_labels` rows | 190,286 (Proton folder memberships) |
+| `message_folder_uids` rows | 190,286 (Proton (folder, uid) pairs) |
+| `label_catalog` rows | 147 (unique Proton folders across 5 accounts) |
+| `messages.deleted_inferred=1` | 51 (genuinely orphaned rows; 0.08% of total — well under blast guard) |
+| Total messages | 60,163 |
+
+Per-account walks all clean. Gmail walked 1,808 items but 0 adds applied (separate known issue — see deferred items below). Services brought back up: 5 IDLE sessions + 5 CONDSTORE pollers + reconcile scheduler all started clean, zero auth errors. Nanoclaw restarted on new agent image (Wave 2E session-hash invalidation active).
+
+### Deferred to follow-up
+
+- **Codex review findings on Wave 2E** (P1 + P1 + P2 — recorded in tracker checkbox below):
+  - P1: `setSession()` resets `created_at` and `message_count=0` on every resume → rotation counters never trigger
+  - P1: pre-migration sessions with NULL `tool_list_hash` not invalidated on first run after deploy → first spawn after MCP changes still resumes stale conversation
+  - P2: Trawl config changes that don't add/remove the server itself aren't caught by the hash
+- ~~**Gmail hydrated_adds=0**~~ → **CLOSED Wave 3.6 (CF `a7baeed`)**: root cause was `buildLabelDelta` and `applyLabelDelta` still keyed on `rfc822_message_id` after Wave 3.5 (which only fixed inferred-delete keying). Local Gmail rows have NULL rfc822 (only Proton was SQL-backfilled), so all Gmail upstream entries fell into the `unknowns` bucket. Fix: shift apply path to use `source_message_id` end-to-end (gmailId for Gmail, rfc822 for Proton — both already on every row by Wave 1 contract). Wave 3.6 re-run migration: Gmail message_labels 0 → **1,784**, Gmail label_catalog 0 → **28**. Architectural side-benefit: Gmail rfc822 backfill is now truly optional (apply doesn't need it). 305 tests pass (was 300).
+- **Audit invariants need re-run awareness** — Wave 3.6 re-run audit fired exit 1 with 3 false positives (51 deleted_inferred from Wave 3.5 marked as drift; 2 Proton accounts walked-but-no-new-adds correctly idempotent). Audit was right to halt — the right fix is to compare against pre-migration state (deltas, not absolutes) and relax `adds==0` when prior coverage exists.
+
+### Wave 3 gap closure (2026-04-23, design-corrected) — CF `f398393`
+
+Wave 3 first pass shipped with 6 tsc errors + a no-op reconcile scheduler stub. Root cause: Wave 2A exposed only primitives (walkers/delta/apply), 2B worked around the missing composed API with runtime late-binding (`mod.runGmailHydration as …`), Wave 3 stubbed `runFn`. Closed by:
+
+- New `src/reconcile/hydrate.ts` exposes `hydrateGmailAccount(email, deps)`, `hydrateProtonFolder(account, folder, deps)`, `runFullHydration(deps)` — composes walker → delta → apply.
+- `src/reconcile/index.ts` exports the new functions as the public reconcile API.
+- Late-binding scaffolding deleted from `src/sync/gmail-history.ts` and `src/sync/proton-condstore.ts`; replaced with direct imports.
+- `src/ingestor.ts` wires the scheduler `runFn` by passing `runFullHydration` (composition root pattern; scheduler stays decoupled).
+- `scripts/migrate-mirror.ts` hydration phase collapsed into a single `runFullHydration()` call — same code path as nightly reconcile per the locked decision.
+- 4 new integration tests in `src/integration/sync-hydrate-fallback.test.ts` exercise the sync→hydrate fallback that the original Wave 3 didn't test.
+- 2 implicit-`any` errors in `gmail-history.ts:144,157` annotated.
+- `tsc --noEmit` zero errors. Test suite 288 passing / 2 skipped. Lessons file updated with the cross-workstream-API-contract pattern.
+
+`__needs_hydration__` / `last_modseq=-1` sentinel paths kept — they now serve a real failure mode (no IMAP/OAuth client available at hydration time), no longer the primary path.
 
 ### Wave 4 — Docs + persona (single agent)
 
 **Execution model: 1 Sonnet executor.**
 
-- [ ] 4.1 Madison `CLAUDE.md`: `mcp__inbox__query` docs (signature, 5 example patterns); remove stale tool references; add session-stale instruction; add verify-before-quoting-a-mem rule
-- [ ] 4.2 a-mem cleanup: scan telegram_inbox a-mem for "Known gaps" / "limitation" / "broken" notes ≥ 2026-04-22; delete obsolete or append `RESOLVED <date>` tags
-- [ ] 4.3 Graduate `findings.md` content to `lode/architecture/madison-pipeline.md` (mirror architecture, session-hash pattern) and new `lode/infrastructure/mailroom-mirror.md` (sync details)
-- [ ] 4.4 `lode/practices.md`: deploy-checklist subsection, counter-note pattern
-- [ ] 4.5 `lode/infrastructure/mailroom-rules.md`: env-vault deploy requirement
+- [x] 4.1 Madison `CLAUDE.md`: `mcp__inbox__query` docs (signature, 5 example patterns); session-stale workflow; verify-before-quoting-a-mem extended truthful-reporting rule (NC `540e98e`)
+- [~] 4.2 a-mem cleanup: tools available but Madison's `telegram_inbox` ChromaDB is per-group isolated (only reachable from inside Madison's container). Wave 4 executor produced recommended search queries Jeff can run interactively from Madison's session: `search_memories({query:"watermark NaN Proton bug"})`, `search_memories({query:"Known gap missing tools Phase 10"})`, `search_memories({query:"session stale tool list"})` — append `RESOLVED 2026-04-23 — see CF 58a290f / NC c6cdd3a / CF 57e631b` or delete obsolete notes.
+- [x] 4.3 `lode/architecture/madison-pipeline.md` created (mirror architecture + session-hash pattern + mermaid data-flow diagram); `lode/infrastructure/mailroom-mirror.md` created (sync architecture, IDLE/CONDSTORE, reconcile, mermaid startup wiring + apply path) (NC `540e98e`)
+- [x] 4.4 `lode/practices.md` deploy checklist + counter-note pattern + cross-workstream + self-audit pointers (NC `540e98e`)
+- [x] 4.5 `lode/infrastructure/mailroom-rules.md` env-vault requirement section added (NC `540e98e`)
+
+### Wave 4.5 — Agent-side read tracking (CLOSED — CF `1ad00ee`)
+
+Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark read state. Wave 1's filter inventory had no read/unread; Gmail UNREAD worked via labels but Proton had no read tracking at all. Solution: agent-side `read_at` column populated when Madison surfaces a message.
+
+- [x] 4.5.1 Schema v3→v4: `messages.read_at INTEGER` (nullable epoch ms) + `idx_messages_read_at` index. Schema guard accepts v3 silently; rejects v1/v2 multi-step regression.
+- [x] 4.5.2 `QueryArgs.read?: boolean` filter on `queryMessages` and `aggregateMessages` (parameterized SQL; `read_at IS NOT NULL` / `IS NULL`).
+- [x] 4.5.3 `mcp__inbox__mark_read({message_ids: string[]})` — batch verb, idempotent (preserves original `read_at` on re-call), per-id results, summary aggregate. SQLITE_BUSY retry.
+- [x] 4.5.4 `mcp__inbox__mark_unread({message_ids: string[]})` — symmetric, clears `read_at`.
+- [x] 4.5.5 25 new tests (mark_read/mark_unread tool tests + read-filter on queryMessages/aggregateMessages + schema v4 migration). Total 307 → 332.
+- [x] 4.5.6 Madison `CLAUDE.md` updated: `read` added to filter inventory; example #5 rewritten to use `read: false`; mark_read/mark_unread documented in batch verb section; explicit workflow ("call mark_read at the end of every digest with every surfaced id").
+- [x] 4.5.7 Deployed: mailroom rebuilt + recreated; schema_version bumped to 4 in live DB; read_at column + index present; 5 IDLE + 5 CONDSTORE + reconcile scheduler all up clean.
+
+**Tools surface (post-4.5):** 15 inbox MCP tools — `search`, `thread`, `recent`, `query`, `mark_read`, `mark_unread`, `apply_action`, `archive`, `label`, `add_label`, `remove_label`, `delete`, `send_message`, `send_reply`, `validate_rules`.
+
+**Decision (locked):** read state is agent-side only — NOT mirrored to upstream Gmail UNREAD label or Proton `\Seen` flag. Rationale: web-UI reads on Proton don't propagate through IMAP bridge; agent-side state matches the actual triage workflow ("Madison surfaced this to me, did I act on it?"). Could add upstream mirroring later if web-UI read state ever becomes accessible.
 
 ### Wave 5 — Verify + graduate (Jeff-driven)
 
@@ -273,9 +342,9 @@ Transform the mailroom store from a content-only archive into a **true mirror** 
 - [ ] 5.3 AC-V2: add a placeholder MCP tool, restart MCP → next Madison spawn invalidates session (check INFO log)
 - [ ] 5.4 AC-V3: archive a test message in Gmail web → `SELECT archived_at FROM messages WHERE ...` within 5 min
 - [ ] 5.5 AC-V4: rename a Gmail label → verify `label_catalog.label` updates within 24h; all existing `message_labels` rows still queryable under new name
-- [ ] 5.6 AC-V5: Madison `add_label` → immediate `query({labels:[X]})` returns the message
+- [x] 5.6 AC-V5: `mark_read` and `add_label` via HTTP MCP both write through to local DB; subsequent `query()` returns immediately. **Initial fail uncovered Wave 2C silent write-failure** (inbox-mcp had `MAILROOM_DB_READONLY=true` from Phase M2 — Wave 2C's writes were swallowed, masked by nightly reconcile). Fixed CF `5935bf9` (drop env var); both write paths verified end-to-end.
 - [ ] 5.7 AC-V6: "are Proton watermarks working?" — Madison doesn't cite NaN issue
-- [ ] 5.8 AC-V7: `npm test` green in nanoclaw; mailroom tests green
+- [x] 5.8 AC-V7: nanoclaw 334/334 + mailroom 332/334 (2 perf skipped) green
 - [ ] 5.9 Move plan to `lode/plans/complete/`
 
 ## Errors
@@ -287,6 +356,31 @@ Transform the mailroom store from a content-only archive into a **true mirror** 
 
 ## Current status
 
-**Discussion phase complete.** All 9 architecture-group decisions locked (identity/dedup, label semantics, message classes, sync robustness, backfill/hydration, concurrency, operational, plus the original AC-3/4/6/7). Tracker rewritten 2026-04-22 evening. Awaiting `mail-push-redesign` Phases 9.1–9.6 to complete, then branch-spin + Wave 0.
+**Waves 0–4.5 complete (2026-04-23).** Mirror foundation live + persona refreshed + lode graduated + read-tracking added. Day's commits: NC `b866105` `c6cdd3a` `7e366ca` `540e98e`; CF `f8f827e` `7afa3ab` `16886aa` `f6c8019` `ab6febd` `1e46257` `f398393` `86b9072` `57e631b` `a7baeed` `a26b590` `1ad00ee`. Mailroom 332 tests. Nanoclaw 334 tests. Live mirror: 60,166 messages, 192,080 label entries, 175 catalog entries, 51 inferred-deletes (within blast guard), schema_version=4, `read_at` column populated on demand. 15 inbox MCP tools live. Madison's session auto-invalidates on next spawn (Trawl-config-in-hash + Codex P1 NULL-hash-clear).
+
+Mirror foundation live in production with full source coverage:
+- 60,166 messages mirrored across 6 accounts (5 Proton + 1 Gmail)
+- **192,080 label entries** (190,296 Proton folder memberships + 1,784 Gmail labels)
+- 190,296 Proton (folder, uid) pairs in `message_folder_uids`
+- **175 unique label entries catalogued** (147 Proton folders + 28 Gmail labels including system/CATEGORY/user)
+- 51 inferred-delete flags (0.08% of total — within blast guard)
+- 59,676 Proton rows backfilled with rfc822_message_id
+- All 5 IDLE sessions + CONDSTORE pollers + reconcile scheduler running healthy
+- Migration script self-audits with metric-vs-actual + per-source + ratio invariants; fails-fast on drift
+- `tsc --noEmit` zero errors. Test suite: 307/309 (2 perf skipped). Nanoclaw 334/334.
+
+Ready for Wave 5 (Jeff-driven verification: AC-V1 through AC-V7).
+
+### Codex Wave 2E findings (CLOSED — NC `7e366ca`)
+
+- **P1 — Resume preserves rotation counters:** `setSession` now uses `INSERT … ON CONFLICT DO UPDATE` with conditional expressions; new session inserts stamp fresh `created_at`+`message_count=0`; same-session resume preserves `created_at` and increments `message_count`. Rotation gates (`sessionMaxAgeHours` / `sessionMaxMessages`) now actually trigger.
+- **P1 — Pre-migration NULL-hash sessions get cleared:** the hash check distinguishes "no session row exists" (just stamp) from "row exists with NULL hash" (treat as stale pre-migration row → DELETE + log INFO). Structural session-staleness fix now applies to migrated sessions too.
+- **P2 — Trawl config in hash:** `computeGroupMcpHash` appends Trawl `url`/`mode`/`allowedTools`/`allowedCategories`/`excludedTools` (sorted) to the SHA-256 input when `trawl.enabled === true`. Trawl URL/mode/allowlist changes now invalidate the session even when the server name is unchanged.
+
+7 new tests added. Total nanoclaw tests: 324 → 334.
+
+### Audit re-run awareness (CLOSED — CF `a26b590`)
+
+Pre-migration count snapshot taken after schema verify, before any writes. Audit invariants now compare DELTAS (post − pre) against the script's reported metrics (which are also deltas). Per-account `adds_applied=0` check distinguishes first-migration (`prior_coverage === 0` → fail loudly) vs re-run idempotency (`prior_coverage > 0` → emit INFO `re-run idempotent` log + pass). Blast guard + Gmail label parity + reconcile_unknowns ratio + label_catalog/message_labels invariants retained but refined for delta semantics. 2 new integration tests for re-run idempotent path. Mailroom tests: 305 → 307 (+2 skipped perf).
 
 **Execution strategy**: Wave 2 runs **5 Sonnet executors in parallel** (2A-E), dramatically compressing wall time. Wave 1 and Waves 3-4 are single-executor. Wave 5 is Jeff-driven verification. Opus orchestrator used only for cross-wave integration and review — minimizing Opus burn per Jeff's budget constraint.

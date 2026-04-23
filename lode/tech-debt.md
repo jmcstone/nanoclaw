@@ -12,6 +12,19 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 
 ---
 
+## Mailroom
+
+### TD-MAIL-PUSH-WATERMARK — Push-ingest must advance per-account watermark
+- **Repo**: `~/Projects/ConfigFiles/containers/mailroom/mailroom/`
+- **Scope**: S
+- **Trigger**: FIRED 2026-04-23 — Madison reported all three Proton watermarks stuck at yesterday's last `recent` call, even though IDLE pushed dozens of messages today. Result: tomorrow's 7am sweep would re-surface every push-ingested message of the day. Worked around by asking Madison to call `recent` on each account before EOD.
+- **Why deferred**: today's manual workaround handles the immediate symptom; Wave 5 verification was the priority. The architectural fix touches the Wave 2B sync path which is fresh code.
+- **Root cause**: Wave 2B IDLE/CONDSTORE workers ingest messages directly via `ingestMessage` but never call `setWatermark`. Watermarks only advance on the read-side `getRecentMessages` path. Push-ingest + sweep `recent` are inconsistent — push-only days leave watermarks frozen.
+- **Done looks like**: per-message ingest path (`src/store/ingest.ts` or the sync workers' call site) bumps the per-account watermark to `received_at` after a successful insert. `recent` and push-ingest become equivalent w.r.t. watermark advancement. Test: simulate push-only day, run morning `recent`, assert it returns 0 (not the day's messages).
+- **Related**: see `2026-04-madison-read-power` plan (Wave 2B + AC-V6 verification on 2026-04-23).
+
+---
+
 ## Trawl ecosystem
 
 ### TD-TRAWL-ADMIN-UI — Hosted admin UI
