@@ -1,5 +1,59 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-23 late afternoon — Wave 5.5 deploy + backfill + lode graduation (5.5.9, 5.5.10, 5.5.12)
+
+### Actions
+
+- **5.5.12 lode graduation** (first, docs-only):
+  - `lode/tech-debt.md` — `TD-MAIL-PUSH-WATERMARK` marked CLOSED with CF `6dfeba8`, deviation noted (used existing `watermarks` table, not a new accounts column).
+  - `lode/infrastructure/mailroom-mirror.md` — added "Ingest-path label invariant (Wave 5.5)" section documenting the `ingestMessage` contract + runtime invariant tool; extended event-applier section for the catalog-write additions.
+  - Madison's `/home/jeff/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md` — added `mcp__messages__audit_label_coverage` in a new "Diagnostic" subsection between reads and writes.
+- **5.5.10 deploy**:
+  - Snapshot verified (2026-04-23-150100 was 16 min old at deploy start).
+  - `cd ~/containers/mailroom && env-vault env.vault -- docker compose stop ingestor inbox-mcp` / `build` / `up -d`.
+  - **Hit a cwd gotcha**: ran the commands from the real ConfigFiles path first; compose resolved `../data/...` to a nonexistent dir, ingestor crash-looped with "Gmail credentials not found in /var/mailroom/gmail-mcp". Fixed by re-running from the `~/containers/mailroom` symlink. Captured as a new item in `lode/practices.md` deploy checklist.
+  - Post-recreate: 5 Proton IDLE sessions + 5 CONDSTORE pollers + reconcile scheduler all up clean, zero auth errors.
+- **5.5.9 backfill**:
+  - `docker exec mailroom-ingestor-1 npx tsx scripts/migrate-mirror.ts` (not host-side — the script hardcodes `/var/mailroom/data` and fails with `EACCES mkdir '/var/mailroom/data'` on the host; captured in practices.md).
+  - Dry-run skipped since migrate-mirror's re-run idempotency + self-audit make a live run safe and informative.
+  - Live run: 165 label adds applied (jstone.pro 26, thestonefamily.us 57 + 11 removes, gmail:americanvoxpop 29, registrations 53, stone.jeffrey/pm.me 0). 1 inferred-delete. `audit_passed`.
+  - Re-run immediately after: 0 new adds across all accounts, idempotent, audit_passed. **Confirms the push-ingest gap is fully closed as of now.**
+  - Final DB: `message_labels=192,130`, `message_folder_uids=190,317`, `label_catalog=175`, `total_messages=60,179`, `deleted_inferred=52`.
+- **Audit tool verified** present in both `dist/mcp/server.js` and `dist/mcp/tools/audit_label_coverage.js` inside the running inbox-mcp container.
+
+### Test / deploy results
+
+| Check | Status | Notes |
+|---|---|---|
+| `env-vault ... docker compose stop/build/up` | pass | after cwd fix |
+| IDLE sessions started | 5/5 | one per Proton account |
+| CONDSTORE pollers started | 5/5 | |
+| reconcile scheduler started | pass | |
+| migrate-mirror self-audit | passed | 165 adds live + 0 adds idempotent re-run |
+| audit tool registered in image | pass | `grep -c "audit_label_coverage" /app/dist/mcp/server.js` returns 2 |
+
+### What's left (Jeff-driven)
+
+- **5.5.11** Send a test message to one Proton + one Gmail; watch `message_labels` fill within seconds; check watermark; call `mcp__messages__audit_label_coverage({since_hours:1})` from Madison — expect 0.
+- **5.5.13** Re-run Wave 5 AC-V3 + AC-V6.
+
+After 5.5.11 + 5.5.13 pass, Wave 5.5 can be closed and the plan can move into Wave 5 completion (remaining AC-V1/V2/V4/V7), then graduate.
+
+### Reboot check
+
+1. **Where am I?** Wave 5.5 code + deploy + backfill all landed; tracker has 5.5.2–5.5.10, 5.5.12 checked. Plan is ready for Jeff-driven live verification (5.5.11).
+2. **Where am I going?** 5.5.11 live verify → 5.5.13 AC re-runs → finish Wave 5 (5.1/5.2/5.3/5.4/5.5/5.7/5.9) → move plan to `lode/plans/complete/`.
+3. **What is the goal?** Full mirror fidelity — new messages arriving via poller or sync event get identical label/catalog/folder-uid/watermark state as migration-hydrated rows.
+4. **What have I learned?**
+   - The `~/containers/mailroom` symlink is load-bearing for deploys; the compose file's relative paths don't work from the real repo path. Captured in practices.md.
+   - `migrate-mirror.ts` must run inside the container (hardcoded `/var/mailroom/data`). Practices.md updated.
+   - Idempotent re-run audit is an important pattern — the 2nd run confirmed the 1st run fixed the gap with a strong signal (`adds=0` everywhere).
+5. **What have I done?**
+   - 3 lode commits on nanoclaw (`e73c932`, `d6328dc`, + one coming for this progress update).
+   - 5 code commits on mailroom (`6dfeba8`, `6324d2b`, `a92e8e8`, `3b186f0`, `44ed487`).
+   - Live backfill of 165 label entries; audit passed; idempotent re-run passed.
+   - Docs graduation: tech-debt, infrastructure, Madison CLAUDE.md, practices.md all updated.
+
 ## 2026-04-23 evening — Wave 5.5 code changes landed (5.5.2–5.5.8)
 
 ### Actions

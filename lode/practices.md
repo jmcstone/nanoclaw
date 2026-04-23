@@ -42,7 +42,7 @@ Run these steps in order any time you rebuild or migrate mailroom containers. Re
 2. Stop mailroom containers: `cd ~/containers/mailroom && env-vault env.vault -- docker compose stop ingestor inbox-mcp`.
 3. Rebuild images: `env-vault env.vault -- docker compose build`.
 4. If a migration script exists, run with `--dry-run` first against the live DB and review reported counts.
-5. Run actual migration: `env-vault env.vault -- npx tsx scripts/migrate-mirror.ts`.
+5. Run actual migration: `docker exec mailroom-ingestor-1 npx tsx scripts/migrate-mirror.ts`. (Run inside the container — the script hardcodes `/var/mailroom/data` and needs `MAILROOM_DATA_DIR` set, which is only true inside the container. Host-side invocation fails with `EACCES mkdir '/var/mailroom/data'`.)
 6. Verify self-audit passes (the script exits non-zero and prints mismatch details if it fails — do not proceed on exit 1).
 7. Bring services up: `env-vault env.vault -- docker compose up -d ingestor inbox-mcp`.
 8. Verify IDLE/CONDSTORE/reconcile workers start clean (check logs — no auth errors, 5 IDLE sessions starting).
@@ -50,6 +50,8 @@ Run these steps in order any time you rebuild or migrate mailroom containers. Re
 10. Run sanity SQL: `sqlite3 ~/containers/data/mailroom/store.db "SELECT COUNT(*) FROM message_labels; SELECT COUNT(*) FROM message_folder_uids; SELECT COUNT(*) FROM label_catalog; SELECT COUNT(*) FROM messages WHERE deleted_inferred=1;"` — confirm counts are reasonable (non-zero labels, deleted_inferred << total).
 
 **Critical**: always use the `env-vault env.vault --` prefix. Without it, `INBOX_DB_KEY` is unset and both containers crash-loop. See `lode/lessons.md` — "Mailroom deploys must use env-vault prefix."
+
+**cwd gotcha**: `docker-compose.yml` uses `../data/mailroom/...` relative paths. The compose file's real location is `~/Projects/ConfigFiles/containers/mailroom/mailroom/docker-compose.yml`, which would resolve `..` to `~/Projects/ConfigFiles/containers/mailroom/data/...` — a directory that does NOT exist. The actual data lives at `~/containers/data/mailroom/...`, and `~/containers/mailroom` is a symlink into the ConfigFiles repo. **Always `cd ~/containers/mailroom` (the symlink), not the real ConfigFiles path.** Running from the real path silently mounts the wrong dir; ingestor crash-loops with "Gmail credentials not found in /var/mailroom/gmail-mcp". Verified 2026-04-23 during Wave 5.5 deploy.
 
 **Both containers** must rebuild when `src/store/` changes; only `inbox-mcp` for `src/mcp/` changes; only `ingestor` for `src/proton/` or `src/gmail/` changes. See `lode/lessons.md` — "Both mailroom containers need rebuild when src/store/ changes."
 

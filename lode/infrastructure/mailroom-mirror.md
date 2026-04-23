@@ -46,9 +46,57 @@ Every 5 minutes, sends a `NOOP` command on the IDLE connection. Timeout of 30 se
 ### Event-to-DB applier
 
 `src/sync/proton-events.ts`:
-- New message in folder → `INSERT OR IGNORE` into `message_labels` + `message_folder_uids`.
+- New message in folder (`applyProtonUidAdded`) → `INSERT OR IGNORE` into `message_labels` + `label_catalog` + `message_folder_uids` (transactional).
 - Message expunged from folder → `DELETE FROM message_folder_uids WHERE (message_id, folder) = ?`; if no remaining folder entries, set `deleted_at`.
 - Flag change → update `direction`, `archived_at` as appropriate.
+
+`src/sync/gmail-events.ts`:
+- `applyLabelsAdded` → `INSERT OR IGNORE` into `message_labels` and `label_catalog` (catalog write added Wave 5.5 to cover first-seen labelIds).
+- `applyLabelsRemoved` → `DELETE FROM message_labels WHERE (message_id, label) = ?`.
+- `applyMessagesDeleted` → set `deleted_at`.
+
+## Ingest-path label invariant (Wave 5.5)
+
+Both legacy pollers (`src/proton/poller.ts`, `src/gmail/poller.ts`) and the Wave 2B event appliers share a single write-path contract: **whenever a row is inserted into `messages`, the corresponding `message_labels` + `label_catalog` (+ `message_folder_uids` for Proton) rows are written in the same transaction, and the per-account watermark is advanced to the message's `received_at`.**
+
+Centralized in `src/store/ingest.ts:ingestMessage()`:
+
+```ts
+ingestMessage({
+  // ... existing fields ...
+  labels?: string[];                              // source-native labelIds (Gmail) or folder paths (Proton)
+  folder_uid?: { folder: string; uid: number };  // Proton only
+});
+```
+
+Inside the existing `db.transaction`, after the `messages` insert succeeds (`inserted === true`):
+1. For each `label`: `INSERT OR IGNORE INTO label_catalog` (`canonical` from `canonicalizeLabel`, `system` derived — Gmail INBOX/SENT/DRAFT/SPAM/TRASH/UNREAD/IMPORTANT/STARRED/CATEGORY_* → 1; Proton folder paths → 0).
+2. For each `label`: `INSERT OR IGNORE INTO message_labels`.
+3. If `folder_uid`: `INSERT OR IGNORE INTO message_folder_uids`.
+4. `UPDATE watermarks SET received_at = MAX(COALESCE(received_at, 0), ?) WHERE account_id = ?`.
+
+Callers:
+- `src/proton/poller.ts` — passes `labels: [sourceFolder]` and `folder_uid: { folder: sourceFolder, uid }`.
+- `src/gmail/poller.ts` — passes `labels: msg.data.labelIds ?? []`.
+- Wave 2B event appliers — `applyProtonUidAdded` and `applyLabelsAdded` write labels/catalog directly (not via `ingestMessage`, since the message row already exists).
+
+**Why this matters**: prior to Wave 5.5, `ingestMessage` wrote only the `messages` / `threads` / `senders` / `accounts` rows and skipped labels; the migration-hydration path filled labels correctly, but new messages arriving via push ingest landed with zero label entries — Madison's INBOX-label queries silently under-counted the live inbox by ~30% on push-ingest days. The invariant makes push-ingest and hydration produce identical DB state.
+
+### Runtime invariant tool
+
+`mcp__messages__audit_label_coverage({since_hours?: number = 24})` — read-only MCP tool on inbox-mcp. Returns `{missing_label_count, sample_message_ids: string[]}` for messages inserted in the window that have zero `message_labels` entries. Expected: 0. Non-zero indicates the ingest-path invariant has regressed — a new write path was added that skipped `ingestMessage()` or didn't pass `labels`.
+
+SQL:
+```sql
+SELECT m.message_id FROM messages m
+WHERE m.source IN ('protonmail','gmail')
+  AND m.deleted_at IS NULL
+  AND m.received_at > ?
+  AND NOT EXISTS (SELECT 1 FROM message_labels WHERE message_id = m.message_id)
+LIMIT 50;
+```
+
+Madison runs this as a periodic self-check or when Jeff notices an inbox discrepancy.
 
 ## Nightly reconcile
 
