@@ -1,5 +1,37 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-23 evening — Wave 5.6 planned (CONDSTORE non-INBOX seeding)
+
+### What prompted this
+
+Right after 5.5.11 verified clean (test message → INBOX label + watermark bumped + audit=0 + Madison notified), Jeff ran a follow-up test: applied the "Family" label to the test message in Proton web. No event fired on our side — not via IDLE (INBOX-only), not via CONDSTORE (polls INBOX only because `proton_folder_state` is empty for every account).
+
+### Investigation
+
+- `SELECT account_id, COUNT(*) FROM proton_folder_state GROUP BY account_id` → empty. Zero folder-state rows across all 5 Proton accounts.
+- `src/ingestor.ts:~125` reads that table and, when it finds zero rows, falls back to `folders = ['INBOX']` before calling `startCondstorePoller`.
+- Result: only INBOX is polled. Any activity in `Labels/*`, `Archive`, `Sent`, `Trash` etc. is invisible to Wave 2B push paths. Label-in-web changes only surface via 04:00 nightly reconcile (full folder walk).
+
+This is not a Wave 5.5 regression — Wave 5.5 hardened `applyProtonUidAdded` so that *when* a non-INBOX event fires, labels + catalog are written. The gap is one layer up: the Wave 2B design assumes `proton_folder_state` is seeded per-folder, but that never happened.
+
+### Plan
+
+Added Wave 5.6 to tracker.md — 10 sub-tasks spanning:
+- new `src/sync/proton-folder-discovery.ts` (`seedFolderState` — LIST + INSERT OR IGNORE with last_modseq=0, skip \Noselect)
+- wire into `ingestor.ts` startup (best-effort, log+continue on IMAP unavailable)
+- wire into `reconcile/apply.ts` walker (upsertFolderState per folder walked, for durability across restarts)
+- integration tests (empty state → seeded, duplicate run safe, IMAP failure handled, walker MODSEQ updates)
+- ingestor-only deploy
+- live re-test of Jeff's "Family" label flow
+- tech-debt entry for `TD-MAIL-CONDSTORE-NONINBOX` CLOSED (preserves root-cause memory)
+- graduate: `mailroom-mirror.md` AC-S2 section + startup diagram refresh
+
+Key locked decision: `last_modseq=0` on seed so first CONDSTORE poll bulk-fires through every message in the folder, healing accumulated non-INBOX label gaps via `INSERT OR IGNORE`. One-time cost accepted.
+
+### Meanwhile
+
+- Started `migrate-mirror.ts` in background to heal the "Family" label on Jeff's test message *now* (Wave 5.5 mirror should show it labeled correctly before Wave 5.6 lands). Result will be recorded here once the run finishes.
+
 ## 2026-04-23 late afternoon — Wave 5.5 deploy + backfill + lode graduation (5.5.9, 5.5.10, 5.5.12)
 
 ### Actions

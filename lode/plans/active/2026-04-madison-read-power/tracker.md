@@ -372,9 +372,58 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
   - Seed: audit-tool — insert a row directly in `messages` bypassing labels → `audit_label_coverage` returns non-zero with the message_id.
 - [x] 5.5.9 Backfill via `docker exec mailroom-ingestor-1 npx tsx scripts/migrate-mirror.ts` (full `runFullHydration` run). Result: 165 label adds across 4 accounts (jstone.pro 26, thestonefamily.us 57 +11 removes, gmail americanvoxpop 29, registrations 53), 1 inferred-delete, audit_passed. Re-run immediately after was idempotent — confirms gap closed. Final DB: `message_labels=192,130`, `message_folder_uids=190,317`, `label_catalog=175`, `total_messages=60,179`.
 - [x] 5.5.10 Deploy: both containers rebuilt + recreated via `cd ~/containers/mailroom && env-vault env.vault -- docker compose build/up -d`. Gotcha: compose's `../data/...` paths only resolve correctly when cwd is the `~/containers/mailroom` symlink — using the real `~/Projects/ConfigFiles/...` path mounts the wrong dir and ingestor crash-loops with "Gmail credentials not found". Post-deploy: 5 IDLE + 5 CONDSTORE + reconcile scheduler all up clean, zero auth errors. **Practices lesson captured below.**
-- [ ] 5.5.11 **(Jeff-driven)** Verify live: send a test message to one Proton + one Gmail account; within seconds, `message_labels` populated for both and per-account watermark advances. Run `mcp__messages__audit_label_coverage({since_hours:24})` → expect 0.
+- [x] 5.5.11 Live verify 2026-04-23 15:57 CDT. Test: Jeff sent `americanvoxpop@gmail.com` → `jeff@jstone.pro`. Result: `messages` row written (`protonmail:<CAKrEtEkhNYn3ieHKhgaqN...@mail.gmail.com>`, subject "Test Message", received_at 20:54:49 UTC); `message_labels` = INBOX; `message_folder_uids` = INBOX:11; `watermarks.watermark_value` advanced to 20:54:49 with `updated_at` 20:57:36.818 (matches ingest log line → watermark bump runs in same tx as label write); `audit_label_coverage(since_hours:1)` → missing_label_count: 0; Madison pipeline fired end-to-end (Jeff notified via Telegram). Gmail-SENT side not yet polled (Gmail poller runs on cycle; orthogonal to Wave 5.5 scope).
 - [x] 5.5.12 `lode/tech-debt.md`: `TD-MAIL-PUSH-WATERMARK` CLOSED with CF `6dfeba8`. `lode/infrastructure/mailroom-mirror.md`: ingest-path label invariant + audit tool documented. Madison's `CLAUDE.md`: audit tool added in a Diagnostic subsection between reads and writes.
 - [ ] 5.5.13 **(Jeff-driven)** Re-run Wave 5 AC-V3 (archive in Gmail web → local DB reflects) and AC-V6 (a-mem freshness sanity) now that push-ingest parity holds.
+
+### Wave 5.6 — CONDSTORE non-INBOX folder seeding (blocks AC-S2 real-world claim)
+
+**Discovered 2026-04-23 during 5.5.11 follow-up test**: Jeff applied the "Family" label to the test message in Proton web; no event fired on our side. Root cause: `proton_folder_state` is **empty for every Proton account**, so ingestor's CONDSTORE setup falls back to polling `['INBOX']` only. Label/folder changes outside INBOX are invisible to Wave 2B push paths and only surface via 04:00 nightly reconcile. The AC-S2 promise ("per-folder CONDSTORE polling") has the machinery but was never seeded.
+
+**This is not a Wave 5.5 regression** — Wave 5.5 hardened `applyProtonUidAdded` to write labels + catalog correctly. The seed gap is upstream. Closing it delivers AC-S2's real behavior and makes Jeff's label-in-web test work within 5 min.
+
+**Execution model: 1 Sonnet executor, serialized.** ~100 LOC + tests. Same branch (`madison-read-power`) in both repos.
+
+**Goal**: every Proton folder discovered upstream has a row in `proton_folder_state`; CONDSTORE polls them all; label/folder changes in Proton web propagate to the local mirror within 5 min.
+
+**Acceptance criteria**:
+- AC-5.6-1 `proton_folder_state` seeded for every folder on every Proton account, via both startup and hydration paths.
+- AC-5.6-2 CONDSTORE polls all seeded folders, not just INBOX (verified post-deploy: `SELECT COUNT(*) FROM proton_folder_state` >> N_accounts).
+- AC-5.6-3 Integration test: fake IMAP LIST → seed populates → CONDSTORE-poll loop fires per folder in the seeded set.
+- AC-5.6-4 Live verify: Jeff's "Family" label test (or equivalent) works end-to-end within 5 min of applying the label in Proton web.
+
+**Locked decisions**:
+
+| Decision | Rationale |
+|---|---|
+| Seed via **both** startup hook AND hydration walker | Startup heals on restart; walker heals on reconcile. Either alone leaves a failure mode uncovered. |
+| Initial `last_modseq = 0` on seed | First CONDSTORE poll per folder fires for all existing messages; `INSERT OR IGNORE` keeps writes cheap and heals accumulated non-INBOX label gaps for free. Jeff approved the one-time bulk-fire cost. |
+| Skip `\Noselect` folders (matches Wave 2A.1 walker pattern) | They can't be SELECTed; CONDSTORE would fail. |
+| Startup seed is best-effort; failure logs and falls through to INBOX-only | Don't crash the ingestor on transient bridge unavailability. Nightly reconcile self-heals. |
+| Skip IMAP NOTIFY (RFC 5465) | Unknown bridge support; coverage (not latency) is the bottleneck. Revisit if future latency concerns surface. |
+
+**Sub-tasks**:
+- [ ] 5.6.1 Investigate Proton bridge's `LIST "" "*"` response shape — noselect markers, virtual folder paths, nesting (e.g. `Labels/*`). Read `imapflow` docs + one sample run via `docker exec` against the live bridge. Stash findings in `findings.md`.
+- [ ] 5.6.2 New `src/sync/proton-folder-discovery.ts` — `seedFolderState(accountId, imapClient)`: runs `LIST "" "*"`, filters `\Noselect` entries, batched `INSERT OR IGNORE INTO proton_folder_state(account_id, folder, last_modseq)` with `last_modseq=0`. Export `seedFolderState` (tests can inject a fake client).
+- [ ] 5.6.3 Wire into `src/ingestor.ts`: for each Proton account with zero folder rows, call `seedFolderState` **before** the existing `folderRows` read + `startCondstorePoller` call. Wrap in try/catch — log + continue on failure.
+- [ ] 5.6.4 Wire into `src/reconcile/apply.ts` (or walker edge, whichever is cleaner): every folder walked → `upsertFolderState(account_id, folder, current_modseq)`. Keeps the table honest post-hydration and self-heals any startup misses.
+- [ ] 5.6.5 Integration tests `src/integration/wave-5.6-folder-seeding.test.ts`:
+  - Empty `proton_folder_state` + fake IMAP client returning `[INBOX, Archive, Labels/Family, Labels/Foo (\\Noselect)]` → rows seeded for all EXCEPT the Noselect one; `last_modseq=0` on each.
+  - Pre-populated state + LIST returns same set → no duplicate rows (INSERT OR IGNORE).
+  - IMAP client throws on connect → `seedFolderState` resolves without crashing, `proton_folder_state` unchanged; caller logs + falls through.
+  - Walker + `upsertFolderState` → existing rows update MODSEQ, new rows inserted.
+- [ ] 5.6.6 Edge-case tests: folder rename (deferred — add a TODO comment referencing a new tech-debt item if the Proton bridge produces same `source_id` on rename).
+- [ ] 5.6.7 Deploy: ingestor only (`src/sync/` + `src/ingestor.ts` + `src/reconcile/`; no `src/store/` or `src/mcp/` touched). Follow `lode/practices.md` deploy checklist (symlink cwd + env-vault prefix).
+- [ ] 5.6.8 Live verify: restart ingestor → `proton_folder_state` non-empty per account; Jeff re-applies "Family" label to any test message; within 5 min, `SELECT labels FROM message_labels WHERE message_id = <msg>` returns `INBOX;Labels/Family`.
+- [ ] 5.6.9 Record `TD-MAIL-CONDSTORE-NONINBOX` entry in `lode/tech-debt.md` as CLOSED with commit hash (for durable memory of the root cause even though we fix it immediately).
+- [ ] 5.6.10 Graduate: update `lode/infrastructure/mailroom-mirror.md` AC-S2 section ("CONDSTORE per-folder polling is seeded at startup + healed at hydration"); refresh startup-wiring diagram to include the seed node.
+
+**Risks**:
+- First CONDSTORE cycle per newly-seeded folder sees ALL messages as MODSEQ>0. For large folders (e.g. `All Mail` with 60k+ rows) this is one bulk fire. Additions are all `INSERT OR IGNORE`, storm-collapse handles bulk removals. Accepted one-time cost. If it bogs the ingestor for long enough that IDLE reconnect cycles drop, we'll see it in logs and can mitigate (e.g. initial seed to current HIGHESTMODSEQ instead, losing gap-heal).
+- Proton bridge unavailable at startup → no seed, fall back to INBOX-only. Next ingestor restart re-tries; 04:00 reconcile self-heals via 5.6.4. Acceptable.
+
+**Dependencies**:
+- Requires Wave 5.5 landed (DONE). Without it, seeding produces empty label writes.
 
 ## Errors
 
