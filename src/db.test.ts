@@ -13,6 +13,7 @@ import {
   getSessionInfo,
   getSessionToolHash,
   getTaskById,
+  incrementSessionMessages,
   setRegisteredGroup,
   setSession,
   setSessionToolHash,
@@ -605,6 +606,68 @@ describe('session tool hash helpers', () => {
     setSessionToolHash('test_group', 'somehash');
     clearSession('test_group');
     expect(getSessionToolHash('test_group')).toBeNull();
+    expect(getSessionInfo('test_group')).toBeUndefined();
+  });
+});
+
+// --- setSession resume-preservation semantics ---
+
+describe('setSession resume-preservation', () => {
+  it('stamps fresh created_at and message_count=0 for a new session', () => {
+    setSession('test_group', 'session-new');
+    const info = getSessionInfo('test_group');
+    expect(info).toBeDefined();
+    expect(info!.session_id).toBe('session-new');
+    expect(info!.message_count).toBe(0);
+    expect(info!.created_at).toBeTruthy();
+  });
+
+  it('preserves created_at and does not reset message_count when resuming the same session', () => {
+    setSession('test_group', 'session-abc');
+    const first = getSessionInfo('test_group')!;
+
+    // Simulate some messages accrued
+    incrementSessionMessages('test_group', 5);
+
+    // runAgent calls setSession again with the same ID (resume)
+    setSession('test_group', 'session-abc');
+    const after = getSessionInfo('test_group')!;
+
+    expect(after.created_at).toBe(first.created_at);
+    expect(after.message_count).toBe(5);
+  });
+
+  it('resets created_at and message_count when a new session_id replaces an old one', () => {
+    setSession('test_group', 'session-old');
+    incrementSessionMessages('test_group', 10);
+
+    setSession('test_group', 'session-new');
+    const info = getSessionInfo('test_group')!;
+
+    expect(info.session_id).toBe('session-new');
+    expect(info.message_count).toBe(0);
+  });
+
+  it('session rotation thresholds can fire after multiple resumes', () => {
+    // Simulate the full rotation flow: new → resumes → limit reached → clear
+    setSession('test_group', 'session-rot');
+    const sessionMaxMessages = 3;
+
+    // Two resumes, each adding a message
+    setSession('test_group', 'session-rot');
+    incrementSessionMessages('test_group', 1);
+    setSession('test_group', 'session-rot');
+    incrementSessionMessages('test_group', 1);
+    setSession('test_group', 'session-rot');
+    incrementSessionMessages('test_group', 1);
+
+    const info = getSessionInfo('test_group')!;
+    expect(info.message_count).toBe(sessionMaxMessages);
+
+    // Rotation gate fires
+    if (info.message_count >= sessionMaxMessages) {
+      clearSession('test_group');
+    }
     expect(getSessionInfo('test_group')).toBeUndefined();
   });
 });

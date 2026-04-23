@@ -594,8 +594,16 @@ export function getSession(groupFolder: string): string | undefined {
 }
 
 export function setSession(groupFolder: string, sessionId: string): void {
+  // If a row already exists for this (group_folder, session_id), preserve
+  // created_at and increment message_count so rotation limits remain accurate.
+  // Only stamp a fresh created_at / zero message_count for genuinely new sessions.
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id, created_at, message_count) VALUES (?, ?, ?, 0)',
+    `INSERT INTO sessions (group_folder, session_id, created_at, message_count)
+     VALUES (?, ?, ?, 0)
+     ON CONFLICT(group_folder) DO UPDATE SET
+       created_at     = CASE WHEN session_id = excluded.session_id THEN created_at     ELSE excluded.created_at     END,
+       message_count  = CASE WHEN session_id = excluded.session_id THEN message_count  ELSE 0                        END,
+       session_id     = excluded.session_id`,
   ).run(groupFolder, sessionId, new Date().toISOString());
 }
 

@@ -393,7 +393,17 @@ async function runAgent(
   const { hash: currentToolHash } = computeGroupMcpHash(mcpOpts);
   if (sessionId) {
     const storedHash = getSessionToolHash(group.folder);
-    if (storedHash !== null && storedHash !== currentToolHash) {
+    if (storedHash === null) {
+      // NULL hash on an existing session means it predates hash tracking
+      // (pre-migration row). Its tool self-image is unverifiable — clear it.
+      logger.info(
+        { group: group.folder, new: currentToolHash },
+        'tool_list_hash null on existing session — clearing pre-migration session',
+      );
+      clearSession(group.folder);
+      delete sessions[group.folder];
+      sessionId = undefined;
+    } else if (storedHash !== currentToolHash) {
       logger.info(
         { group: group.folder, old: storedHash, new: currentToolHash },
         'tool_list_hash mismatch — clearing session',
@@ -405,7 +415,7 @@ async function runAgent(
   }
   // Stamp (or update) the hash for this spawn so subsequent runs can compare.
   if (sessionId) {
-    // Session is being resumed — update hash in case it was null (first stamp).
+    // Session is being resumed — update hash to latest value.
     setSessionToolHash(group.folder, currentToolHash);
   }
   // If sessionId is undefined at this point (new session or just cleared),

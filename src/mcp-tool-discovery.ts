@@ -6,10 +6,15 @@
  * server added, removed, or Trawl config updated), the hash changes, triggering
  * session invalidation so Madison starts fresh with accurate tool knowledge.
  *
- * We hash server names rather than individual tool names because:
- * - stdio servers (nanoclaw, a-mem, context-mode) aren't queryable from the host
- * - Server-set changes are the dominant signal (MCP restart = server added/removed)
- * - Tool-name changes within a server are captured by the next session naturally
+ * Hashing policy:
+ * - For most servers (nanoclaw, a-mem, context-mode, inbox), name-only suffices
+ *   because their tool surface is configuration-stable: they always expose the
+ *   same set of tools when enabled.
+ * - For Trawl, the configuration determines which tools are actually exposed
+ *   (allowlist mode + allowedTools/allowedCategories/excludedTools + URL).
+ *   These fields are included in the hash input so any material change triggers
+ *   session invalidation. Fields that don't affect the tool list (e.g., bind
+ *   addresses, log levels) are intentionally excluded.
  */
 
 import { createHash } from 'crypto';
@@ -17,8 +22,21 @@ import { createHash } from 'crypto';
 export interface McpServerSet {
   /** Sorted list of MCP server names that would be active for this group. */
   serverNames: string[];
-  /** SHA-256 hex of serverNames.sort().join('\n'). */
+  /** SHA-256 hex of the canonical hash input (server names + Trawl config). */
   hash: string;
+}
+
+/**
+ * Trawl configuration fields that materially affect the tool surface.
+ * Mirrors the three-mode allowlist engine in agent-runner.
+ */
+export interface TrawlConfig {
+  enabled?: boolean;
+  url?: string;
+  mode?: string;
+  allowedTools?: string[];
+  allowedCategories?: string[];
+  excludedTools?: string[];
 }
 
 /**
@@ -33,7 +51,7 @@ export interface GroupMcpOptions {
   /** Whether the group has a context-mode mount configured. */
   hasContextMode: boolean;
   /** Trawl config for the group (undefined = Trawl not configured). */
-  trawl?: { enabled?: boolean; url?: string };
+  trawl?: TrawlConfig;
 }
 
 /**
@@ -46,6 +64,9 @@ export interface GroupMcpOptions {
  *   - a-mem     — when hasAmem
  *   - inbox     — when groupFolder === 'telegram_inbox'
  *   - trawl     — when trawl.enabled === true
+ *
+ * For Trawl, the hash also covers mode + allowlist fields + URL so that
+ * config-only changes (without toggling enabled) still invalidate stale sessions.
  */
 export function computeGroupMcpHash(options: GroupMcpOptions): McpServerSet {
   const names: string[] = ['nanoclaw'];
@@ -56,7 +77,24 @@ export function computeGroupMcpHash(options: GroupMcpOptions): McpServerSet {
   if (options.trawl?.enabled === true) names.push('trawl');
 
   const sorted = [...names].sort();
-  const hash = createHash('sha256').update(sorted.join('\n')).digest('hex');
+
+  // Build a deterministic hash input: server names + Trawl config fields that
+  // affect the tool surface. Use stable JSON (sorted keys via explicit object).
+  const trawlHashPart =
+    options.trawl?.enabled === true
+      ? JSON.stringify({
+          url: options.trawl.url ?? null,
+          mode: options.trawl.mode ?? null,
+          allowedTools: (options.trawl.allowedTools ?? []).slice().sort(),
+          allowedCategories: (options.trawl.allowedCategories ?? [])
+            .slice()
+            .sort(),
+          excludedTools: (options.trawl.excludedTools ?? []).slice().sort(),
+        })
+      : '';
+
+  const hashInput = sorted.join('\n') + (trawlHashPart ? '\n' + trawlHashPart : '');
+  const hash = createHash('sha256').update(hashInput).digest('hex');
 
   return { serverNames: sorted, hash };
 }
@@ -74,18 +112,23 @@ export function groupMcpOptionsFromConfig(
   containerConfig?: Record<string, unknown>,
 ): GroupMcpOptions {
   const cfg = containerConfig ?? {};
-  const mounts = (cfg['additionalMounts'] as Array<{ containerPath?: string }> | undefined) ?? [];
+  const mounts =
+    (cfg['additionalMounts'] as
+      | Array<{ containerPath?: string }>
+      | undefined) ?? [];
   const hasAmem = mounts.some(
-    (m) => typeof m.containerPath === 'string' && m.containerPath.includes('a-mem'),
+    (m) =>
+      typeof m.containerPath === 'string' && m.containerPath.includes('a-mem'),
   );
   const hasContextMode = mounts.some(
     (m) =>
-      typeof m.containerPath === 'string' && m.containerPath.includes('context-mode'),
+      typeof m.containerPath === 'string' &&
+      m.containerPath.includes('context-mode'),
   );
   return {
     groupFolder,
     hasAmem,
     hasContextMode,
-    trawl: (cfg['trawl'] as { enabled?: boolean; url?: string } | undefined),
+    trawl: cfg['trawl'] as TrawlConfig | undefined,
   };
 }
