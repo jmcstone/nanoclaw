@@ -13,7 +13,10 @@ Give Madison structured read/aggregation power that matches her write power, AND
 - **AC-3** Session toolset-hash invalidation in nanoclaw: `sessions` table gains `tool_list_hash TEXT` column. On every spawn, compute SHA-256 of the current MCP tool list (sorted by name). If stored hash differs from current, clear the session before spawning so the new container starts a fresh conversation. Logged at INFO with old/new hash.
 - **AC-4** Madison's `CLAUDE.md` documents `mcp__inbox__query`: signature, common patterns ("count by sender for date range", "show all unread from family", etc.), the truthfulness link (always quote the count, don't paraphrase). Also: when she suspects her tool list is stale, she's instructed to ask Jeff to clear her session rather than confabulating capabilities.
 - **AC-5** Lode lessons + infrastructure docs updated: env-vault prefix required for mailroom deploys from fresh shell; both `ingestor` + `inbox-mcp` need rebuild when `src/store/` changes; session-toolset-hash pattern documented in `lode/architecture/madison-pipeline.md` (graduated from this plan on completion).
-- **AC-6** End-to-end verified: Madison's session cleared, container rebuilt, fresh spawn answers the Bob-late-payment query correctly with grouped counts; session-hash invalidation triggers on next MCP tool change.
+- **AC-6** **a-mem staleness handling** — Madison's per-group a-mem can persist "known issue" notes that survive session clears, leading her to quote stale facts as current state (observed 2026-04-22 evening: she reported "Proton watermarks return NaN" hours after the fix landed). Two complementary mechanisms:
+  - (a) **Persona rule**: when quoting a fact from a-mem about a "gap" / "limitation" / "known issue" / "broken", Madison must first verify the claim against current behavior (call the relevant tool, check logs, OR explicitly note "as of [date in the note]") rather than asserting current state. Added to her CLAUDE.md "Truthful action reporting" section.
+  - (b) **Counter-note pattern**: when a fix lands that resolves an issue Madison may have noted, write a follow-up a-mem note tagged with the original's keywords plus `RESOLVED <date>` so a-mem search surfaces both. Documented as a workflow in `lode/practices.md`. The `update-nanoclaw` / lode-executor pattern can include this as a checklist item for fix-shipping.
+- **AC-7** End-to-end verified: Madison's session cleared, container rebuilt, fresh spawn answers the Bob-late-payment query correctly with grouped counts; session-hash invalidation triggers on next MCP tool change; she does NOT quote stale "known gap" notes (e.g. the now-fixed NaN watermark) as current.
 
 ## Decisions (locked)
 
@@ -54,6 +57,7 @@ Give Madison structured read/aggregation power that matches her write power, AND
 - [ ] **1.1** Confirm AC-1 filter set with Jeff. Anything to add (e.g. `has_attachment`, `read_status`)? Note: read_status would require persisted unread state which the store doesn't track today.
 - [ ] **1.2** Confirm aggregation v1 = count only.
 - [ ] **1.3** Confirm session-hash strategy: invalidate on any add/remove vs only on remove. (Conservative = both, since adds can also reshape behavior.)
+- [ ] **1.4** Confirm a-mem AC-6 approach: persona-rule-only (Madison verifies before quoting) vs persona-rule + counter-note pattern vs adding a programmatic stale-tag field. Recommend the persona+counter-note combo since it's cheap and doesn't require a-mem schema changes.
 
 ### Phase 2 — `mcp__inbox__query` tool
 - [ ] **2.1** `src/store/types.ts` — `QueryArgs`, `QueryResult` types
@@ -76,13 +80,17 @@ Give Madison structured read/aggregation power that matches her write power, AND
 - [ ] **4.2** `lode/architecture/madison-pipeline.md`: graduate session-hash invalidation pattern
 - [ ] **4.3** `lode/infrastructure/mailroom-rules.md`: note the env-vault deploy requirement (cross-link to lessons.md)
 - [ ] **4.4** `lode/practices.md`: add deploy-checklist subsection covering the env-vault prefix and the both-containers-rebuild rule
+- [ ] **4.5** Madison's `CLAUDE.md` "Truthful action reporting" section: extend with the verify-before-quoting-a-mem rule (AC-6a). Concrete instruction: when about to quote any a-mem fact that says "X is broken" / "Y returns NaN" / "Z is timing out" / "<feature> is unavailable", first run a quick verification (the relevant tool, `tail` of logs, etc.) OR explicitly note "as of [date from the a-mem entry]" so Jeff knows the claim isn't fresh.
+- [ ] **4.6** `lode/practices.md`: add the **counter-note pattern** (AC-6b) — when shipping a fix that resolves a known-issue note in a-mem, the fix-author writes a follow-up note containing the original keywords + `RESOLVED <ISO date>` + commit hash. Document as a step in fix-shipping checklist.
+- [ ] **4.7** Initial cleanup pass: scan Madison's a-mem for "Known gaps" / "Broken" / "Limitation" notes from 2026-04-22 (today's diagnostic session) and either delete the now-fixed ones or append RESOLVED markers. Confirm the watermark NaN claim is no longer reachable as current state.
 
 ### Phase 5 — Verify + graduate
 - [ ] **5.1** Rebuild + restart mailroom (env-vault prefix); restart nanoclaw
 - [ ] **5.2** End-to-end: ask Madison the Bob-late-payment-by-subject question; verify she uses `query` not `search`+manual count
 - [ ] **5.3** Trigger a tool change (add a placeholder tool, restart MCP) → verify Madison's session is invalidated on next spawn
-- [ ] **5.4** Graduate findings to permanent lode files
-- [ ] **5.5** Move plan to `lode/plans/complete/`
+- [ ] **5.4** **a-mem freshness check (AC-7)**: ask Madison "are Proton watermarks working?" — verify she does NOT cite the NaN issue as current. If she does, Phase 4.5 / 4.7 needs another pass.
+- [ ] **5.5** Graduate findings to permanent lode files
+- [ ] **5.6** Move plan to `lode/plans/complete/`
 
 ## Errors
 
