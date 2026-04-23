@@ -87,18 +87,24 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
+                  let sentViaPool = false;
                   if (
                     data.sender &&
                     data.chatJid.startsWith('tg:') &&
                     TELEGRAM_BOT_POOL.length > 0
                   ) {
-                    await sendPoolMessage(
+                    sentViaPool = await sendPoolMessage(
                       data.chatJid,
                       data.text,
                       data.sender,
                       sourceGroup,
                     );
-                  } else {
+                  }
+                  // Fall back to the normal channel sender if the pool is
+                  // unconfigured, unusable (no bots initialized, saturated),
+                  // or the pool send itself failed — otherwise IPC replies
+                  // would silently disappear when the pool can't deliver.
+                  if (!sentViaPool) {
                     await deps.sendMessage(data.chatJid, data.text);
                   }
                   logger.info(

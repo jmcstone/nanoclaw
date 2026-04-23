@@ -592,10 +592,11 @@ export function setSession(groupFolder: string, sessionId: string): void {
   ).run(groupFolder, sessionId, new Date().toISOString());
 }
 
-export function incrementSessionMessages(groupFolder: string): void {
+export function incrementSessionMessages(groupFolder: string, count = 1): void {
+  if (count <= 0) return;
   db.prepare(
-    'UPDATE sessions SET message_count = message_count + 1 WHERE group_folder = ?',
-  ).run(groupFolder);
+    'UPDATE sessions SET message_count = message_count + ? WHERE group_folder = ?',
+  ).run(count, groupFolder);
 }
 
 export function clearSession(groupFolder: string): void {

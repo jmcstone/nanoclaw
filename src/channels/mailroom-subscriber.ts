@@ -101,13 +101,15 @@ class MailroomSubscriber implements Channel {
   async connect(): Promise<void> {
     const dir = ipcDir();
     if (!fs.existsSync(dir)) {
+      // Don't return — mailroom may start later. pollOnce() tolerates a
+      // missing dir and will pick up events as soon as it appears.
       logger.warn(
         { dir },
-        'Mailroom ipc-out directory not found — subscriber inactive',
+        'Mailroom ipc-out directory not found — polling anyway, will pick up when present',
       );
-      return;
+    } else {
+      logger.info({ dir }, 'Mailroom subscriber watching');
     }
-    logger.info({ dir }, 'Mailroom subscriber watching');
     this.schedulePoll();
   }
 

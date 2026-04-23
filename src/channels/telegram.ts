@@ -87,22 +87,42 @@ export async function initBotPool(tokens: string[]): Promise<void> {
 
 /**
  * Send a message via a pool bot assigned to the given sender name.
+ *
+ * Returns true if the message was sent through the pool, false if the pool
+ * is unavailable for this sender (no bots initialized, pool saturated for a
+ * new identity, or the send itself failed). Callers should fall back to the
+ * normal channel sender on false to avoid silently dropping replies.
  */
 export async function sendPoolMessage(
   chatId: string,
   text: string,
   sender: string,
   groupFolder: string,
-): Promise<void> {
+): Promise<boolean> {
   if (poolApis.length === 0) {
     logger.warn('No pool bots available, cannot send pool message');
-    return;
+    return false;
   }
 
   const key = `${groupFolder}:${sender}`;
   let idx = senderBotMap.get(key);
   if (idx === undefined) {
-    idx = nextPoolIndex % poolApis.length;
+    // Only assign a fresh slot while the pool has unused bots. Reusing a
+    // slot would force setMyName() to overwrite an earlier sender's
+    // identity, so once saturated we refuse and let the caller fall back.
+    if (nextPoolIndex >= poolApis.length) {
+      logger.warn(
+        {
+          sender,
+          groupFolder,
+          poolSize: poolApis.length,
+          assigned: senderBotMap.size,
+        },
+        'Pool saturated — no free bot for new sender identity, falling back',
+      );
+      return false;
+    }
+    idx = nextPoolIndex;
     nextPoolIndex++;
     senderBotMap.set(key, idx);
     try {
@@ -139,8 +159,10 @@ export async function sendPoolMessage(
       { chatId, sender, poolIndex: idx, length: text.length },
       'Pool message sent',
     );
+    return true;
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
+    return false;
   }
 }
 
