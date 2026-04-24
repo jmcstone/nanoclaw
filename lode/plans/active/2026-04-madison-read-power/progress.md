@@ -1,5 +1,42 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-24 early morning — Wave 5.7 planned (UIDNEXT polling + recency-tiered reconcile)
+
+### Discovery
+
+Wave 5.6 live verify (apply "Family" label to MFamily Portal Newsletter) never propagated. Initial hypothesis was a CONDSTORE wedge; debug-logging the ingestor revealed polls ARE running on every folder, just reporting `highestModseq: 0` for every one — meaning `upsertFolderState` is silently skipped and stored `last_modseq` stays at 0 forever.
+
+Diagnostic script against live Proton bridge confirmed: the bridge does not advertise CONDSTORE as an IMAP capability at all. `client.status(folder, {highestModseq:true})` returns `{path, messages}` with no MODSEQ field. `client.mailbox.highestModseq` after `getMailboxLock` is `undefined`. Both `mailboxOpen({condStore:true})` and direct STATUS calls return the same.
+
+Wave 2B's entire AC-S2 design ("CONDSTORE per-folder MODSEQ polling") is **not achievable** with this bridge. Wave 2B tests used stubbed IMAP clients with fake MODSEQ values; production was never exposed because `proton_folder_state` was empty (Wave 5.6 lit up the path, and the MODSEQ=0 bug surfaced immediately).
+
+### Plan drafted
+
+Wave 5.7 added to tracker.md — replaces CONDSTORE with `STATUS (MESSAGES UIDNEXT)` polling + recency-tiered reconcile (hot every 30 min, warm every 6h, cold weekly). Drops content/flags hash-layer consideration (content_hash is dead weight in email; flags_hash unneeded per Wave 4.5's agent-side read-tracking decision). Drops Proton native API consideration (Option C — ToS + maintenance surface too high for marginal gain over recency tiers).
+
+Key locked decisions:
+- Drop CONDSTORE entirely; replace `last_modseq` with `last_uidnext`. Schema v4 → v5.
+- Keep Wave 5.6's folder-seeding (still useful for the folder list UIDNEXT polling needs).
+- Recency reconcile implemented via `runFullHydration({ sinceDate })` + `UID SEARCH SINCE` pushed down into walker.
+- Hot tier: INBOX fully + all-folders SINCE 7d. Warm: SINCE 90d. Cold: full walk.
+
+### Effective propagation after Wave 5.7
+
+| Event | Latency |
+|---|---|
+| New message arrived | 10 min (UIDNEXT poll) |
+| Label applied / archived on email from last 7 days | 30 min (hot tier) |
+| Same, last 90 days | 6 hours (warm) |
+| Same, older than 90 days | up to 7 days (cold, Sunday) |
+| Same, never actually touched | zero work forever |
+
+### Outstanding diagnostic state
+
+- Ingestor currently running with `LOG_LEVEL=debug` via `docker-compose.override.yml` — delete before closing Wave 5.7.
+- Wave 5.6's deployed CONDSTORE code still polling every 5 min doing nothing. Not harmful; will be replaced by 5.7 code.
+- `proton_folder_state` has 305 rows with `last_modseq=0`. Will be migrated to `last_uidnext=0` by 5.7.2.
+- MFamily Portal Newsletter still lacks `Labels/Family` in the mirror; will land via first hot-tier reconcile post-5.7 or manual migrate-mirror.
+
 ## 2026-04-23 late evening — Wave 5.6 code + deploy + graduation complete (5.6.1–5.6.7, 5.6.9, 5.6.10)
 
 ### Actions

@@ -419,6 +419,75 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
 **Dependencies**:
 - Requires Wave 5.5 landed (DONE). Without it, seeding produces empty label writes.
 
+### Wave 5.7 — Replace CONDSTORE with UIDNEXT polling + recency-tiered reconcile
+
+**Discovered 2026-04-24 during Wave 5.6 diagnostic.** The Proton bridge does not advertise the CONDSTORE IMAP capability at all (`c.capability.filter(CONDSTORE|QRESYNC|ENABLE) = []`). `client.status(folder, {highestModseq:true})` returns `{path, messages}` with no `highestModseq` field. `client.mailbox.highestModseq` after `getMailboxLock` is `undefined`. All three candidate API paths confirmed against live `jeff@jstone.pro` INBOX + `Labels/Family`.
+
+Wave 2B's entire CONDSTORE-based incremental sync design (AC-S2) is **not achievable** with the current bridge. Wave 5.6 exposed this by populating `proton_folder_state` and forcing the code path to run; in practice every CONDSTORE poll sees `highestModseq=0`, skips the MODSEQ-advance, and stays at `last_modseq=0` forever. Polls run cleanly and do nothing.
+
+**This wave**: replace CONDSTORE with per-folder `STATUS (MESSAGES UIDNEXT)` polling (Option B) + a recency-tiered reconcile that replaces the single 04:00 nightly walk with three cadences matched to how often changes are expected. Combined, this delivers sub-30-min propagation on recent mail without needing CONDSTORE, native Proton API, or a full hash layer.
+
+**Execution model**: 1 Sonnet executor, serialized. ~300 LOC + tests. Same branch (`madison-read-power`) in both repos.
+
+**Goal**: push-like latency for upstream-initiated changes (label applied, archive, move, new mail) on recent messages; weekly full catch-up for the long tail; zero CONDSTORE dependency.
+
+**Acceptance criteria**:
+- AC-5.7-1 `proton_folder_state.last_modseq` column replaced with `last_uidnext INTEGER` and `last_exists INTEGER`. Migration clears old MODSEQ data (it was all 0 anyway).
+- AC-5.7-2 New `pollFolderUidnext(client, accountId, folder)` in `src/sync/proton-condstore.ts` (or renamed file) does `STATUS (MESSAGES UIDNEXT)`, compares against stored `last_uidnext` AND `last_exists`. New UIDs via `UID FETCH stored+1:*`. Expunges detected on EXISTS decrease via per-folder `UID SEARCH ALL` + set-diff vs `message_folder_uids`. Applies via existing `applyProtonUidAdded` / `applyProtonFolderMembershipChanges`. INBOX is skipped (IDLE handles it per 5.7.3a verification).
+- AC-5.7-3 All dead CONDSTORE code removed (`checkModseqMonotonicity`, `MODSEQ_REGRESSION_SENTINEL`, `triggerFolderHydration`, unused `hydrate.ts` sentinel paths). Tests updated.
+- AC-5.7-4 Three-tier reconcile replaces `startReconcileScheduler`:
+  - **Hot**: INBOX fully + all-folders `SINCE <7d ago>`. Cadence: every 30 min.
+  - **Warm**: all-folders `SINCE <90d ago>` (excluding hot range). Cadence: every 6 hours.
+  - **Cold**: full historical walk (current nightly behavior). Cadence: weekly, Sunday 04:00 local.
+- AC-5.7-5 `runFullHydration` accepts `{ sinceDate?: Date }` — pushes down `UID SEARCH SINCE <date>` into `proton-walker.ts` and `gmail-walker.ts`. Walkers yield only UIDs matching the filter. Existing full-walk call sites default to no filter.
+- AC-5.7-6 UIDNEXT poll cadence configurable via env var `UIDNEXT_POLL_INTERVAL_MS` (default 600000 = 10 min). Recency reconcile cadences configurable via env vars; documented in `lode/infrastructure/mailroom-mirror.md`.
+- AC-5.7-7 Integration tests: UIDNEXT poll catches new-UID + missing-UID; recency filter reduces walker output; hot tier catches label-apply within one cycle; AC-V-Family repro (apply Family label → mirror reflects within 30 min) is now a test fixture.
+
+**Locked decisions**:
+
+| Decision | Rationale |
+|---|---|
+| Drop CONDSTORE entirely from the code (not gate it behind a capability check) | Proton bridge doesn't support it; other IMAP servers that would support it aren't on the roadmap. Dead code is harmful. |
+| Replace `last_modseq` with `last_uidnext` (drop MODSEQ semantics) | UIDNEXT is monotonic per-folder unless UIDVALIDITY resets; same invariant we actually need. |
+| UIDVALIDITY reset (rare) → mark folder for re-walk (sentinel `last_uidnext=-1`) | Same pattern as old MODSEQ regression sentinel; well-understood. |
+| Keep `proton_folder_state` seeding from Wave 5.6 (just store UIDNEXT instead of MODSEQ) | Seeding of folder names is still valuable. The bug was in the MODSEQ code, not the seed. |
+| No content_hash / flags_hash layer | Content doesn't change (verified above); flags unneeded per Wave 4.5 decision. Strict surplus cost. |
+| Hot tier includes INBOX fully, not just `SINCE 7d` | INBOX is small and always active — always reconcile fully. No point being clever. |
+| Recency-reconcile uses existing `runFullHydration` with new `sinceDate` arg | One apply path; tests already cover it; just push filter down into walkers. |
+| UIDNEXT poll interval default 10 min; hot reconcile 30 min | UIDNEXT is cheap enough for 10-min; hot reconcile is heavier so 30-min. Both configurable. |
+
+**Scope order**:
+
+- [ ] 5.7.1 **Pre-work (no revert)**: remove dead CONDSTORE code from Wave 2B's `src/sync/proton-condstore.ts` and related modules. **Keep** Wave 5.6's `proton-folder-discovery.ts`, ingestor wire-in, walker hookup — they're reusable for UIDNEXT polling. **Delete** `checkModseqMonotonicity`, `MODSEQ_REGRESSION_SENTINEL`, MODSEQ-regression branch of `triggerFolderHydration`, all `status.highestModseq` reads, all CONDSTORE-related tests, `docker-compose.override.yml` (debug-log override). Don't `git revert` any Wave 5.6 commits — too much reusable work inside them.
+- [ ] 5.7.2 Migration: `proton_folder_state` drops `last_modseq`, adds `last_uidnext INTEGER DEFAULT 0`, `last_exists INTEGER DEFAULT 0`, `last_uidnext_checked_at TEXT`. Old rows preserved, MODSEQ values discarded. Schema v4 → v5.
+- [ ] 5.7.3 Rename `pollFolderCondstore` → `pollFolderUidnext`; rewrite internals:
+  - `STATUS (MESSAGES UIDNEXT)` — one round-trip per folder.
+  - If `UIDNEXT > stored_uidnext`: `UID FETCH stored_uidnext+1:* (FLAGS)` → new UIDs. Apply via existing `applyProtonUidAdded`.
+  - If `EXISTS < stored_exists`: fire expunge detection on THIS folder only. `UID SEARCH ALL` returns current UID list (typically KB even for large folders); diff against stored `message_folder_uids` for this folder; `applyProtonFolderMembershipChanges` on each missing UID with `action='removed'`.
+  - Update stored `last_uidnext` and `last_exists`.
+  - Skip entirely if neither UIDNEXT nor EXISTS changed.
+  - INBOX is skipped by this polling path — IDLE already handles its EXPUNGE events in real time (verify in 5.7.5a).
+- [ ] 5.7.3a **Verify IDLE→EXPUNGE→DB pipeline.** Wave 2B's `applyProtonFolderMembershipChanges` was wired to handle IDLE-delivered EXPUNGE events, but — like CONDSTORE — that code path may never have been exercised with real data. Test: expunge a message from INBOX via Proton web → watch ingestor debug logs → verify `message_folder_uids` row for that INBOX UID is deleted and `deleted_at` propagates. If broken, fix BEFORE trusting the "IDLE covers INBOX expunges" assumption.
+- [ ] 5.7.4 `runFullHydration({ sinceDate })` option: threaded through `proton-walker` (`UID SEARCH SINCE <date>`) + `gmail-walker` (Gmail `q: 'after:<date>'`). Existing call sites unchanged.
+- [ ] 5.7.5 New `src/sync/recency-reconcile.ts`: three scheduled reconcile runs (hot / warm / cold) replacing the single nightly scheduler. Hot every 30 min; warm every 6h; cold weekly Sun 04:00 local.
+- [ ] 5.7.6 Integration tests: UIDNEXT change detection, sinceDate walker filtering, three-tier scheduler invokes correct runs at correct times, hot-tier label-apply round-trip.
+- [ ] 5.7.7 Deploy: ingestor only. Delete `docker-compose.override.yml` (debug logs off). Remove Wave 5.6's override.
+- [ ] 5.7.8 **Jeff-driven** live verify: apply a Proton label to any recent message; within 30 min, `SELECT labels FROM message_labels` reflects it. Apply to a 3-year-old message; verify it's NOT reflected until cold tier runs (demonstrates scope-scoping working).
+- [ ] 5.7.9 Tech-debt update:
+  - `TD-MAIL-BRIDGE-NO-CONDSTORE` — NEW entry. CLOSED/supersedes: captures that Proton bridge doesn't advertise CONDSTORE, Wave 2B's AC-S2 design unachievable, replaced by UIDNEXT polling + recency reconcile. Diagnostic evidence in findings.
+  - `TD-MAIL-CONDSTORE-NONINBOX` — REOPEN + retag → superseded by TD-MAIL-BRIDGE-NO-CONDSTORE. Wave 5.6's seeding was correct; MODSEQ advance path was always broken.
+  - `TD-MAIL-PROTON-ALIAS-DOUBLE-POLL` — NEW low-priority entry. `stone.jeffrey@pm.me` and `stone.jeffrey@protonmail.com` are the same Proton mailbox; we're double-polling one account.
+- [ ] 5.7.10 Graduate: `lode/infrastructure/mailroom-mirror.md` — rewrite sync architecture section (drop CONDSTORE, describe UIDNEXT polling + recency tiers); refresh startup diagram.
+
+**Risks**:
+- `UID SEARCH SINCE <date>` on large folders (`All Mail` with 30k messages) may return a large UID list for a 90d warm window. Mitigation: chunked FETCH, paginate if needed. Realistically for 7-day hot window it's small.
+- **Expunge detection gated on `EXISTS` delta**: per-folder `UID SEARCH ALL` enumeration only fires when `EXISTS` decreased since last poll (message was removed). Compute `stored_uids - current_uids` to find expunged UIDs. For a hot cycle where nothing was archived or unlabeled, every folder is a single-STATUS no-op. UID-list responses are small (~KB even for 30k-message folders — just UIDs, not headers).
+- **Jeff actively uses labels and archive** → expunge detection must run every hot cycle, not deferred to cold. The EXISTS-delta gating keeps the cost acceptable.
+- **Wave 2B IDLE→EXPUNGE→DB path is unverified** (same risk class as the CONDSTORE bug we just found). 5.7.3a is a dedicated live-verify step before trusting that INBOX expunges propagate without hot-tier help.
+- Interval clocks drift; two-phase lock needed to avoid overlapping hot+warm+cold runs. Mitigation: `meta` table lock column; skip-if-running pattern already established by current nightly scheduler.
+
+**Dependencies**: Wave 5.6 CONDSTORE code is currently deployed + running; Wave 5.7 starts with removing/refactoring that. No new external dependencies.
+
 ## Errors
 
 | Error | Resolution |
