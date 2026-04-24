@@ -458,25 +458,20 @@ Wave 2B's entire CONDSTORE-based incremental sync design (AC-S2) is **not achiev
 
 **Scope order**:
 
-- [ ] 5.7.1 **Pre-work (no revert)**: remove dead CONDSTORE code from Wave 2B's `src/sync/proton-condstore.ts` and related modules. **Keep** Wave 5.6's `proton-folder-discovery.ts`, ingestor wire-in, walker hookup — they're reusable for UIDNEXT polling. **Delete** `checkModseqMonotonicity`, `MODSEQ_REGRESSION_SENTINEL`, MODSEQ-regression branch of `triggerFolderHydration`, all `status.highestModseq` reads, all CONDSTORE-related tests, `docker-compose.override.yml` (debug-log override). Don't `git revert` any Wave 5.6 commits — too much reusable work inside them.
-- [ ] 5.7.2 Migration: `proton_folder_state` drops `last_modseq`, adds `last_uidnext INTEGER DEFAULT 0`, `last_exists INTEGER DEFAULT 0`, `last_uidnext_checked_at TEXT`. Old rows preserved, MODSEQ values discarded. Schema v4 → v5.
-- [ ] 5.7.3 Rename `pollFolderCondstore` → `pollFolderUidnext`; rewrite internals:
-  - `STATUS (MESSAGES UIDNEXT)` — one round-trip per folder.
-  - If `UIDNEXT > stored_uidnext`: `UID FETCH stored_uidnext+1:* (FLAGS)` → new UIDs. Apply via existing `applyProtonUidAdded`.
-  - If `EXISTS < stored_exists`: fire expunge detection on THIS folder only. `UID SEARCH ALL` returns current UID list (typically KB even for large folders); diff against stored `message_folder_uids` for this folder; `applyProtonFolderMembershipChanges` on each missing UID with `action='removed'`.
-  - Update stored `last_uidnext` and `last_exists`.
-  - Skip entirely if neither UIDNEXT nor EXISTS changed.
-  - INBOX is skipped by this polling path — IDLE already handles its EXPUNGE events in real time (verify in 5.7.5a).
-- [ ] 5.7.3a **Verify IDLE→EXPUNGE→DB pipeline.** Wave 2B's `applyProtonFolderMembershipChanges` was wired to handle IDLE-delivered EXPUNGE events, but — like CONDSTORE — that code path may never have been exercised with real data. Test: expunge a message from INBOX via Proton web → watch ingestor debug logs → verify `message_folder_uids` row for that INBOX UID is deleted and `deleted_at` propagates. If broken, fix BEFORE trusting the "IDLE covers INBOX expunges" assumption.
-- [ ] 5.7.4 `runFullHydration({ sinceDate })` option: threaded through `proton-walker` (`UID SEARCH SINCE <date>`) + `gmail-walker` (Gmail `q: 'after:<date>'`). Existing call sites unchanged.
-- [ ] 5.7.5 New `src/sync/recency-reconcile.ts`: three scheduled reconcile runs (hot / warm / cold) replacing the single nightly scheduler. Hot every 30 min; warm every 6h; cold weekly Sun 04:00 local.
-- [ ] 5.7.6 Integration tests: UIDNEXT change detection, sinceDate walker filtering, three-tier scheduler invokes correct runs at correct times, hot-tier label-apply round-trip.
+- [x] 5.7.1 Dead CONDSTORE code removed from `src/sync/proton-condstore.ts`. Wave 5.6's `proton-folder-discovery.ts`, ingestor wire-in, and walker hookup kept. `checkModseqMonotonicity`, `MODSEQ_REGRESSION_SENTINEL`, MODSEQ-regression hydration branch, and CONDSTORE-specific tests removed. (CF `1dd3951`)
+- [x] 5.7.2 Schema v4 → v5 migration: `proton_folder_state.last_modseq` dropped; `last_uidnext`, `last_exists`, `last_uidnext_checked_at` added. Rows preserved, MODSEQ values discarded. (CF `1dd3951`)
+- [x] 5.7.3 `pollFolderUidnext` written, replacing `pollFolderCondstore`. STATUS (MESSAGES UIDNEXT) → UID FETCH for advances + UID SEARCH ALL + set-diff for EXISTS decreases; INBOX skipped; noop on no-delta. (CF `1dd3951`)
+- [x] 5.7.3a **BUG FOUND + FIXED.** Wave 2B's IDLE handler in `src/sync/proton-idle.ts` subscribed to `'exists'` events only — never wired `'expunge'`. INBOX deletions were silently dropped; only nightly reconcile caught them. Fixed: `expunge` event now wired to `applyProtonFolderMembershipChanges`. Caveat: imapflow's expunge callback delivers SEQUENCE NUMBER (not UID — RFC 3501), so production runs use seqno as a best-effort UID; hot-tier reconcile (30 min, `sinceDate=7d`) provides authoritative cleanup. Capture as `TD-MAIL-IDLE-EXPUNGE-SEQNO` in tech-debt (5.7.9). (CF `4dba8b9`)
+- [x] 5.7.4 `runFullHydration({ sinceDate })` option threaded through `proton-walker.ts` (uses `client.search({since})` → `UID SEARCH SINCE`) and `gmail-walker.ts` (uses `q: 'after:<yyyy-mm-dd>'`). Existing no-filter call sites unchanged. (CF `4dba8b9`)
+- [x] 5.7.5 `src/reconcile/recency-scheduler.ts` created. Hot every 30 min (`sinceDate=7d`), warm every 6h (`sinceDate=90d`), cold weekly Sun 04:00 (full walk). Env var overrides for intervals. Overlap protection via `meta.reconcile_running` flag. Wired into `src/ingestor.ts` replacing `startReconcileScheduler`. (CF `4dba8b9`)
+- [x] 5.7.6 Integration tests `src/integration/wave-5.7-uidnext-reconcile.test.ts` + updates to `migrate-mirror.test.ts`, `sync-hydrate-fallback.test.ts`, `wave-5.6-folder-seeding.test.ts`. 15 new test cases (UIDNEXT add path, UIDNEXT expunge path, no-op, INBOX skip, sinceDate walker Proton+Gmail, scheduler tiers, schema v4→v5 migration, IDLE expunge wiring). 5 CONDSTORE-specific tests deleted. Test total 342 → 357 passing, 2 skipped. (CF `8de101c`)
 - [ ] 5.7.7 Deploy: ingestor only. Delete `docker-compose.override.yml` (debug logs off). Remove Wave 5.6's override.
 - [ ] 5.7.8 **Jeff-driven** live verify: apply a Proton label to any recent message; within 30 min, `SELECT labels FROM message_labels` reflects it. Apply to a 3-year-old message; verify it's NOT reflected until cold tier runs (demonstrates scope-scoping working).
-- [ ] 5.7.9 Tech-debt update:
-  - `TD-MAIL-BRIDGE-NO-CONDSTORE` — NEW entry. CLOSED/supersedes: captures that Proton bridge doesn't advertise CONDSTORE, Wave 2B's AC-S2 design unachievable, replaced by UIDNEXT polling + recency reconcile. Diagnostic evidence in findings.
-  - `TD-MAIL-CONDSTORE-NONINBOX` — REOPEN + retag → superseded by TD-MAIL-BRIDGE-NO-CONDSTORE. Wave 5.6's seeding was correct; MODSEQ advance path was always broken.
-  - `TD-MAIL-PROTON-ALIAS-DOUBLE-POLL` — NEW low-priority entry. `stone.jeffrey@pm.me` and `stone.jeffrey@protonmail.com` are the same Proton mailbox; we're double-polling one account.
+- [x] 5.7.9 Tech-debt entries added:
+  - `TD-MAIL-BRIDGE-NO-CONDSTORE` OPEN — root-cause memory for why CONDSTORE is permanently off.
+  - `TD-MAIL-IDLE-EXPUNGE-SEQNO` OPEN — seqno-based best-effort IDLE expunges, pending bridge QRESYNC/UIDPLUS support.
+  - `TD-MAIL-PROTON-ALIAS-DOUBLE-POLL` OPEN — `pm.me`/`protonmail.com` alias double-poll.
+  - `TD-MAIL-CONDSTORE-NONINBOX` retagged SUPERSEDED by `TD-MAIL-BRIDGE-NO-CONDSTORE`.
 - [ ] 5.7.10 Graduate: `lode/infrastructure/mailroom-mirror.md` — rewrite sync architecture section (drop CONDSTORE, describe UIDNEXT polling + recency tiers); refresh startup diagram.
 
 **Risks**:

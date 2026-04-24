@@ -1,5 +1,66 @@
 # Progress — Madison Read Power + Session Freshness
 
+## 2026-04-24 early morning — Wave 5.7 code complete (5.7.1–5.7.6 + 5.7.9); deploy + live verify pending
+
+### Actions
+
+Spawned lode-executor on mailroom `madison-read-power`. Scope: 5.7.1–5.7.6 (code + tests). Deploy (5.7.7) + live verify (5.7.8) + lode graduation (5.7.10) left for orchestrator after Jeff is awake.
+
+### Commits (mailroom)
+
+| Task | Commit | Description |
+|---|---|---|
+| 5.7.1 + 5.7.2 + 5.7.3 | `1dd3951` | Dead CONDSTORE code removed; schema v4→v5 (last_modseq → last_uidnext + last_exists); pollFolderUidnext written |
+| 5.7.3a + 5.7.4 + 5.7.5 | `4dba8b9` | IDLE expunge event wired (was missing!); sinceDate threaded through walkers; three-tier recency scheduler created |
+| 5.7.6 | `8de101c` | 15 new integration tests covering UIDNEXT paths, sinceDate, scheduler, migration, IDLE expunge |
+
+### Bug found + fixed during 5.7.3a
+
+Wave 2B's `src/sync/proton-idle.ts` subscribed to imapflow's `'exists'` event (new mail) but **never wired the `'expunge'` event**. INBOX deletions were silently dropped from the real-time path; they only surfaced via nightly reconcile. This is the *second* Wave 2B code path we've discovered was never exercised with real data (first was CONDSTORE in Wave 5.6).
+
+Fixed in CF `4dba8b9`. Caveat: imapflow's expunge callback delivers a SEQUENCE NUMBER, not a UID (RFC 3501 — CONDSTORE+UIDPLUS would give us UID-based expunges, but the bridge doesn't support them). Current code uses seqno as a best-effort UID for `applyProtonFolderMembershipChanges`; hot-tier reconcile (30 min, `sinceDate=7d`) provides authoritative cleanup via UID set-diff. Captured as `TD-MAIL-IDLE-EXPUNGE-SEQNO`.
+
+### Tech-debt captured (5.7.9)
+
+- `TD-MAIL-BRIDGE-NO-CONDSTORE` OPEN — root-cause memory for permanent CONDSTORE absence in Proton bridge.
+- `TD-MAIL-IDLE-EXPUNGE-SEQNO` OPEN — seqno-best-effort IDLE expunges pending bridge QRESYNC support.
+- `TD-MAIL-PROTON-ALIAS-DOUBLE-POLL` OPEN — alias double-poll waste.
+- `TD-MAIL-CONDSTORE-NONINBOX` retagged SUPERSEDED.
+
+### Test / build results
+
+| Check | Status | Notes |
+|---|---|---|
+| mailroom `npm test` | pass | 342 → 357 passing, 2 skipped. 5 CONDSTORE tests deleted, 15 new added. |
+| mailroom `tsc --noEmit` | pass | zero errors |
+| deploy | NOT YET | Jeff-driven decision on morning review |
+| live verify | NOT YET | Requires Jeff (5.7.8) |
+| lode graduation (5.7.10) | NOT YET | After live verify passes |
+
+### Deploy plan ready for Jeff
+
+1. Delete `docker-compose.override.yml` (debug-log override still active on running ingestor).
+2. `cd ~/containers/mailroom && env-vault env.vault -- docker compose build ingestor && ... up -d ingestor` (inbox-mcp doesn't need rebuild — no `src/store/` or `src/mcp/` changes).
+3. Schema v4→v5 migration runs automatically on ingestor startup.
+4. Verify startup logs show: 5 IDLE sessions + 5 UIDNEXT pollers + recency scheduler (hot+warm+cold) started clean.
+5. Wait 30 min for first hot reconcile cycle.
+6. Jeff live-verifies: apply any Proton label to any recent message; within 30 min, `SELECT labels FROM message_labels` reflects it.
+
+### Reboot check
+
+1. **Where am I?** Wave 5.7 code landed on mailroom (3 commits); deploy + live verify pending. Nanoclaw lode updated with commit hashes + tech-debt entries. Uncommitted nanoclaw lode changes ready to commit.
+2. **Where am I going?** After Jeff approves: delete override, rebuild+recreate ingestor, watch startup, wait 30 min, Jeff runs live label-apply test. Then 5.7.10 lode graduation (rewrite mailroom-mirror.md sync section + refresh startup diagram).
+3. **What is the goal?** Recent-mail state changes (label, archive, delete) propagate within 30 min via UIDNEXT+EXISTS polling + hot-tier reconcile. Older changes via warm/cold tiers. Zero CONDSTORE dependency — works with the Proton bridge we actually have.
+4. **What have I learned?**
+   - Wave 2B had TWO latent bugs that stub-based tests missed: CONDSTORE polling (no MODSEQ from bridge) and IDLE expunge (event never subscribed). Both surfaced when forced to run against real data. Lesson: when feature flags or tables gate whether a code path exercises in production, track that gating explicitly and include live-data validation in verification.
+   - Proton bridge's capability set is a material constraint: no CONDSTORE, no QRESYNC, no UIDPLUS for expunges. Any MODSEQ-based design is permanently off-limits. UIDNEXT+EXISTS is the workable primitive.
+   - Alias configuration (pm.me + protonmail.com both polled) is a minor waste worth capturing as tech-debt but not worth fixing immediately.
+5. **What have I done?**
+   - 3 code commits on mailroom (`1dd3951`, `4dba8b9`, `8de101c`).
+   - Tests 342 → 357.
+   - Tech-debt entries added for 2 new + 1 retagged entries.
+   - Tracker 5.7.1–5.7.6 + 5.7.9 checked off with commit hashes.
+
 ## 2026-04-24 early morning — Wave 5.7 planned (UIDNEXT polling + recency-tiered reconcile)
 
 ### Discovery

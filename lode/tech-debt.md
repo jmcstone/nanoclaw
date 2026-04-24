@@ -14,7 +14,27 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 
 ## Mailroom
 
-### TD-MAIL-CONDSTORE-NONINBOX — CLOSED 2026-04-23 (CF `aea0062` + `428e2f6` + `c939881`, Wave 5.6)
+### TD-MAIL-BRIDGE-NO-CONDSTORE — OPEN (captured 2026-04-24, Wave 5.7)
+- **Finding**: the Proton bridge (host `protonmail-bridge` port 143) does NOT advertise the IMAP CONDSTORE capability. `client.capability` returns zero CONDSTORE/QRESYNC/ENABLE entries. `client.status(folder, {highestModseq:true})` returns `{path, messages}` with no `highestModseq` field. `client.mailbox.highestModseq` after `getMailboxLock` is `undefined`. `mailboxOpen({condStore:true})` also returns no MODSEQ data. Confirmed live against `jeff@jstone.pro` INBOX + `Labels/Family` (79 messages).
+- **Implication**: Wave 2B's AC-S2 design ("per-folder CONDSTORE MODSEQ polling") is unachievable with the current IMAP surface. Wave 5.7 replaced it with UIDNEXT+EXISTS polling (no MODSEQ dependency).
+- **Why OPEN**: the underlying bridge limitation is not fixable from our side. Recorded here so future engineers don't try to "turn CONDSTORE back on" as an optimization — it won't work.
+- **Workarounds in place**: UIDNEXT polling (hot 30 min) + recency-tiered reconcile (warm 6h, cold weekly). See `lode/infrastructure/mailroom-mirror.md`.
+- **Superseded**: `TD-MAIL-CONDSTORE-NONINBOX` (originally closed by Wave 5.6's seeding, then retagged here — the seeding was correct, the MODSEQ advance was the broken layer).
+
+### TD-MAIL-IDLE-EXPUNGE-SEQNO — OPEN (captured 2026-04-24, Wave 5.7)
+- **Scope**: S
+- **Finding**: during Wave 5.7.3a verification, discovered that Wave 2B's `src/sync/proton-idle.ts` subscribed to `'exists'` IMAP events but **never wired `'expunge'`**. INBOX deletions were silently dropped from the real-time path; only nightly reconcile caught them. Fixed in CF `4dba8b9`.
+- **Residual limitation**: imapflow's `expunge` callback delivers an IMAP SEQUENCE NUMBER (per RFC 3501), not a UID. Without CONDSTORE/QRESYNC we can't request UID-based expunges. Current implementation uses seqno as a best-effort UID for `applyProtonFolderMembershipChanges`; hot-tier reconcile (30 min, `sinceDate=7d`) provides the authoritative cleanup via UID set-diff.
+- **Done looks like**: when Proton bridge adds QRESYNC/UIDPLUS support, switch the IDLE expunge handler to UID-based delivery and drop the seqno best-effort. Until then, the hot reconcile backstop is sufficient.
+
+### TD-MAIL-PROTON-ALIAS-DOUBLE-POLL — OPEN (captured 2026-04-24, Wave 5.7)
+- **Scope**: S
+- **Finding**: `stone.jeffrey@pm.me` and `stone.jeffrey@protonmail.com` are aliases for the same Proton mailbox. They're configured as two separate accounts in mailroom, each with its own IDLE + UIDNEXT poller + reconcile tier run. Every reconcile walks the same mailbox twice.
+- **Impact**: 2× bandwidth + 2× Proton bridge connections for the `stone.jeffrey` account; a small duplication of `message_folder_uids` rows (one per alias × folder). Not harmful, just wasteful.
+- **Done looks like**: mailroom config detects alias pairs and polls once per underlying mailbox. Or: drop the `@protonmail.com` alias from `accounts.json` since Jeff hasn't sent/received against it historically. Decide before implementing — the alias may be needed for outbound `From:` header purposes.
+- **Related**: see `2026-04-madison-read-power` Wave 5.7.
+
+### TD-MAIL-CONDSTORE-NONINBOX — SUPERSEDED 2026-04-24 by TD-MAIL-BRIDGE-NO-CONDSTORE (was CLOSED 2026-04-23 CF `aea0062` + `428e2f6` + `c939881`, Wave 5.6)
 - Surfaced when Jeff applied the "Family" label to a test message in Proton web UI (2026-04-23 during Wave 5.5.11 follow-up testing) and the change didn't propagate to the local mirror. Root cause: `proton_folder_state` was empty for every Proton account in production; `ingestor.ts` fell back to polling `['INBOX']` only, leaving label/folder changes in `Labels/*`, `Archive`, `Sent`, etc. invisible to Wave 2B CONDSTORE.
 - Wave 2B (CF `16886aa`) shipped per-folder CONDSTORE machinery (AC-S2) but never seeded the per-`(account_id, folder)` state table. Nightly reconcile was the only healing path.
 - Fix: two-pronged seeding. (1) `seedFolderState` at ingestor startup: on any Proton account with zero rows, `IMAP LIST "" "*"` → filter `\Noselect` → batched `INSERT OR IGNORE` into `proton_folder_state` with `last_modseq=0`. Best-effort; IMAP failure logs and falls through to INBOX-only without crashing. (2) Walker hookup in `src/reconcile/hydrate.ts`: every folder walked during `runFullHydration` does its own `INSERT OR IGNORE` into `proton_folder_state`, so reconcile self-heals even if startup seeding never ran.
