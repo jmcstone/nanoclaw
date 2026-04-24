@@ -2,6 +2,35 @@
 
 Sync worker architecture for keeping the SQLCipher `store.db` mirror in sync with upstream Gmail and Proton mailbox state. Part of `madison-read-power` Wave 2B. ConfigFiles commit `16886aa`.
 
+## Shape contract (Wave 5.8)
+
+All three write paths to `message_labels` + `label_catalog` + `message_folder_uids` MUST produce byte-identical rows so reconcile is a no-op in steady state:
+
+1. **Ingest** (`ingestMessage` in `src/store/ingest.ts:292-296`) — writes one row per `input.labels` entry: `label=folderPath`, `source_id=folderPath`, `canonical=canonicalizeLabel(folderPath)`, `system=0` for user labels (Proton always 0; Gmail uses `isGmailSystemLabel()`).
+2. **Write-through** (helpers in `src/store/write-through.ts`) — `writeThroughAddLabel`, `writeThroughRemoveLabel`, `writeThroughSetLabels`, `writeThroughArchive`, `writeThroughDelete`. Synchronous; callers wrap with `db.transaction(...)`. Used by all MCP tool layer (`src/mcp/tools/*`) AND the rule-engine apply layer (`src/rules/apply/{proton,gmail}.ts` since Wave 5.8.6b).
+3. **Reconcile apply** (`applyLabelDelta` in `src/reconcile/apply.ts:189-195`) — same column names, same canonicalization. Inverse `clearInferredDeletes` (Wave 5.8.X2) self-heals stale `deleted_inferred=1` flags when walker re-confirms a message upstream.
+
+For Proton user labels: `label="Labels/<name>"` (with prefix). For Proton INBOX/Archive: `label="INBOX"` / `label="Archive"`. For Gmail: raw `labelId` (e.g., `INBOX`, `Label_123`, `CATEGORY_PROMOTIONS`) — Gmail INBOX IS written to `message_labels` (NOT column-only despite earlier assumption).
+
+`writeThroughArchive` removes `label='INBOX'` from BOTH `message_labels` and `message_folder_uids`. For Proton archive, the tool layer ALSO calls `writeThroughAddLabel(db, accountId, msgId, 'Archive')` so the message has an Archive label row matching what ingest produces (per `archive.ts:263-274`).
+
+`writeThroughSetLabels` deletes only `label LIKE 'Labels/%'` — system rows (INBOX, Archive, Sent) are intentionally preserved because Proton's label-apply is COPY (upstream membership unchanged), so stripping them would create cross-table divergence.
+
+The shape contract is exercised by `src/integration/wave-5.8-writethrough.test.ts` (32 helper-level tests) and `src/integration/wave-5.8-reconcile-idempotency.test.ts` (4 scenarios proving reconcile is a no-op on correct write-through shape).
+
+## Restore tool
+
+`scripts/migrate-mirror.ts` is the authoritative full-walk restorer (used post-incident, e.g., the Wave 5.7 hot-tier blast that deleted ~190k rows). Key features (Wave 5.8.X1+X2):
+
+- `--dry-run` computes real delta counts (adds / removes / inferred-deletes / inferred-deletes-cleared) without writing. Use this before any non-dry run on production.
+- Composite index `idx_messages_account_source_message_id` (added 5.8.X1) makes the per-entry lookupMessage SEARCH instead of SCAN. Without it, a full hydration is hours; with it, ~10 min.
+- `clearInferredDeletes` self-heal: when walker re-confirms a message upstream, clear its `deleted_inferred=1` and `deleted_at` flags. Reverses stale state from prior reconcile blasts.
+- Self-audit phase with multiple blast guards: 50% inferred-delete absolute, label_catalog non-zero if adds reported, message_labels non-zero if Proton messages exist, per-account adds parity, reconcile_unknowns ratio. Audit failure exits non-zero with restore-from-snapshot guidance.
+
+Run from the runtime location (`/home/jeff/containers/mailroom/`, NOT the git repo at `/home/jeff/Projects/ConfigFiles/containers/mailroom/mailroom/`) — only the runtime location's docker-compose mounts the real NAS-backed `~/containers/data/mailroom/` directory. The git repo's compose file points at a stub. Both share image tag `mailroom-local`, so build from source repo and deploy from runtime.
+
+Recommended pre-restore: stop ingestor (`docker compose stop ingestor`), keep inbox-mcp running (Madison stays online but may briefly see intermediate state). Btrfs hourly snapshots at `~/containers/data/.snapshots/mailroom/` provide rollback.
+
 ## Gmail incremental sync
 
 ### history.list
