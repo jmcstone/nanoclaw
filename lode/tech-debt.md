@@ -25,7 +25,7 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 - **Finding**: the Proton bridge (host `protonmail-bridge` port 143) does NOT advertise the IMAP CONDSTORE capability. `client.capability` returns zero CONDSTORE/QRESYNC/ENABLE entries. `client.status(folder, {highestModseq:true})` returns `{path, messages}` with no `highestModseq` field. `client.mailbox.highestModseq` after `getMailboxLock` is `undefined`. `mailboxOpen({condStore:true})` also returns no MODSEQ data. Confirmed live against `jeff@jstone.pro` INBOX + `Labels/Family` (79 messages).
 - **Implication**: Wave 2B's AC-S2 design ("per-folder CONDSTORE MODSEQ polling") is unachievable with the current IMAP surface. Wave 5.7 replaced it with UIDNEXT+EXISTS polling (no MODSEQ dependency).
 - **Why OPEN**: the underlying bridge limitation is not fixable from our side. Recorded here so future engineers don't try to "turn CONDSTORE back on" as an optimization — it won't work.
-- **Workarounds in place**: UIDNEXT polling (hot 30 min) + recency-tiered reconcile (warm 6h, cold weekly). See `lode/infrastructure/mailroom-mirror.md`.
+- **Workarounds in place**: UIDNEXT polling (hot 30 min) + recency-tiered reconcile (warm 6h, cold weekly). See `~/Projects/mailroom/lode/infrastructure/mailroom-mirror.md`.
 - **Superseded**: `TD-MAIL-CONDSTORE-NONINBOX` (originally closed by Wave 5.6's seeding, then retagged here — the seeding was correct, the MODSEQ advance was the broken layer).
 
 ### TD-MAIL-IDLE-EXPUNGE-SEQNO — OPEN (captured 2026-04-24, Wave 5.7)
@@ -39,7 +39,7 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 - **Finding**: The `/add-gmail` and (potentially) `/add-protonmail` skills in nanoclaw still describe the pre-extraction install flow — credentials in nanoclaw's `.env`, OAuth output to `~/.gmail-mcp/`, restart via `systemctl --user restart nanoclaw`. After mailroom extraction these are wrong: credentials live in mailroom's env-vault, OAuth output goes to `~/containers/data/mailroom/gmail-mcp/`, restart is `dcc up mailroom`.
 - **Impact**: zero on Jeff's working install. Will bite a fresh-install scenario (new instance — americanvoxpop, future) where the skills' instructions don't reflect post-extraction reality.
 - **Done looks like**: `/add-gmail` skill updated for mailroom-era install (target dir change, drop the `git remote add gmail` / nanoclaw merge steps, ensure `INBOX_DB_KEY` exists in env.vault, change restart verb). `/add-protonmail` either updated similarly if it exists, or its content folded into mailroom's README.md as fresh-install Proton setup. Migration-from-existing-install path documented separately (one-time script to populate mailroom's env.vault from prior `~/.protonmail-bridge/config.json` + nanoclaw `.env`).
-- **Related**: `lode/plans/complete/2026-04-mailroom-extraction/tracker.md` Phases M8 + M9. Likely lands as part of (or after) the planned `2026-04-mailroom-repo-extraction` source-split, since the skills will need updating anyway to reflect the new mailroom repo location.
+- **Related**: `~/Projects/mailroom/lode/plans/complete/2026-04-mailroom-extraction/tracker.md` Phases M8 + M9 (migrated to mailroom repo 2026-04-25). Likely lands as part of (or after) the `2026-04-mailroom-repo-extraction` source-split work, since the skills will need updating anyway to reflect the new mailroom repo location.
 
 ### TD-MAIL-PROTON-ALIAS-DOUBLE-POLL — OPEN (captured 2026-04-24, Wave 5.7)
 - **Scope**: S
@@ -53,7 +53,7 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 - **Fix**: Single shared helper module `src/store/write-through.ts` with helpers (`writeThroughAddLabel`, `writeThroughRemoveLabel`, `writeThroughSetLabels`, `writeThroughArchive`, `writeThroughDelete`) producing rows byte-identical to `ingestMessage`. Both MCP tool layer and rule-engine apply layer (`src/rules/apply/{proton,gmail}.ts`) route through the helpers (Wave 5.8.6b closed the apply-layer gap that the original plan missed).
 - **Companion fixes**: composite index `idx_messages_account_source_message_id` (5.8.X1) for reconcile lookup performance; `clearInferredDeletes` (5.8.X2) inverse of `applyInferredDeletes` so hydration self-heals stale `deleted_inferred=1` flags; migrate-mirror `--dry-run` now computes real delta counts.
 - **Validation**: 32 integration tests assert helper shape; 4 reconcile-idempotency tests prove reconcile is a no-op on correct shape; live harness validation on real damaged DB confirmed B1-B4 fixed; full restore via migrate-mirror (379k adds, 59,540 inferred-delete clears, audit passed).
-- **Graduated to**: `lode/infrastructure/mailroom-mirror.md` shape-contract section.
+- **Graduated to**: `~/Projects/mailroom/lode/infrastructure/mailroom-mirror.md` shape-contract section.
 
 ### TD-MAIL-CONDSTORE-NONINBOX — SUPERSEDED 2026-04-24 by TD-MAIL-BRIDGE-NO-CONDSTORE (was CLOSED 2026-04-23 CF `aea0062` + `428e2f6` + `c939881`, Wave 5.6)
 - Surfaced when Jeff applied the "Family" label to a test message in Proton web UI (2026-04-23 during Wave 5.5.11 follow-up testing) and the change didn't propagate to the local mirror. Root cause: `proton_folder_state` was empty for every Proton account in production; `ingestor.ts` fell back to polling `['INBOX']` only, leaving label/folder changes in `Labels/*`, `Archive`, `Sent`, etc. invisible to Wave 2B CONDSTORE.
@@ -72,7 +72,7 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
   - `getRecentMessages` in `src/store/queries.ts` now writes back the new watermark via `setWatermark(account_id, new_watermark)` after a successful read. Skipped on (a) cold-start that returned zero rows (don't pin a fresh account at the cold-start cutoff prematurely), (b) caller passed an explicit `since_watermark` (caller is driving), (c) the new watermark would not be strictly greater than the stored value.
   - One-time reset migration in `src/ingestor.ts` gated on `MAILROOM_RESET_WATERMARKS_ONCE=1`: at startup, every existing watermark > (now - cold-start cutoff) is reset to the cutoff. Removes the pinned-at-MAX(received_at) values left over from the pre-fix design. Env var must be removed after first successful boot.
   - Tests: `src/store/queries.read-cursor.test.ts` (7 cases — round-trip, cold-start, since_watermark non-advance, no regression). `src/integration/wave-5.5-push-ingest-parity.test.ts` test 5.5.6 rewritten to assert read-cursor semantics (push-ingest no longer advances; first recent surfaces all + advances; second recent returns 0).
-- **Defense-in-depth (Phase 2, lands separately):** `mcp__messages__count_in_window` MCP tool + Madison morning-routine audit precondition. Guards against any future regression: a brief that classifies 0 overnight while the store has rows is now caught and surfaced as `⚠️ Brief audit failure` instead of cheerful "all quiet." See `lode/plans/active/2026-04-morning-brief-blindness/`.
+- **Defense-in-depth (Phase 2, lands separately):** `mcp__messages__count_in_window` MCP tool + Madison morning-routine audit precondition. Guards against any future regression: a brief that classifies 0 overnight while the store has rows is now caught and surfaced as `⚠️ Brief audit failure` instead of cheerful "all quiet." See `~/Projects/mailroom/lode/plans/active/2026-04-morning-brief-blindness/` (migrated to mailroom repo).
 
 ---
 
@@ -160,4 +160,4 @@ If the #17 item resurfaces from memory or transcript, add it here.
 ## Related
 
 - [plans/active/2026-04-trawl-mcp-integration/tracker.md](plans/active/2026-04-trawl-mcp-integration/tracker.md) — the plan that produced the Trawl deferrals
-- [plans/active/2026-04-mail-push-redesign/tracker.md](plans/active/2026-04-mail-push-redesign/tracker.md) — the plan that produced the Mailroom/Madison deferrals
+- `~/Projects/mailroom/lode/plans/complete/2026-04-mail-push-redesign/tracker.md` — the plan that produced the Mailroom/Madison deferrals (migrated to mailroom repo; closed 2026-04-23)

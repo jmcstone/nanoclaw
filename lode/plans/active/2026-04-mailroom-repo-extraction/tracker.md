@@ -118,26 +118,14 @@ This is a structural cleanup — not a feature change. Mailroom must keep ingest
 - [x] 5.5.2 Nanoclaw: branch cleanup deferred per Jeff's "leave around just in case" preference. `madison-read-power`, `mail-push-redesign`, `fix/morning-brief-audit`, `unified-inbox` all 0 commits past main, kept as safety nets.
 
 ### Wave 6 — Lode migration
-- [ ] 6.1 Identify mailroom-belonging plans currently in nanoclaw's lode (active + complete). Move list:
-  - `complete/2026-04-mailroom-extraction/`
-  - `complete/2026-04-mail-push-redesign/`
-  - `complete/2026-04-madison-read-power/`
-  - `complete/2026-04-wave-5.8-writethrough-correctness/`
-  - `active/2026-04-message-enrichment/`
-  - `active/2026-04-morning-brief-blindness/`
-  - `active/2026-04-rule-schema-unification/`
-  - `active/2026-04-mailroom-repo-extraction/` (this plan, after it graduates)
-- [ ] 6.2 Move them to `~/Projects/mailroom/lode/plans/{active,complete}/`. Use `git mv` so history is preserved within each repo.
-- [ ] 6.3 Identify mailroom-domain infrastructure docs that belong in the new repo's lode:
-  - `lode/infrastructure/mailroom-mirror.md`
-  - `lode/infrastructure/mailroom-rules.md`
-  - `lode/architecture/madison-pipeline.md` (mirror data model — debatable; arguably a shared concern)
-  - `lode/reference/rules-schema.md`
-- [ ] 6.4 Decide split for the architecture/madison-pipeline.md doc: recipient + attachment data model is mailroom's; nanoclaw subscriber path is nanoclaw's. Either split into two docs or copy and adapt.
-- [ ] 6.5 Create `~/Projects/mailroom/lode/lode-map.md`, `summary.md`, `terminology.md`, `practices.md`. Index the migrated content.
-- [ ] 6.6 Update nanoclaw's `lode/lode-map.md`: replace migrated plan entries with outbound pointers ("→ migrated to ~/Projects/mailroom/lode/...").
-- [ ] 6.7 Search nanoclaw's lode for stale relative paths into the migrated content; rewrite as absolute paths or as outbound references. Exclude history/ and lessons/ (those are historical, leave intact).
-- [ ] 6.8 Search the new mailroom lode for stale relative paths back into nanoclaw's lode; rewrite similarly.
+- [x] 6.1 Identified 7 mailroom-belonging plans in nanoclaw's lode (4 complete + 3 active). The mailroom-repo-extraction plan itself stays in nanoclaw through Wave 7 (final closure).
+- [x] 6.2 Moved via `cp -r` + `git rm` (cross-repo, so `git mv` doesn't apply). Plans now live at `~/Projects/mailroom/lode/plans/{active,complete}/`. History split is acceptable per the original plan: nanoclaw's history retains the deletion commits; mailroom's history starts the file at the move commit.
+- [x] 6.3 Migrated 4 domain docs: `mailroom-mirror.md`, `mailroom-rules.md`, `architecture/madison-pipeline.md`, `reference/rules-schema.md`.
+- [~] 6.4 Architecture doc split: kept the mirror data model document whole at `~/Projects/mailroom/lode/architecture/madison-pipeline.md`. The push-side delivery (ipc-out → subscriber → group-queue → Madison) was already a separate doc at nanoclaw's `lode/infrastructure/madison-pipeline.md` — kept there. Two distinct docs with overlapping name; the mirror-data-model one is mailroom's, the push-delivery one is nanoclaw's.
+- [x] 6.5 Wrote 4 mailroom-specific lode root files: `lode-map.md` (index), `summary.md` (one-paragraph project snapshot), `terminology.md` (mailroom domain vocab), `practices.md` (deploy patterns, env-vault, build cache, cross-repo coordination contracts).
+- [x] 6.6 Updated nanoclaw's `lode/lode-map.md`: removed migrated plan/infra entries; added a "Cross-repo lodes" section pointing at `~/Projects/mailroom/lode/`.
+- [x] 6.7 Updated stale relative paths in nanoclaw's current-state docs (summary.md, practices.md, tech-debt.md, infrastructure/madison-pipeline.md, plans/active/2026-04-unified-inbox/tracker.md). Rewrote as absolute `~/Projects/mailroom/lode/...` references. lessons.md and history/ left intact (historical narratives).
+- [~] 6.8 Mailroom-side stale-path scan: deferred. The migrated plan trackers reference each other via relative paths that still resolve correctly inside the mailroom repo (e.g., `../../../infrastructure/mailroom-mirror.md`); cross-repo references back to nanoclaw need a follow-up grep pass once Wave 7 (this plan's own move) lands.
 
 ### Wave 7 — Verification + closure
 - [ ] 7.1 24-hour soak: mailroom continues to ingest, push events, serve MCP. Spot-check `mailroom-ingestor` logs daily.
@@ -168,6 +156,10 @@ This is a structural cleanup — not a feature change. Mailroom must keep ingest
 **Waves 0–5 complete (with deviations documented in Errors table) + branch cleanup done. Source split shipped 2026-04-25.** ConfigFiles `main = 6c26600` (in sync with `origin/main`, slim compose stack only). New `~/Projects/mailroom/` working tree synced with `gitlab.com/jmcstone/mailroom main = 85163f2` (79 commits, branch protection re-enabled). Production runtime (`mailroom-ingestor-1`, `mailroom-inbox-mcp-1`) is healthy on `mailroom-local:latest` built from the new repo location; both containers were recreated cleanly during cutover, no mail dropped. Build + 421-test vitest suite + `tsc --noEmit` all green from new repo location (validated in a one-shot `node:22-slim` container; no host pollution).
 
 **Pending**:
-- **Wave 6 (lode migration)**: 7 mailroom-belonging plans + 4 infrastructure docs need to move from nanoclaw's lode to `~/Projects/mailroom/lode/`. Highest-risk lode operation; not started.
 - **Wave 7 (24h soak + final closure)**: containers up; soak in progress.
-- **Two follow-up items flagged for later**: (1) `env.vault` and `docker-compose.yml` leaked into the new mailroom repo via subtree split — encrypted/orchestration files that don't belong there per Jeff's stated model; removing them needs a force-push on the new repo (acceptable since brand-new). (2) Investigate the destructive-merge anomaly's origin (some agent session ran a bad merge resolution); useful for preventing recurrence.
+- **Wave 6.8** (cross-repo stale-path scan from mailroom side back into nanoclaw): deferred to after Wave 7 closes and this plan moves.
+- **Investigate the destructive-merge anomaly's origin**: some prior agent session ran a bad merge resolution that emptied origin/main of mailroom files. Useful for preventing recurrence; not blocking.
+
+**Resolved this session**:
+- ✅ `env.vault` + `docker-compose.yml` removed from the mailroom repo via regular delete commit (`1e4b98f`) — no force-push needed since the encrypted files were never plaintext-secret in history. Pushed fast-forward.
+- ✅ Wave 6 lode migration: 7 plans + 4 docs migrated to `~/Projects/mailroom/lode/`; new mailroom lode skeleton (`lode-map.md`, `summary.md`, `terminology.md`, `practices.md`) authored; nanoclaw lode-map slimmed; stale-path references in nanoclaw's current-state docs updated.

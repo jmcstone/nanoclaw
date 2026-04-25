@@ -215,7 +215,7 @@ This phase is too cross-cutting for parallel executors (native-binding swap + en
 
 ## Current status
 
-**Architectural pivot 2026-04-21**: further work on this tracker is suspended. Ingestion, storage, MCP, and backfill are being extracted into a standalone Docker stack (the "mailroom") rather than deepening their co-location inside the nanoclaw process. See `lode/plans/active/2026-04-mailroom-extraction/` once created. Phase 2 (unified API), Phase 3 (push), Phase 4 (Slack), Phase 5 (Google Messages), Phase 6 (semantic), Phase 7 (trust) will reincarnate as mailroom phases.
+**Architectural pivot 2026-04-21**: further work on this tracker is suspended. Ingestion, storage, MCP, and backfill were extracted into a standalone Docker stack (the "mailroom"), then in 2026-04-25 the mailroom got its own GitLab repo at `gitlab.com/jmcstone/mailroom` (`~/Projects/mailroom/`). See `~/Projects/mailroom/lode/plans/complete/2026-04-mailroom-extraction/` for the original extraction work. Phase 2 (unified API), Phase 3 (push), Phase 4 (Slack), Phase 5 (Google Messages), Phase 6 (semantic), Phase 7 (trust) reincarnated as mailroom phases now tracked in the mailroom repo.
 
 What shipped on `unified-inbox` and is **running** in production:
 

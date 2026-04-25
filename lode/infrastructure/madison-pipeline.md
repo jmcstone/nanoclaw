@@ -68,7 +68,7 @@ Telegram_inbox: just the 7am morning routine. The legacy `:07` hourly triage and
 
 ## Related
 
-- [mailroom-rules.md](mailroom-rules.md) — the rule engine itself
-- [../reference/rules-schema.md](../reference/rules-schema.md) — schema reference
+- `~/Projects/mailroom/lode/infrastructure/mailroom-rules.md` — the rule engine itself (migrated to mailroom repo)
+- `~/Projects/mailroom/lode/reference/rules-schema.md` — schema reference (migrated)
 - Madison's CLAUDE.md at `~/containers/data/NanoClaw/groups/telegram_inbox/CLAUDE.md`
-- Plan: `lode/plans/active/2026-04-mail-push-redesign/tracker.md`
+- Plan: `~/Projects/mailroom/lode/plans/complete/2026-04-mail-push-redesign/tracker.md` (migrated; closed 2026-04-23)

@@ -36,11 +36,11 @@
 
 ## Mailroom deploy checklist
 
-Run these steps in order any time you rebuild or migrate mailroom containers. Reference: `lode/infrastructure/mailroom-mirror.md`.
+Run these steps in order any time you rebuild or migrate mailroom containers. Reference: `~/Projects/mailroom/lode/infrastructure/mailroom-mirror.md` (migrated to the mailroom repo 2026-04-25).
 
 1. Take a btrfs snapshot or confirm the hourly snapshot is recent enough (check `ls ~/containers/data/.snapshots/mailroom/`).
 2. Stop mailroom containers: `cd ~/containers/mailroom && env-vault env.vault -- docker compose stop ingestor inbox-mcp`.
-3. Rebuild images: `env-vault env.vault -- docker compose build`.
+3. Rebuild image (from the source repo, not the compose stack): `cd ~/Projects/mailroom && docker build -t mailroom-local:latest .`. The compose stack no longer has a `build:` directive — it pulls `mailroom-local:latest` from the local image cache.
 4. If a migration script exists, run with `--dry-run` first against the live DB and review reported counts.
 5. Run actual migration: `docker exec mailroom-ingestor-1 npx tsx scripts/migrate-mirror.ts`. (Run inside the container — the script hardcodes `/var/mailroom/data` and needs `MAILROOM_DATA_DIR` set, which is only true inside the container. Host-side invocation fails with `EACCES mkdir '/var/mailroom/data'`.)
 6. Verify self-audit passes (the script exits non-zero and prints mismatch details if it fails — do not proceed on exit 1).
