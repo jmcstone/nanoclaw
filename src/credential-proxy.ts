@@ -37,9 +37,10 @@ export function startCredentialProxy(
     'ANTHROPIC_BASE_URL',
   ] as const;
   const fromFile = readEnvFile([...SECRET_KEYS]);
-  const secrets: Record<(typeof SECRET_KEYS)[number], string> = Object.fromEntries(
-    SECRET_KEYS.map((k) => [k, fromFile[k] ?? process.env[k] ?? '']),
-  ) as Record<(typeof SECRET_KEYS)[number], string>;
+  const secrets: Record<(typeof SECRET_KEYS)[number], string> =
+    Object.fromEntries(
+      SECRET_KEYS.map((k) => [k, fromFile[k] ?? process.env[k] ?? '']),
+    ) as Record<(typeof SECRET_KEYS)[number], string>;
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
   const oauthToken =
@@ -127,6 +128,7 @@ export function startCredentialProxy(
 
 /** Detect which auth mode the host is configured for. */
 export function detectAuthMode(): AuthMode {
-  const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
-  return secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
+  const fromFile = readEnvFile(['ANTHROPIC_API_KEY']);
+  const apiKey = fromFile.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  return apiKey ? 'api-key' : 'oauth';
 }
