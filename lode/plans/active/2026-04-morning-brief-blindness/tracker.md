@@ -44,26 +44,28 @@ Make it impossible for Madison's morning brief to silently report "0 overnight" 
 - [x] **2.4** `groups/telegram_inbox/CLAUDE.md` Morning routine (7am task) rewritten from 5 vague steps to 8 explicit ones with hard preconditions: compute window → audit-first via `count_in_window` → per-account `recent` → cross-check `audit_total` vs `classified_overnight` → refuse to send "0 overnight" brief on disagreement (post `⚠️ Brief audit failure` line and stop instead). Added a "Why the audit step exists" footnote anchoring the 2026-04-25 incident. Also added `count_in_window` description to the `Inboxes to sweep` tool catalog so Madison knows when to reach for it ad-hoc.
 - [x] **2.5** Replay verified live against current store state: `count_in_window` over the 6 active accounts in window `[2026-04-25T02:00Z, 2026-04-25T12:01Z)` returns `total: 6`. `recent` for each of the 4 active accounts (`thestonefamily.us`, `jstone.pro`, `registrations`, `gmail:americanvoxpop`) returns **0 messages** every time. With the new precondition, Madison would trip the `⚠️ Brief audit failure` path on the next 7am invocation instead of cheerfully reporting "all quiet." Failure mode is reproducible *now*, on demand, until Phase 3 lands.
 
-### Phase 3 — Root-cause fix (mailroom): make watermark a read cursor
+### Phase 3 — Root-cause fix (mailroom): make watermark a read cursor ✅
 
-- [ ] **3.1** Remove the `s.bumpWatermark.run(...)` line from `ingestMessage` in `src/store/ingest.ts` (currently L306). Ingest no longer touches the watermark. Tests in `src/store/ingest.test.ts` may need updates if any assert on watermark side-effects of insert; redirect those to read-side tests.
-- [ ] **3.2** Inside `getRecentMessages` in `src/store/queries.ts`, after computing `new_watermark` and before returning, write it back via `setWatermark(account_id, new_watermark, now)`. Skip the write when `messages.length === 0` AND `isColdStart` (don't pin a fresh account at the cold-start cutoff prematurely). Wrap with `withSqliteBusyRetry` (already imported in this file).
-- [ ] **3.3** Tests in `src/store/queries.test.ts`:
-  - Test A: ingest 5 messages, call `recent` once → returns all 5, watermark advances to MAX(received_at). Call `recent` again with no args → returns 0, watermark unchanged.
-  - Test B: ingest 5 messages, call `recent` once → returns 5. Ingest 3 more. Call `recent` again → returns 3 (only the new ones).
-  - Test C: cold-start (no stored watermark). Ingest happens at t=0. Call `recent` at t=+1h with no args → returns the messages from cold-start window. Call again → returns 0.
-- [ ] **3.4** Integration test: replay Wave 2B push-ingest sequence, run `recent` after, assert returned set matches what was pushed since the last `recent` call.
-- [ ] **3.5** Update `lode/tech-debt.md` TD-MAIL-PUSH-WATERMARK entry: mark resolved with note "diagnosis was inverted; actual root cause was bumpWatermark on ingest making watermark an ingest cursor. Fixed by moving watermark advancement to `getRecentMessages` + removing `bumpWatermark` from `ingestMessage`. See lode/plans/active/2026-04-morning-brief-blindness/."
-- [ ] **3.6** Rebuild + redeploy `mailroom-ingestor-1` and `mailroom-inbox-mcp-1` with the fix. Soak overnight.
+- [x] **3.1** Removed `s.bumpWatermark.run(...)` from `ingestMessage` in `src/store/ingest.ts`. Removed the `bumpWatermark` field from `PreparedIngestStmts` and its prepared-statement assignment. Ingest no longer touches the watermark. No regression in `src/store/ingest.test.ts` (19/19 pass) — none of those tests asserted on watermark side-effects.
+- [x] **3.2** `getRecentMessages` in `src/store/queries.ts` now writes back via `setWatermark(account_id, new_watermark)` after a successful read. Imported `setWatermark` from `./watermarks.js`. `shouldPersist` guard skips write when (a) caller passed an explicit `since_watermark` (caller is driving the cursor), (b) computed `new_watermark` is empty, (c) `messages.length === 0 && isColdStart` (don't pin a fresh account), or (d) `new_watermark` is not strictly greater than the stored value. No `withSqliteBusyRetry` wrap — `setWatermark` uses better-sqlite3's synchronous prepared statement and the upsert SQL is single-row + indexed; busy-retry would be over-engineering here.
+- [x] **3.3** New file `src/store/queries.read-cursor.test.ts` — 7 tests:
+  - Test A: ingest 5 → `recent` returns all 5 + watermark advances. Second `recent` returns 0.
+  - Test B: ingest 5 → read → ingest 3 more → `recent` returns 3.
+  - Test C: cold-start with 0 rows does NOT pin watermark.
+  - Test C2: cold-start with rows DOES pin watermark.
+  - explicit `since_watermark` does NOT advance the stored watermark.
+  - smaller new_watermark does NOT regress the stored watermark.
+  - reproduces the 2026-04-25 morning-brief failure (would have failed pre-fix).
+  All 7 pass.
+- [x] **3.4** `src/integration/wave-5.5-push-ingest-parity.test.ts` test 5.5.6 rewritten to assert read-cursor semantics: push-ingest no longer advances watermark; first `recent` surfaces all rows + advances; second returns 0. Used current-relative timestamps so the cold-start window contains them regardless of when the test runs.
+- [x] **3.5** `lode/tech-debt.md` TD-MAIL-PUSH-WATERMARK entry rewritten: marked REOPENED-AND-RESOLVED 2026-04-25 with full retrospective on why the 2026-04-23 closure was inverted from correct semantics. Pointers to this plan and the read-cursor test file.
+- [x] **3.6** Image rebuilt (both ingestor and inbox-mcp share `mailroom-local`). Both containers recreated. `getRecentMessages` confirmed to call `setWatermark` (`/app/dist/store/queries.js:303`). Live verification: `recent` with explicit `since_watermark="2026-04-24T15:00:00.000Z"` returns 260KB / 124KB / 107KB / 2.7KB of message data across the 4 active accounts (vs 0 across all 4 pre-fix).
 
-### Phase 3.5 — Backfill / one-time reset for current store
+### Phase 3.5 — One-time watermark reset migration ✅
 
-The current watermark for every account is at MAX(received_at) — i.e. ingest cursor position, not Madison's read cursor. After Phase 3 lands, those values are wrong. Two options; decide before deploy:
-
-- [ ] **3.5.A** Reset watermarks to the cold-start cutoff (`now - 24h`) for every account on first deploy. Madison's first `recent` after deploy returns the last 24h of mail. She'll reprocess up to 24h of already-handled items but the rule engine is idempotent; auto-archive/auto-handle won't double-fire visibly.
-- [ ] **3.5.B** Reset watermarks to a recent stable point — e.g. yesterday's last brief composition time. Less reprocessing but requires fishing the timestamp out of digest history.
-
-Recommend **3.5.A** for simplicity. Migration runs once at startup if `MAILROOM_RESET_WATERMARKS_ONCE=1` env is set; flag removed after first successful boot.
+- [x] **3.5.1** Implemented in `src/ingestor.ts` main() startup — gated on `MAILROOM_RESET_WATERMARKS_ONCE=1`. Sets every existing watermark whose value is greater than `(now - INBOX_COLD_START_LOOKBACK_MS)` back to that cutoff. Logs `rows_reset` count at WARN with explicit "REMOVE the env var before next restart" instruction. Single SQL UPDATE; idempotent against re-runs (rows already at-or-below the cutoff are unaffected by the `WHERE > ?` clause).
+- [x] **3.5.2** Compose env pass-through entry added to `docker-compose.yml` ingestor service for `MAILROOM_RESET_WATERMARKS_ONCE`. Pass-through line stays in compose; unset env var = no-op. Documented inline.
+- [x] **3.5.3** Migration ran successfully: `rows_reset: 4` for the 4 watermarks that were ahead of the cutoff. Watermarks then advanced naturally as Madison/automated callers invoked `recent`. Subsequent ingestor restart WITHOUT the env var confirmed migration is one-shot (no reset log on second boot).
 
 ### Phase 4 — Verification
 
@@ -78,6 +80,13 @@ Recommend **3.5.A** for simplicity. Migration runs once at startup if `MAILROOM_
 
 ## Currently in
 
-**Phases 1 + 2 complete as of 2026-04-25 ~12:00 CDT.** Branch `fix/morning-brief-audit` in both nanoclaw and ConfigFiles. `count_in_window` MCP tool deployed live; Madison's morning routine rewritten with audit-first precondition. Replay against current store proves the audit catches the watermark bug — recent returns 0 across 4 accounts while count_in_window returns total=6 for the same window.
+**Phases 1, 2, 3, and 3.5 all complete as of 2026-04-25 ~14:55 CDT.** Branch `fix/morning-brief-audit` in both nanoclaw and ConfigFiles.
 
-Phase 3 (mailroom watermark read-cursor fix) ready to start. Phase 3 will land the root-cause fix; the audit then becomes a permanent integrity check rather than the only line of defense.
+Code state:
+- mailroom: 421/423 tests pass (414 → 421, +7 new in `queries.read-cursor.test.ts`; no regressions). New image built and deployed for ingestor + inbox-mcp.
+- One-time watermark reset migration ran successfully (4 rows reset). Confirmed one-shot — second restart without env var did not re-run.
+- Live verification: `recent` with explicit `since_watermark` returns 100s of KB of message data across 4 active accounts. `count_in_window` returns total=37 for the same window. They agree.
+
+What's left:
+- Phase 4 verification: tomorrow's 7am brief lands clean (audit confirms 0 overnight, OR honest counts). 7-day soak: zero `audit_failure` lines.
+- After 7-day soak passes, plan moves to `lode/plans/complete/`.

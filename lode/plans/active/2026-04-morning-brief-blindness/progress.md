@@ -13,17 +13,36 @@
 | Test | Status | Notes |
 |---|---|---|
 | `src/mcp/tools/count.test.ts` (11 cases) | ✅ pass | new in Phase 2; covers window inclusivity, account/source filters, sent/deleted defaults, opt-in flags, validation, 11-row replay |
-| Full mailroom suite (vitest) | ✅ 414/416 (2 skip) | no regressions; 2 skips pre-existing |
+| `src/store/queries.read-cursor.test.ts` (7 cases) | ✅ pass | new in Phase 3; covers round-trip, cold-start, since_watermark non-advance, no regression |
+| `src/integration/wave-5.5-push-ingest-parity.test.ts` 5.5.6 | ✅ pass (rewritten) | now asserts read-cursor semantics, not the inverted ingest-cursor design |
+| Full mailroom suite (vitest) | ✅ 421/423 (2 skip) | +7 net tests vs Phase 2; no regressions; 2 skips pre-existing |
 | TS compile (`npm run build`) | ✅ clean | tsc no errors |
 | Live `tools/list` includes `count_in_window` | ✅ verified | smoke test against `172.31.0.1:18080/mcp` |
-| Live `count_in_window` returns expected counts | ✅ verified | overnight window total=11 (matches direct DB query) |
-| Live `recent` returns 0 across active accts (bug repro) | ✅ verified | Phase 2.5 replay; audit-vs-recent disagreement = the trigger condition the new precondition catches |
+| Live `count_in_window` returns expected counts | ✅ verified | overnight window total=11 (matches direct DB query); broader window total=37 |
+| Live `recent` returns 0 pre-fix (bug repro) | ✅ verified at 12:00 CDT | Phase 2.5 replay before Phase 3 deploy |
+| Live `recent` returns rows post-fix | ✅ verified at 14:52 CDT | with explicit since_watermark: 260KB / 124KB / 107KB / 2.7KB across 4 accts |
+| Watermark reset migration | ✅ verified | rows_reset=4 logged; one-shot confirmed via no-env restart |
 
 ## Errors
 
 | Time | Error | Resolution |
 |---|---|---|
 | _(none yet)_ | | |
+
+## 2026-04-25 — Phases 3 + 3.5 shipped (~14:55 CDT)
+
+- 12:30 CDT — Removed `bumpWatermark` from `ingestMessage` in `src/store/ingest.ts` (call + prepared-statement field). Push-ingest no longer touches the watermark.
+- 12:35 CDT — Added `setWatermark` write-back to `getRecentMessages` in `src/store/queries.ts`. Imported `setWatermark` from `./watermarks.js`. Skip-write guard: explicit since_watermark / empty new_watermark / cold-start-empty / not strictly greater than stored.
+- 12:40 CDT — Wrote `src/store/queries.read-cursor.test.ts` (7 tests covering round-trip, cold-start variants, since_watermark non-advance, no-regression).
+- 12:45 CDT — Updated `src/integration/wave-5.5-push-ingest-parity.test.ts` test 5.5.6 to assert read-cursor semantics (push-ingest no advance; first recent surfaces all + advances; second returns 0). Switched to current-relative timestamps to match the cold-start window.
+- 12:50 CDT — `npm run build` clean; full vitest 421/423 pass (was 414, +7 new tests, no regressions, 2 pre-existing skips).
+- 13:00 CDT — Added one-time reset migration to `src/ingestor.ts` main(), gated on `MAILROOM_RESET_WATERMARKS_ONCE=1`. Resets watermarks > cold-start cutoff back to the cutoff; idempotent re-run safe (WHERE-clause filter).
+- 13:05 CDT — Added `MAILROOM_RESET_WATERMARKS_ONCE` env pass-through to `docker-compose.yml` ingestor service.
+- 13:10 CDT — Updated `lode/tech-debt.md` TD-MAIL-PUSH-WATERMARK note: rewrote as REOPENED-AND-RESOLVED with full retrospective on why the 2026-04-23 closure was inverted from correct semantics.
+- 14:48 CDT — `docker compose build` rebuilt mailroom-local image. `MAILROOM_RESET_WATERMARKS_ONCE=1 env-vault env.vault -- docker compose up -d --force-recreate ingestor inbox-mcp` recreated both containers.
+- 14:49 CDT — Migration ran cleanly: `rows_reset: 4` logged at WARN with the "REMOVE env var" instruction. 4 watermarks reset to `2026-04-24T14:49:00.756Z` (24h cutoff).
+- 14:51 CDT — Restarted ingestor WITHOUT env var. Migration did not re-run. One-shot confirmed.
+- 14:52 CDT — Live read-cursor health check: `recent` with explicit `since_watermark="2026-04-24T15:00:00.000Z"` returns 260/124/107/2.7 KB of message data across the 4 active accounts (was 0 pre-fix). `count_in_window` for the same window returns total=37. The two queries are now consistent.
 
 ## 2026-04-25 — Phase 2 audit precondition shipped (~12:00 CDT)
 
@@ -49,9 +68,9 @@
 
 ## Reboot check (5 questions)
 
-1. **Where am I?** — Phases 1 (diagnosis) and 2 (audit precondition) complete as of 2026-04-25 ~12:00 CDT. Branch `fix/morning-brief-audit` in both nanoclaw and ConfigFiles. Mailroom rebuilt, redeployed, healthy. Madison's CLAUDE.md morning routine rewritten with audit-first precondition. Live replay confirms the audit catches the watermark bug (recent=0 across 4 accounts; count_in_window=6 for the same window).
-2. **Where am I going?** — Phase 3: mailroom watermark read-cursor fix. Remove `bumpWatermark` call from `ingestMessage`. Add `setWatermark(account_id, new_watermark, now)` write-back inside `getRecentMessages` (skip on cold-start + empty). Tests covering ingest-then-recent round-trips. One-time reset of existing watermarks on deploy via `MAILROOM_RESET_WATERMARKS_ONCE=1`. Update TD-MAIL-PUSH-WATERMARK note in `lode/tech-debt.md` with the corrected diagnosis.
-3. **What is the goal?** — Make watermarks a real read cursor, not an ingest cursor. After Phase 3, `recent` and `count_in_window` will agree by construction (no more bug to catch). The audit precondition stays as a permanent integrity check.
+1. **Where am I?** — Phases 1, 2, 3, 3.5 all complete as of 2026-04-25 ~14:55 CDT. Branch `fix/morning-brief-audit` in both nanoclaw and ConfigFiles. Mailroom rebuilt + redeployed; one-time watermark reset migration ran cleanly (4 rows reset). Live verification shows `recent` and `count_in_window` now agree.
+2. **Where am I going?** — Phase 4 verification: tomorrow's 7am brief lands clean. 7-day soak with no `audit_failure` lines. Then plan moves to `lode/plans/complete/`.
+3. **What is the goal?** — Make watermarks a real read cursor (achieved). After Phase 3, `recent` and `count_in_window` agree by construction (verified). The audit precondition stays as a permanent integrity check.
 4. **What have I learned?** —
    - The Travis GOP email itself arrived 8:30 AM (after brief); was a red herring for the timing claim.
    - The store had 11 overnight Protonmail rows the brief never surfaced.
