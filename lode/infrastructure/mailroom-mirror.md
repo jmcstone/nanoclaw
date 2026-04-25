@@ -1,6 +1,6 @@
 # Mailroom Mirror Sync
 
-Sync worker architecture for keeping the SQLCipher `store.db` mirror in sync with upstream Gmail and Proton mailbox state. Part of `madison-read-power` Wave 2B. ConfigFiles commit `16886aa`.
+Sync worker architecture for keeping the SQLCipher `store.db` mirror in sync with upstream Gmail and Proton mailbox state. Originated in `madison-read-power` Wave 2B; evolved through Wave 5.5 (push-ingest parity), Wave 5.6 (folder-state seeding), Wave 5.7 (replaced CONDSTORE with UIDNEXT polling + three-tier recency reconcile, after the Proton bridge was confirmed not to advertise CONDSTORE), and Wave 5.8 (write-through correctness contract).
 
 ## Shape contract (Wave 5.8)
 
@@ -60,26 +60,33 @@ When a label is deleted on Gmail, `history.list` can emit thousands of `labelsRe
 
 `src/sync/proton-idle.ts` — maintains an IMAP IDLE connection per Proton account against the INBOX folder:
 - Re-issues IDLE command every 29 minutes (RFC 2177 timeout guidance).
-- On IDLE response (EXISTS, EXPUNGE, FLAGS notifications): triggers per-folder MODSEQ check to determine what changed.
+- `EXISTS` notifications fire `onMailboxChange`, which triggers ingestion of new INBOX messages.
+- `EXPUNGE` notifications wire directly into `applyProtonFolderMembershipChanges` with the seq number used as a best-effort UID (a no-op when seqno ≠ stored UID, which is common after any prior delete). Authoritative cleanup happens within 30 min via the hot-tier reconcile (UID SEARCH SINCE 7d) — INBOX is included in the recency walk because the UIDNEXT poller skips it. The IDLE-fired delete bounds the staleness window without claiming correctness.
 
 ### NOOP watchdog
 
-Every 5 minutes, sends a `NOOP` command on the IDLE connection. Timeout of 30 seconds: if NOOP doesn't return, the connection is considered dead → reconnect with exponential backoff.
+Every 5 minutes, sends a `NOOP` command on the IDLE connection. Timeout of 30 seconds: if NOOP doesn't return, the connection is considered dead → reconnect with exponential backoff (5s base, 5min cap, double per consecutive failure).
 
-### CONDSTORE MODSEQ polling
+### UIDNEXT polling
 
-`src/sync/proton-condstore.ts` — per-folder `SELECT (CONDSTORE)` every 5 minutes. Compares `HIGHESTMODSEQ` against stored `last_modseq` in the `proton_folder_state` table.
+`src/sync/proton-condstore.ts` (logger component `proton-uidnext`; `startUidnextPoller`) — per-folder `STATUS (MESSAGES UIDNEXT)` every `UIDNEXT_POLL_INTERVAL_MS` (default 10 min). Tracks two cheap counters in `proton_folder_state`: `last_uidnext` (next UID the server will assign) and `last_exists` (current message count).
 
-**MODSEQ monotonicity check on reconnect:** if the new `HIGHESTMODSEQ` is less than the stored value, the Proton bridge likely restarted and reset state. Action: call `hydrateProtonFolder(account, folder, deps)` to re-walk that folder. Sets `last_modseq = -1` sentinel while hydration is pending.
+CONDSTORE was removed in Wave 5.7 because Proton Bridge does not advertise the capability — `HIGHESTMODSEQ` was always 0, and MODSEQ-based detection was a no-op. UIDNEXT + EXISTS gives the same change-detection signal in one round-trip without needing an extension.
 
-**Folder-state seeding (Wave 5.6):** the set of folders polled is read from `proton_folder_state`. Seeding happens in two places:
+Per-folder cycle (`pollFolderUidnext`):
+1. `client.status(folder, { messages, uidNext })`. If both unchanged → return (hot-path no-op, no lock taken).
+2. **New UIDs** (`currUidnext > prevUidnext`): take a mailbox lock, fetch `(uid, envelope)` for the range, resolve each UID's stored `rfc822_message_id` to an internal `message_id`, call `applyProtonUidAdded(messageId, folder, uid)`. First-poll case (`prevUidnext === 0`) defers to the reconcile cold walk instead of bulk-fetching — the recency scheduler will catch it.
+3. **Expunges** (`currExists < prevExists`): `UID SEARCH ALL` to enumerate live UIDs, set-diff against `message_folder_uids` rows for that `(account_id, folder)`, emit `applyProtonFolderMembershipChanges` for the missing ones.
+4. Upsert `last_uidnext`, `last_exists`, `last_uidnext_checked_at` regardless of which branch fired.
 
-1. **Ingestor startup** — `seedFolderState` in `src/sync/proton-folder-discovery.ts` runs once per Proton account that has zero rows in `proton_folder_state`. It executes `IMAP LIST "" "*"`, filters out `\Noselect` mailboxes, and batch-inserts a row per folder with `last_modseq=0` via `INSERT OR IGNORE`. Best-effort: IMAP failure is logged and the ingestor falls through to INBOX-only polling for that account; next restart retries.
-2. **Hydration walker** — `src/reconcile/hydrate.ts` inserts a row for every folder it walks (same `INSERT OR IGNORE` pattern), so nightly reconcile self-heals any startup misses.
+**INBOX is skipped** by the poller; IDLE handles INBOX EXISTS/EXPUNGE in real time, and the hot-tier reconcile sweeps INBOX as part of its 7-day window.
 
-The `last_modseq=0` starting point is deliberate: the first CONDSTORE poll per newly-seeded folder fires for all existing messages (`UID FETCH x:* MODSEQ>0`), which invokes the Wave 5.5-hardened `applyProtonUidAdded` → writes `message_labels` + `label_catalog` + `message_folder_uids` for every message in that folder. One-time bulk-fire gap heal. After the first cycle, `last_modseq` advances to the folder's HIGHESTMODSEQ and subsequent polls are incremental.
+**Folder-state seeding (Wave 5.6):** the folder list is read from `proton_folder_state`. Seeding happens in two places:
 
-**Deliberate non-use of `upsertFolderState`:** the seed and walker paths use `INSERT OR IGNORE` directly rather than the `upsertFolderState` helper, because that helper's `ON CONFLICT DO UPDATE SET last_modseq=excluded.last_modseq` would reset real progress back to 0 on every run.
+1. **Ingestor startup** — `seedFolderState` in `src/sync/proton-folder-discovery.ts` runs once per Proton account that has zero rows in `proton_folder_state`. It executes `IMAP LIST "" "*"`, filters out `\Noselect` mailboxes, and batch-inserts one row per folder with `last_uidnext=0`, `last_exists=0` via `INSERT OR IGNORE`. Best-effort: IMAP failure is logged and the ingestor falls through to INBOX-only polling for that account; next restart retries.
+2. **Hydration walker** — `src/reconcile/hydrate.ts` inserts a row for every folder it walks (same `INSERT OR IGNORE` pattern), so the recency reconcile self-heals any startup misses.
+
+The `last_uidnext=0` sentinel triggers the deferred-first-poll path above; the first hot/cold reconcile is what actually populates the folder, then steady-state UIDNEXT polling takes over.
 
 ### Event-to-DB applier
 
@@ -136,29 +143,48 @@ LIMIT 50;
 
 Madison runs this as a periodic self-check or when Jeff notices an inbox discrepancy.
 
-## Nightly reconcile
+## Recency-tiered reconcile
 
-### Schedule
+`src/reconcile/recency-scheduler.ts` (`startRecencyReconcileScheduler`) — three cadences matched to how often state actually changes at each age:
 
-`src/reconcile/scheduler.ts` — `setInterval`-based 5-minute check targeting 04:00 local time. Skips if `meta.last_reconcile_at` is within the last 20 hours (prevents double-runs after clock drift or manual trigger).
+| Tier  | Interval                | `sinceDate` window      | When                                  |
+|-------|-------------------------|-------------------------|---------------------------------------|
+| Hot   | every 30 min            | last 7 days             | always                                |
+| Warm  | every 6 h               | last 90 days            | always                                |
+| Cold  | weekly full walk        | none (everything)       | Sunday 04:00 local; checked every 5 min, skipped if last cold ran in last 6 days (`meta.last_cold_reconcile_at`) |
+
+All three call the same `runFn({ sinceDate? })` — a thin wrapper around `runFullHydration` that the ingestor wires at the composition root. Hot/warm pass `sinceDate`; cold passes `undefined` (= full walk).
+
+Intervals are env-configurable via `HOT_RECONCILE_INTERVAL_MS` and `WARM_RECONCILE_INTERVAL_MS`.
+
+The legacy `src/reconcile/scheduler.ts` (single nightly 04:00 run with 20h skip window) is no longer wired up; the recency scheduler replaced it in Wave 5.7.5.
+
+### Overlap guard
+
+A single in-memory `reconcileRunning` flag gates all three tiers. If a hot tick fires while warm is still running, the hot run silently skips (logged at debug). Same shape as the Wave 2A.5 single-scheduler guard.
+
+### Blast guard
+
+Every recency run is wrapped in `runWithBlastGuard`, which snapshots `message_labels`, `message_folder_uids`, and `deleted_inferred` counts before/after. If any of these exceed a 50% delta (matching the Wave 3.5 migrate-mirror self-audit threshold), the scheduler logs an error and `process.exit(1)` to prevent compounding damage on the next tier. SQLite auto-commit means the offending writes are already on disk — recovery is via btrfs snapshot, not rollback.
 
 ### Two-phase correctness
 
-Phase 1 — **non-blocking read-only walk**: Proton folder walker (`src/reconcile/proton-walker.ts`) and Gmail label walker (`src/reconcile/gmail-walker.ts`) enumerate upstream state as AsyncGenerators. No writes; Madison can use the DB concurrently.
+Phase 1 — **non-blocking read-only walk**: Proton folder walker (`src/reconcile/proton-walker.ts`) and Gmail label walker (`src/reconcile/gmail-walker.ts`) enumerate upstream state as AsyncGenerators. No writes; Madison can use the DB concurrently. When `sinceDate` is set, walkers narrow their fetch (Gmail `q=after:`, Proton `UID SEARCH SINCE`) so hot/warm cycles touch only recent UIDs.
 
-Phase 2 — **short apply transaction**: delta builder computes adds/removes vs. DB. Additions via `INSERT OR IGNORE` (idempotent). Removals re-verify the specific `(message_id, folder/label)` tuple upstream before executing `DELETE` — prevents races where a concurrent write-through already removed the entry.
+Phase 2 — **short apply transaction**: `delta.ts` computes adds/removes vs. DB. Additions via `INSERT OR IGNORE` (idempotent). Removals re-verify the specific `(message_id, folder/label)` tuple upstream before executing `DELETE` — prevents races where a concurrent write-through already removed the entry.
 
 ### Metrics
 
-`src/reconcile/metrics.ts` emits a JSON log line after each reconcile cycle:
+`src/reconcile/metrics.ts` emits a JSON log line after each tier:
 ```json
 {
   "event": "reconcile_complete",
-  "items_checked": 60166,
+  "tier": "hot",
+  "items_checked": 612,
   "adds_applied": 0,
   "removes_applied": 0,
   "removes_skipped_reverify": 0,
-  "wall_ms": 487000
+  "wall_ms": 14200
 }
 ```
 
@@ -184,27 +210,27 @@ flowchart TD
   SeedFolderState["proton-folder-discovery.ts\nseedFolderState()\n(Wave 5.6)"]
   GmailHistory["gmail-history.ts\nhistory.list handler"]
   GmailHeartbeat["gmail-heartbeat.ts\ndaily ping"]
-  ProtonIdle["proton-idle.ts\nIDLE + re-IDLE"]
-  ProtonCondstore["proton-condstore.ts\nMODSEQ poller"]
-  ReconcileSched["reconcile/scheduler.ts\n04:00 local"]
-  Hydrate["reconcile/hydrate.ts\nrunFullHydration()"]
+  ProtonIdle["proton-idle.ts\nIDLE on INBOX\nEXPUNGE → membership change"]
+  ProtonUidnext["proton-condstore.ts\nstartUidnextPoller\n(component: proton-uidnext)\nSTATUS every 10 min, non-INBOX"]
+  RecencySched["reconcile/recency-scheduler.ts\nhot 30m / warm 6h / cold weekly"]
+  Hydrate["reconcile/hydrate.ts\nrunFullHydration({ sinceDate? })"]
   Apply["reconcile/apply.ts\napply phase"]
 
   Ingestor -->|"per account with empty\nproton_folder_state"| SeedFolderState
-  SeedFolderState -->|"INSERT OR IGNORE\nlast_modseq=0"| ProtonCondstore
+  SeedFolderState -->|"INSERT OR IGNORE\nlast_uidnext=0, last_exists=0"| ProtonUidnext
   Ingestor -->|starts| GmailHistory
   Ingestor -->|starts| GmailHeartbeat
   Ingestor -->|starts per account| ProtonIdle
-  Ingestor -->|starts per account| ProtonCondstore
-  Ingestor -->|"passes runFullHydration\n(composition root pattern)"| ReconcileSched
+  Ingestor -->|"starts per account\nfolders from proton_folder_state"| ProtonUidnext
+  Ingestor -->|"passes runFn → runFullHydration\n(composition root)"| RecencySched
   GmailHistory -->|"on 404"| Hydrate
-  ProtonCondstore -->|"on MODSEQ regression"| Hydrate
-  ReconcileSched -->|"at 04:00"| Hydrate
-  Hydrate -->|"INSERT OR IGNORE\nper folder walked"| ProtonCondstore
+  RecencySched -->|"hot: sinceDate=7d\nwarm: sinceDate=90d\ncold: full walk"| Hydrate
+  Hydrate -->|"INSERT OR IGNORE\nper folder walked"| ProtonUidnext
   Hydrate --> Apply
+  ProtonIdle -.->|"EXPUNGE seq → best-effort delete\n(authoritative cleanup via hot tier)"| Apply
 ```
 
-The scheduler and the 404 / MODSEQ-regression handlers all call the same `runFullHydration()` from `src/reconcile/hydrate.ts`. The ingestor wires the `runFn` at the composition root — the scheduler module itself does not import `hydrate.ts` directly (decoupled; testable with a stub).
+All three recency tiers and the Gmail 404 handler call the same `runFullHydration()` from `src/reconcile/hydrate.ts`. The ingestor wires the `runFn` at the composition root — the scheduler module itself does not import `hydrate.ts` directly (decoupled; testable with a stub).
 
 ## Apply path detail
 

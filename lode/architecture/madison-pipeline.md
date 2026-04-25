@@ -91,7 +91,7 @@ flowchart TD
   InboxMCP["inbox-mcp HTTP server\n(port 18080)"]
   Madison["Madison\n(agent container\ntelegram_inbox)"]
 
-  PBridge -->|IDLE + CONDSTORE| Ingestor
+  PBridge -->|IDLE on INBOX + per-folder UIDNEXT poll| Ingestor
   GmailAPI -->|push events + history.list| Ingestor
   Ingestor -->|ingest + write-through| StoreDB
   Ingestor -->|rule engine outcome| IPCOut
@@ -107,7 +107,7 @@ flowchart TD
 
 ### Principle
 
-**Hydration ≡ reconcile's full-walk mode.** The migration script (`scripts/migrate-mirror.ts`) calls `runFullHydration()` — exactly the same function the nightly reconcile calls. First invocation IS the migration; subsequent calls are idempotent re-runs.
+**Hydration ≡ reconcile's full-walk mode.** The migration script (`scripts/migrate-mirror.ts`) calls `runFullHydration()` — exactly the same function each tier of the recency reconcile calls (hot/warm pass `sinceDate`; cold passes none). First invocation IS the migration; subsequent calls are idempotent re-runs.
 
 ### Hydration phases
 
@@ -148,7 +148,7 @@ flowchart TD
 
 ## Related
 
-- [infrastructure/mailroom-mirror.md](../infrastructure/mailroom-mirror.md) — sync worker details (history.list, IDLE+CONDSTORE, reconcile scheduler)
+- [infrastructure/mailroom-mirror.md](../infrastructure/mailroom-mirror.md) — sync worker details (Gmail history.list, Proton IDLE on INBOX, per-folder UIDNEXT polling, three-tier recency reconcile)
 - [infrastructure/madison-pipeline.md](../infrastructure/madison-pipeline.md) — push-driven event delivery (ingestor → subscriber → group queue → Madison)
 - [infrastructure/mailroom-rules.md](../infrastructure/mailroom-rules.md) — rule engine + deploy operational notes
-- Plan: `lode/plans/active/2026-04-madison-read-power/tracker.md`
+- Plan: `lode/plans/complete/2026-04-madison-read-power/tracker.md` (closed 2026-04-25)

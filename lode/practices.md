@@ -45,7 +45,7 @@ Run these steps in order any time you rebuild or migrate mailroom containers. Re
 5. Run actual migration: `docker exec mailroom-ingestor-1 npx tsx scripts/migrate-mirror.ts`. (Run inside the container — the script hardcodes `/var/mailroom/data` and needs `MAILROOM_DATA_DIR` set, which is only true inside the container. Host-side invocation fails with `EACCES mkdir '/var/mailroom/data'`.)
 6. Verify self-audit passes (the script exits non-zero and prints mismatch details if it fails — do not proceed on exit 1).
 7. Bring services up: `env-vault env.vault -- docker compose up -d ingestor inbox-mcp`.
-8. Verify IDLE/CONDSTORE/reconcile workers start clean (check logs — no auth errors, 5 IDLE sessions starting).
+8. Verify IDLE / UIDNEXT-poller / recency-scheduler workers start clean (check logs — no auth errors, 5 IDLE sessions starting, "uidnext-poll" component logging per account, "recency-reconcile: scheduler started" line present).
 9. Restart nanoclaw if the agent container image was also rebuilt: `systemctl --user restart nanoclaw`.
 10. Run sanity SQL: `sqlite3 ~/containers/data/mailroom/store.db "SELECT COUNT(*) FROM message_labels; SELECT COUNT(*) FROM message_folder_uids; SELECT COUNT(*) FROM label_catalog; SELECT COUNT(*) FROM messages WHERE deleted_inferred=1;"` — confirm counts are reasonable (non-zero labels, deleted_inferred << total).
 

@@ -337,15 +337,15 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
 
 ### Wave 5 — Verify + graduate (Jeff-driven)
 
-- [ ] 5.1 Clear Madison's session; fresh spawn via container rebuild
-- [ ] 5.2 AC-V1: Bob-late-payment `query` with group_by=subject + count=true returns grouped counts in one call
-- [ ] 5.3 AC-V2: add a placeholder MCP tool, restart MCP → next Madison spawn invalidates session (check INFO log)
-- [ ] 5.4 AC-V3: archive a test message in Gmail web → `SELECT archived_at FROM messages WHERE ...` within 5 min
-- [ ] 5.5 AC-V4: rename a Gmail label → verify `label_catalog.label` updates within 24h; all existing `message_labels` rows still queryable under new name
+- [x] 5.1 Clear Madison's session; fresh spawn via container rebuild (Jeff-confirmed 2026-04-25)
+- [x] 5.2 AC-V1: Bob-late-payment `query` with group_by=subject + count=true returns grouped counts in one call (Jeff-confirmed 2026-04-25)
+- [x] 5.3 AC-V2: add a placeholder MCP tool, restart MCP → next Madison spawn invalidates session (check INFO log) (Jeff-confirmed 2026-04-25)
+- [x] 5.4 AC-V3: archive a test message in Gmail web → `SELECT archived_at FROM messages WHERE ...` within 5 min (Jeff-confirmed 2026-04-25)
+- [x] 5.5 AC-V4: rename a Gmail label → verify `label_catalog.label` updates within 24h; all existing `message_labels` rows still queryable under new name (Jeff-confirmed 2026-04-25)
 - [x] 5.6 AC-V5: `mark_read` and `add_label` via HTTP MCP both write through to local DB; subsequent `query()` returns immediately. **Initial fail uncovered Wave 2C silent write-failure** (inbox-mcp had `MAILROOM_DB_READONLY=true` from Phase M2 — Wave 2C's writes were swallowed, masked by nightly reconcile). Fixed CF `5935bf9` (drop env var); both write paths verified end-to-end.
-- [ ] 5.7 AC-V6: "are Proton watermarks working?" — Madison doesn't cite NaN issue
+- [x] 5.7 AC-V6: "are Proton watermarks working?" — Madison doesn't cite NaN issue (Jeff-confirmed 2026-04-25)
 - [x] 5.8 AC-V7: nanoclaw 334/334 + mailroom 332/334 (2 perf skipped) green
-- [ ] 5.9 Move plan to `lode/plans/complete/`
+- [x] 5.9 Move plan to `lode/plans/complete/` (2026-04-25)
 
 ### Wave 5.5 — Push-ingest parity (blocks AC-V3 / AC-V6 truth)
 
@@ -374,7 +374,7 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
 - [x] 5.5.10 Deploy: both containers rebuilt + recreated via `cd ~/containers/mailroom && env-vault env.vault -- docker compose build/up -d`. Gotcha: compose's `../data/...` paths only resolve correctly when cwd is the `~/containers/mailroom` symlink — using the real `~/Projects/ConfigFiles/...` path mounts the wrong dir and ingestor crash-loops with "Gmail credentials not found". Post-deploy: 5 IDLE + 5 CONDSTORE + reconcile scheduler all up clean, zero auth errors. **Practices lesson captured below.**
 - [x] 5.5.11 Live verify 2026-04-23 15:57 CDT. Test: Jeff sent `americanvoxpop@gmail.com` → `jeff@jstone.pro`. Result: `messages` row written (`protonmail:<CAKrEtEkhNYn3ieHKhgaqN...@mail.gmail.com>`, subject "Test Message", received_at 20:54:49 UTC); `message_labels` = INBOX; `message_folder_uids` = INBOX:11; `watermarks.watermark_value` advanced to 20:54:49 with `updated_at` 20:57:36.818 (matches ingest log line → watermark bump runs in same tx as label write); `audit_label_coverage(since_hours:1)` → missing_label_count: 0; Madison pipeline fired end-to-end (Jeff notified via Telegram). Gmail-SENT side not yet polled (Gmail poller runs on cycle; orthogonal to Wave 5.5 scope).
 - [x] 5.5.12 `lode/tech-debt.md`: `TD-MAIL-PUSH-WATERMARK` CLOSED with CF `6dfeba8`. `lode/infrastructure/mailroom-mirror.md`: ingest-path label invariant + audit tool documented. Madison's `CLAUDE.md`: audit tool added in a Diagnostic subsection between reads and writes.
-- [ ] 5.5.13 **(Jeff-driven)** Re-run Wave 5 AC-V3 (archive in Gmail web → local DB reflects) and AC-V6 (a-mem freshness sanity) now that push-ingest parity holds.
+- [x] 5.5.13 **(Jeff-driven)** Re-run Wave 5 AC-V3 (archive in Gmail web → local DB reflects) and AC-V6 (a-mem freshness sanity) now that push-ingest parity holds. (Jeff-confirmed 2026-04-25)
 
 ### Wave 5.6 — CONDSTORE non-INBOX folder seeding (blocks AC-S2 real-world claim)
 
@@ -408,7 +408,7 @@ Bonus phase added 2026-04-23 after Jeff asked whether Madison could query/mark r
 - [x] 5.6.4 `src/reconcile/hydrate.ts` walker hookup: every folder walked → `INSERT OR IGNORE INTO proton_folder_state`. **Deviation**: did NOT use `upsertFolderState` helper because its `ON CONFLICT DO UPDATE SET last_modseq=excluded.last_modseq` would reset real MODSEQ values back to 0; using direct `INSERT OR IGNORE` preserves existing state. (CF `c939881`)
 - [x] 5.6.5 + 5.6.6 Integration tests `src/integration/wave-5.6-folder-seeding.test.ts`: empty-state-seeded, pre-populated-idempotent, IMAP-throws-handled, walker-upsert-path, duplicate-run-safe. **Deviation**: logger.warn spy simplified — pino child loggers hold their own reference and can't be intercepted via `vi.spyOn(logger, 'warn')`. Test validates no-throw + no-DB-mutation instead, which are the actual safety properties. TODO comment for folder-rename deferred. 338 → 344 passing. (CF `aaa32fe`)
 - [x] 5.6.7 Deploy: rebuilt ingestor image + recreated container via `cd ~/containers/mailroom && env-vault env.vault -- docker compose build ingestor && ... up -d ingestor`. Post-deploy logs: 5 "proton_folder_state seeded" INFO lines + 5 IDLE + 5 CONDSTORE + reconcile scheduler. Zero errors. Final state: `SELECT COUNT(*) FROM proton_folder_state` = 305 rows (61 folders × 5 Proton accounts); Labels/Family present for every account.
-- [ ] 5.6.8 **(Jeff-driven)** Live verify: apply any label to any test message in Proton web; within 5 min, `SELECT labels FROM message_labels WHERE message_id = <msg>` reflects it. (The existing test-message / Family label has already been healed via the migrate-mirror run that ran in parallel with this deploy — pick a different label/message to exercise the CONDSTORE-push path fresh.)
+- [x] 5.6.8 **(Jeff-driven)** Live verify: apply any label to any test message in Proton web; within 5 min, `SELECT labels FROM message_labels WHERE message_id = <msg>` reflects it. (Jeff-confirmed 2026-04-25; CONDSTORE was subsequently replaced by UIDNEXT polling in Wave 5.7.)
 - [x] 5.6.9 `TD-MAIL-CONDSTORE-NONINBOX` CLOSED in `lode/tech-debt.md` with CF `aea0062` + `428e2f6` + `c939881`.
 - [x] 5.6.10 `lode/infrastructure/mailroom-mirror.md` CONDSTORE section extended with "Folder-state seeding (Wave 5.6)" subsection + startup-wiring diagram refreshed with `seedFolderState` node and walker → CONDSTORE edge.
 
@@ -472,7 +472,7 @@ Wave 2B's entire CONDSTORE-based incremental sync design (AC-S2) is **not achiev
   - `TD-MAIL-IDLE-EXPUNGE-SEQNO` OPEN — seqno-based best-effort IDLE expunges, pending bridge QRESYNC/UIDPLUS support.
   - `TD-MAIL-PROTON-ALIAS-DOUBLE-POLL` OPEN — `pm.me`/`protonmail.com` alias double-poll.
   - `TD-MAIL-CONDSTORE-NONINBOX` retagged SUPERSEDED by `TD-MAIL-BRIDGE-NO-CONDSTORE`.
-- [ ] 5.7.10 Graduate: `lode/infrastructure/mailroom-mirror.md` — rewrite sync architecture section (drop CONDSTORE, describe UIDNEXT polling + recency tiers); refresh startup diagram.
+- [x] 5.7.10 Graduate: `lode/infrastructure/mailroom-mirror.md` — rewrite sync architecture section (drop CONDSTORE, describe UIDNEXT polling + recency tiers); refresh startup diagram. (2026-04-25)
 
 **Risks**:
 - `UID SEARCH SINCE <date>` on large folders (`All Mail` with 30k messages) may return a large UID list for a 90d warm window. Mitigation: chunked FETCH, paginate if needed. Realistically for 7-day hot window it's small.
@@ -492,7 +492,11 @@ Wave 2B's entire CONDSTORE-based incremental sync design (AC-S2) is **not achiev
 
 ## Current status
 
-**Waves 0–4.5 complete (2026-04-23).** Mirror foundation live + persona refreshed + lode graduated + read-tracking added. Day's commits: NC `b866105` `c6cdd3a` `7e366ca` `540e98e`; CF `f8f827e` `7afa3ab` `16886aa` `f6c8019` `ab6febd` `1e46257` `f398393` `86b9072` `57e631b` `a7baeed` `a26b590` `1ad00ee`. Mailroom 332 tests. Nanoclaw 334 tests. Live mirror: 60,166 messages, 192,080 label entries, 175 catalog entries, 51 inferred-deletes (within blast guard), schema_version=4, `read_at` column populated on demand. 15 inbox MCP tools live. Madison's session auto-invalidates on next spawn (Trawl-config-in-hash + Codex P1 NULL-hash-clear).
+**CLOSED 2026-04-25.** All waves complete: Waves 0–4.5 (mirror foundation + persona + read-tracking), Wave 5 (Jeff-driven verification of all six acceptance criteria), Wave 5.5 (push-ingest parity, closes `TD-MAIL-PUSH-WATERMARK`), Wave 5.6 (folder-state seeding, original CONDSTORE design), Wave 5.7 (replaced CONDSTORE with UIDNEXT polling + three-tier recency reconcile after the bridge was confirmed not to advertise CONDSTORE), Wave 5.8 (write-through correctness, separate plan). Branch `madison-read-power` merged to main; left in place as a safety net. Lode graduations:
+- `lode/architecture/madison-pipeline.md` — mirror data model + session-hash pattern.
+- `lode/infrastructure/mailroom-mirror.md` — UIDNEXT polling + recency-tiered reconcile (Wave 5.7.10).
+- `lode/infrastructure/madison-pipeline.md` — push-driven delivery path.
+Open follow-ups live in `lode/tech-debt.md` (`TD-MAIL-BRIDGE-NO-CONDSTORE`, `TD-MAIL-IDLE-EXPUNGE-SEQNO`, `TD-MAIL-PROTON-ALIAS-DOUBLE-POLL`).
 
 Mirror foundation live in production with full source coverage:
 - 60,166 messages mirrored across 6 accounts (5 Proton + 1 Gmail)
