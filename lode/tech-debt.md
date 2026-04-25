@@ -34,6 +34,13 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 - **Residual limitation**: imapflow's `expunge` callback delivers an IMAP SEQUENCE NUMBER (per RFC 3501), not a UID. Without CONDSTORE/QRESYNC we can't request UID-based expunges. Current implementation uses seqno as a best-effort UID for `applyProtonFolderMembershipChanges`; hot-tier reconcile (30 min, `sinceDate=7d`) provides the authoritative cleanup via UID set-diff.
 - **Done looks like**: when Proton bridge adds QRESYNC/UIDPLUS support, switch the IDLE expunge handler to UID-based delivery and drop the seqno best-effort. Until then, the hot reconcile backstop is sufficient.
 
+### TD-MAIL-FRESH-INSTALL-SKILLS — OPEN (captured 2026-04-25, deferred from `2026-04-mailroom-extraction` Phases M8 + M9)
+- **Scope**: M
+- **Finding**: The `/add-gmail` and (potentially) `/add-protonmail` skills in nanoclaw still describe the pre-extraction install flow — credentials in nanoclaw's `.env`, OAuth output to `~/.gmail-mcp/`, restart via `systemctl --user restart nanoclaw`. After mailroom extraction these are wrong: credentials live in mailroom's env-vault, OAuth output goes to `~/containers/data/mailroom/gmail-mcp/`, restart is `dcc up mailroom`.
+- **Impact**: zero on Jeff's working install. Will bite a fresh-install scenario (new instance — americanvoxpop, future) where the skills' instructions don't reflect post-extraction reality.
+- **Done looks like**: `/add-gmail` skill updated for mailroom-era install (target dir change, drop the `git remote add gmail` / nanoclaw merge steps, ensure `INBOX_DB_KEY` exists in env.vault, change restart verb). `/add-protonmail` either updated similarly if it exists, or its content folded into mailroom's README.md as fresh-install Proton setup. Migration-from-existing-install path documented separately (one-time script to populate mailroom's env.vault from prior `~/.protonmail-bridge/config.json` + nanoclaw `.env`).
+- **Related**: `lode/plans/complete/2026-04-mailroom-extraction/tracker.md` Phases M8 + M9. Likely lands as part of (or after) the planned `2026-04-mailroom-repo-extraction` source-split, since the skills will need updating anyway to reflect the new mailroom repo location.
+
 ### TD-MAIL-PROTON-ALIAS-DOUBLE-POLL — OPEN (captured 2026-04-24, Wave 5.7)
 - **Scope**: S
 - **Finding**: `stone.jeffrey@pm.me` and `stone.jeffrey@protonmail.com` are aliases for the same Proton mailbox. They're configured as two separate accounts in mailroom, each with its own IDLE + UIDNEXT poller + reconcile tier run. Every reconcile walks the same mailbox twice.

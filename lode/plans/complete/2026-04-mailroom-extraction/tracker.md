@@ -199,7 +199,7 @@ Landed on `unified-inbox` as commit `87e658b` (2026-04-21). 7,153 lines deleted,
 
 - [x] **M6.1** `ss -tnp` shows zero established host→bridge connections on 1143. Listener was `0.0.0.0:1143` (docker-proxy only, no non-docker consumer). Cutover in M5 fully detached nanoclaw from the loopback bridge port; no surprise host consumers found. (2026-04-21)
 - [x] **M6.2** Edited `~/containers/protonmail/docker-compose.yml` — both ports now bound to `127.0.0.1`. Applied via `docker compose up -d` directly (bridge is non-stow; `dcc up protonmail` can't resolve it via the stow lookup). Container recreated cleanly; mailroom ingestor kept running (restart count 0), continued ingesting through the bridge restart via `protonmail-bridge:143` service DNS on `protonmail_default`. 24h soak started 2026-04-21. (2026-04-21)
-- [ ] **M6.3** After 24h of stable loopback operation (earliest 2026-04-22), drop the `ports:` stanza entirely. Bridge then reachable ONLY via `protonmail_default` Docker network. Apply via `docker compose up -d` from `~/containers/protonmail/`.
+- [x] **M6.3** Verified 2026-04-25: `ports:` stanza no longer present in `~/Projects/ConfigFiles/containers/protonmail/protonmail/docker-compose.yml`. Bridge reachable only via `protonmail_default` Docker network. The 24h soak passed and the stanza was subsequently dropped without incident.
 
 ### Side cleanup during M6 (2026-04-21)
 
@@ -210,25 +210,19 @@ Two pre-M5 residues surfaced during pre-M6 Lode-vs-code audit and were cleaned u
 
 ### Phase M7 — Lode graduation
 
-- [ ] **M7.1** Create `lode/architecture/mailroom.md` — high-level architecture snapshot (what's in each stack, networks, data flow, secrets).
-- [ ] **M7.2** Update `lode/lode-map.md` + `lode/summary.md` to reflect the new component boundary.
-- [ ] **M7.3** Update `lode/groups.md` with the new Madison Inbox MCP integration shape.
-- [ ] **M7.4** Move this plan to `lode/plans/complete/` once all phases checked off.
-- [ ] **M7.5** Graduate durable findings from this plan's `findings.md` into lode domain files; leave pointer notes in findings.md.
+- [x] **M7.1** Subsumed by `lode/architecture/madison-pipeline.md` (mirror data model + session-hash + hydration phases) + `lode/infrastructure/mailroom-mirror.md` (sync worker architecture, UIDNEXT polling, recency-tiered reconcile, restore tool, Wave 5.8 shape contract). The originally-planned `lode/architecture/mailroom.md` was redundant — these two cover the same ground at the appropriate level.
+- [x] **M7.2** `lode/lode-map.md` + `lode/summary.md` reflect the new boundary (mailroom as a separate Docker stack producing IPC events + HTTP MCP). Updates landed across multiple commits including the read-power graduation (CF `d46079f`).
+- [x] **M7.3** Madison Inbox MCP integration shape covered in `lode/infrastructure/madison-pipeline.md` (push-driven delivery path) and `lode/architecture/madison-pipeline.md` (mirror data model with the `mcp__messages__*` tool family). `lode/groups.md` continues to document channel-routing concerns; the MCP wiring lives in the dedicated pipeline docs.
+- [x] **M7.4** Moved to `lode/plans/complete/` 2026-04-25.
+- [x] **M7.5** Durable findings graduated to: `lode/infrastructure/mailroom-rules.md` (rule engine), `lode/infrastructure/mailroom-mirror.md` (sync architecture), `lode/infrastructure/madison-pipeline.md` (push delivery), `lode/architecture/madison-pipeline.md` (data model + session-hash). Findings.md retains its original session content as historical reference.
 
 ### Phase M8 — Update `/add-gmail` skill for mailroom-era fresh install
 
-- [ ] **M8.1** Change target credentials dir: `~/.gmail-mcp/` → `~/containers/data/mailroom/gmail-mcp/`. The `npx -y @gongrzhe/server-gmail-autoauth-mcp auth` browser flow still runs on the host (OAuth callback needs host-side listener); only the output dir changes.
-- [ ] **M8.2** Remove the "merge gmail channel into nanoclaw" steps (the `git remote add gmail`, `git merge gmail/main`, `src/channels/gmail.ts` validation) — obsolete because nanoclaw no longer owns that code post-extraction.
-- [ ] **M8.3** Add a step to ensure `INBOX_DB_KEY` exists in mailroom's env.vault (generate via `scripts/inbox-keygen.ts` equivalent in the mailroom repo, paste via `env-vault edit`).
-- [ ] **M8.4** Change the restart verb at the end from `systemctl --user restart nanoclaw` / `launchctl kickstart` → `dcc up mailroom` (picks up new credentials from the bind-mounted dir).
-- [ ] **M8.5** Update the "Removal" section of the skill analogously.
+- [x] **M8.1–M8.5** Deferred to `TD-MAIL-FRESH-INSTALL-SKILLS` in `lode/tech-debt.md`. The extraction itself is shipped; updating the skill flows for fresh-install scenarios is a separate concern that doesn't block closure of this plan. The current install (Jeff's) is working; new instances would follow the upstream NanoClaw skill model + run the mailroom repo separately.
 
 ### Phase M9 — Protonmail fresh-install documentation
 
-- [ ] **M9.1** Audit: does an `/add-protonmail` skill exist in the nanoclaw skills dir? If yes, adapt it (similar changes to M8). If no, mailroom's README.md owns the fresh-install Proton setup docs.
-- [ ] **M9.2** Document: `env-vault edit env.vault` → add `PROTONMAIL_BRIDGE_PASSWORD` + `PROTONMAIL_ADDRESSES` (comma-separated). Then `dcc up mailroom`. The bridge itself (login, creds) is a separate pre-req handled by the existing `~/containers/protonmail/` setup — mailroom docs reference but don't duplicate it.
-- [ ] **M9.3** Note the migration-from-existing-install path separately from fresh-install: existing users have `~/.protonmail-bridge/config.json` + `PROTONMAIL_BRIDGE_PASSWORD` in nanoclaw's `.env`; one-time script to populate mailroom's env.vault from those sources.
+- [x] **M9.1–M9.3** Deferred to `TD-MAIL-FRESH-INSTALL-SKILLS` in `lode/tech-debt.md` alongside M8. Same rationale: the extraction is shipped; fresh-install docs are a separate concern picked up when a new instance is built.
 
 ## Errors
 
@@ -239,7 +233,7 @@ Two pre-M5 residues surfaced during pre-M6 Lode-vs-code audit and were cleaned u
 
 ## Current status
 
-**Phases M0–M5 complete; M6.1+M6.2 complete; M6.3 in 24h soak (earliest 2026-04-22).** Mailroom is the sole source of truth for inbox email. Nanoclaw is lean: router + orchestrator + chat channels + mailroom-subscriber. No more duplicate Gmail race, no more ENOTFOUND, no more vendored inbox-store/queries code. Agent container slimmer (inbox-mcp COPY+RUN stanza removed). Deps down by 7 npm packages. Protonmail bridge now publishes to loopback only (`127.0.0.1:1143 / 1025`); host-external reach eliminated.
+**CLOSED 2026-04-25.** All extraction phases (M0–M5) shipped + bridge hardening (M6) verified + lode graduation (M7) confirmed mapped to permanent infrastructure docs. Forward-looking skill updates (M8 `/add-gmail` skill, M9 `/add-protonmail` fresh-install docs) deferred to `TD-MAIL-FRESH-INSTALL-SKILLS` — orthogonal to the extraction itself; the current install works and the skill flows can be updated when new instances are spun up. Mailroom is the sole source of truth for inbox email. Nanoclaw is lean: router + orchestrator + chat channels + mailroom-subscriber. Protonmail bridge publishes only via Docker network (no host ports). Subsequent waves (5.5 push-ingest parity, 5.6 folder-state seeding, 5.7 UIDNEXT polling + recency-tiered reconcile, 5.8 write-through correctness, read-power session-hash invalidation) layered on top of this foundation in their own plans, all now in `plans/complete/`.
 
 End-to-end flow (live on jarvis):
 
