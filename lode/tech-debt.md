@@ -14,14 +14,12 @@ When starting work on an item, move it to an active plan (`lode/plans/active/...
 
 ## Mailroom
 
-### TD-MAIL-SEEN-FLAG-RELIABILITY — OPEN (captured 2026-04-25)
-- **Repo**: `~/Projects/ConfigFiles/containers/mailroom/mailroom/`
-- **Scope**: S
-- **Finding**: the proton-poller sets the IMAP `\Seen` flag after each successful ingest, but the flag-set step is best-effort and can silently fail when the bridge hits transient errors (observed: `ImapFlow … B NO a mailbox with that name already exists` in `mailroom-ingestor-1` logs on 2026-04-25 morning). When `\Seen` SET fails, the message IS in the store (and may even be auto-archived) but Jeff's IMAP client still shows it as unread.
-- **Symptom**: cluster of inbox-unread messages on 2026-04-25 morning (USPS 7:25, PyQuant 7:32, Tanagi 8:12, Travis GOP 8:31) all in store, mostly archived, but `\Seen` not set. Confusing because earlier overnight messages from the same accounts ARE marked read.
-- **Why OPEN**: not the cause of the brief-blindness incident (that's the watermark bug, see `lode/plans/active/2026-04-morning-brief-blindness/`). The `\Seen` issue is cosmetic from the brief's perspective but degrades Jeff's inbox-view experience.
-- **Done looks like**: retry the `\Seen` SET on transient bridge errors with bounded backoff; OR a periodic reconcile that scans for `archived_at IS NOT NULL` rows whose IMAP `\Seen` is unset and reapplies. Either approach lives in `src/proton/poller.ts` post-ingest path.
-- **Trigger to un-defer**: another visible cluster (>3 simultaneously-unread auto-archived items) or any user complaint. Otherwise low priority.
+### TD-MAIL-SEEN-FLAG-RELIABILITY — RESOLVED 2026-04-25
+- **Resolution**: rewrote the `\Seen`-set block in `src/proton/poller.ts` (~L273+):
+  - Skip the flag-set entirely when `result.archived === true` (the rule engine MOVED the message; the INBOX UID is invalid and the flag-add would always fail). The skip is keyed on the rule-engine return value (authoritative) rather than the prior heuristic of "catch every error and log at debug."
+  - For not-archived messages, retry once with a 200ms backoff before giving up. Persistent failure now logs at WARN with the recipient address so the operator can see the bridge is misbehaving instead of accumulating silent debug logs.
+- **Originally captured 2026-04-25 morning** during the brief-blindness investigation: cluster of inbox-unread messages (USPS 7:25, PyQuant 7:32, Tanagi 8:12, Travis GOP 8:31) all in store, mostly archived, but `\Seen` not set. The fix removes the silent-failure path that conflated archive races with transient bridge errors.
+- **Future enhancement (deferred)**: a periodic reconcile that scans `messages WHERE archived_at IS NULL AND read_at IS NOT NULL` and ensures their IMAP `\Seen` matches. Worth doing if the WARN logs ever fire in practice; until then the retry handles the common case.
 
 ### TD-MAIL-BRIDGE-NO-CONDSTORE — OPEN (captured 2026-04-24, Wave 5.7)
 - **Finding**: the Proton bridge (host `protonmail-bridge` port 143) does NOT advertise the IMAP CONDSTORE capability. `client.capability` returns zero CONDSTORE/QRESYNC/ENABLE entries. `client.status(folder, {highestModseq:true})` returns `{path, messages}` with no `highestModseq` field. `client.mailbox.highestModseq` after `getMailboxLock` is `undefined`. `mailboxOpen({condStore:true})` also returns no MODSEQ data. Confirmed live against `jeff@jstone.pro` INBOX + `Labels/Family` (79 messages).
