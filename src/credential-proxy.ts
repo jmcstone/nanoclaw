@@ -27,12 +27,19 @@ export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
 ): Promise<Server> {
-  const secrets = readEnvFile([
+  // Read from .env first, fall back to process.env so deployments that inject
+  // credentials via systemd / launchd / CI (instead of a checked-in .env file)
+  // start the proxy with real secrets and pick the correct auth mode.
+  const SECRET_KEYS = [
     'ANTHROPIC_API_KEY',
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
-  ]);
+  ] as const;
+  const fromFile = readEnvFile([...SECRET_KEYS]);
+  const secrets: Record<(typeof SECRET_KEYS)[number], string> = Object.fromEntries(
+    SECRET_KEYS.map((k) => [k, fromFile[k] ?? process.env[k] ?? '']),
+  ) as Record<(typeof SECRET_KEYS)[number], string>;
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
   const oauthToken =

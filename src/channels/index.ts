@@ -4,7 +4,7 @@
 // discord
 
 // gmail — retired 2026-04-21; mailroom now owns Gmail ingestion + exposes
-// mcp__inbox__* for reads via mailroom-subscriber.
+// mcp__messages__* for reads via mailroom-subscriber.
 
 // protonmail — retired 2026-04-21; same as gmail.
 

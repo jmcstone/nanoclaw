@@ -4,7 +4,7 @@ import path from 'path';
 
 import { logger } from '../logger.js';
 import { Channel, NewMessage } from '../types.js';
-import { findEmailTargetJid } from '../inbox-routing.js';
+import { findEmailTarget, EMAIL_TARGET_FOLDER } from '../inbox-routing.js';
 import { ChannelOpts, registerChannel } from './registry.js';
 
 const DEFAULT_IPC_DIR = path.join(
@@ -193,7 +193,8 @@ class MailroomSubscriber implements Channel {
   }
 
   private dispatch(event: ClassifiedEvent, kind: InboxEventKind): void {
-    const targetJid = findEmailTargetJid(this.opts.registeredGroups());
+    const target = findEmailTarget(this.opts.registeredGroups());
+    const targetJid = target?.jid ?? null;
     if (!targetJid) {
       logger.debug(
         { messageId: event.message_id, kind },
@@ -228,9 +229,15 @@ class MailroomSubscriber implements Channel {
         lines.push(`Rules applied: ${summary.join('; ')}`);
     }
     lines.push('');
-    lines.push(
-      `Use mcp__inbox__search, mcp__inbox__thread, or mcp__inbox__recent to read more; mcp__inbox__apply_action / delete / send_reply / send_message to act.`,
-    );
+    if (target?.inboxCapable) {
+      lines.push(
+        `Use mcp__messages__search, mcp__messages__thread, or mcp__messages__recent to read more; mcp__messages__apply_action / delete / send_reply / send_message to act.`,
+      );
+    } else {
+      lines.push(
+        `Note: this chat doesn't have inbox tools mounted — I can describe and discuss this email, but I can't search, label, archive, or reply from here. To act on email, set up a group with folder "${EMAIL_TARGET_FOLDER}".`,
+      );
+    }
     const content = lines.join('\n');
 
     const message: NewMessage = {
