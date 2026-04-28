@@ -839,6 +839,48 @@ describe('forward_to_group', () => {
     expect(sentMessages[0].text).toContain('[from Other]');
   });
 
+  it('prepends target group trigger when requiresTrigger is not false', async () => {
+    // OTHER_GROUP has trigger '@Andy' and undefined requiresTrigger (defaults
+    // to true for non-main groups). Without the trigger prepend, the recipient
+    // container would never wake up to process the forward.
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other-group',
+        message: 'wake up please',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages[0].text.startsWith('@Andy [from Third]')).toBe(true);
+  });
+
+  it('omits trigger when target group has requiresTrigger=false', async () => {
+    groups['notrigger@g.us'] = {
+      name: 'NoTrigger',
+      folder: 'notrigger-group',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      requiresTrigger: false,
+    };
+
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'notrigger-group',
+        message: 'no trigger needed',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages[0].text.startsWith('[from Third]')).toBe(true);
+    expect(sentMessages[0].text).not.toContain('@Andy');
+  });
+
   it('logs but does not throw when sendMessage fails', async () => {
     deps.sendMessage = async () => {
       throw new Error('telegram down');

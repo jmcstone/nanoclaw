@@ -518,9 +518,16 @@ export async function processTaskIpc(
         }
       }
 
-      // Build attribution-prefixed text. Path is shown relative to the shared
-      // root so it works in both source and target containers.
-      const lines: string[] = [`[from ${sourceDisplayName}]`, '', data.message];
+      // Build attribution-prefixed text. If target requires a wake trigger
+      // (e.g. AVP needs "@Madison"), prepend it so the message actually wakes
+      // her container — without this, the Telegram delivery succeeds but the
+      // recipient never processes the forward. Path is shown relative to the
+      // shared root so it works in both source and target containers.
+      const attributionLine =
+        targetGroup.requiresTrigger !== false && targetGroup.trigger
+          ? `${targetGroup.trigger} [from ${sourceDisplayName}]`
+          : `[from ${sourceDisplayName}]`;
+      const lines: string[] = [attributionLine, '', data.message];
       if (data.attachmentPath) {
         const relative = data.attachmentPath.replace(
           '/workspace/extra/shared/',
