@@ -48,5 +48,6 @@ Resolve when the ORB migration begins — probably rename Jeff's personal one to
 
 - `plans/active/2026-04-trading-group/` — full design for the AlgoTrader group (Phase 1 complete)
 - `plans/active/2026-04-amem-integration/` — a-mem wiring plan (current)
+- `plans/active/2026-04-cross-lead-workflows/` — Inbox ↔ AVP collaboration: shared `_Shared/` dropbox, router cross-group forward, mailroom `forward_to_group` rule action, AVP outbound email via Inbox proxy (Phase 0 — design captured)
 - `practices.md` — per-group data layout convention
 - `infrastructure/persistence.md` — where group data lives on disk
