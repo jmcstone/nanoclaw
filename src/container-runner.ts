@@ -15,9 +15,11 @@ import {
   DOWNLOADS_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  LITELLM_BASE_URL,
   OBSIDIAN_TASKS_DIR,
   OLLAMA_ADMIN_TOOLS,
   ONECLI_URL,
+  resolveGroupLitellmKey,
   resolveGroupModel,
   TIMEZONE,
 } from './config.js';
@@ -243,6 +245,7 @@ function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   modelOverride?: string,
+  litellmApiKey?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -258,6 +261,14 @@ function buildContainerArgs(
   // Forward Ollama admin tools flag if enabled
   if (OLLAMA_ADMIN_TOOLS) {
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
+  }
+
+  // LiteLLM gateway: register MCP only when this group has a virtual key.
+  // Default Anthropic-direct path is unaffected — LiteLLM is an opt-in tool,
+  // not a base-URL swap. Madison decides per-call whether to route through it.
+  if (litellmApiKey) {
+    args.push('-e', `LITELLM_BASE_URL=${LITELLM_BASE_URL}`);
+    args.push('-e', `LITELLM_API_KEY=${litellmApiKey}`);
   }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
@@ -319,10 +330,12 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const modelOverride = resolveGroupModel(group.folder);
+  const litellmApiKey = resolveGroupLitellmKey(group.folder);
   const containerArgs = buildContainerArgs(
     mounts,
     containerName,
     modelOverride,
+    litellmApiKey,
   );
 
   logger.debug(

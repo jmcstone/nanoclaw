@@ -171,6 +171,7 @@ export interface GroupOverride {
   model?: string;
   sessionMaxMessages?: number;
   sessionMaxAgeHours?: number;
+  litellmApiKey?: string;
 }
 
 function readGroupOverrides(): Record<string, GroupOverride> {
@@ -208,6 +209,25 @@ export function resolveGroupModel(folder: string): string | undefined {
     ? override.trim()
     : undefined;
 }
+
+export function resolveGroupLitellmKey(folder: string): string | undefined {
+  // Precedence: per-group .env var (host-only, never synced) → group-overrides.json
+  // (Obsidian-synced). .env is preferred for keys to keep secrets out of any
+  // device that syncs the Obsidian vault. Reads from .env on demand rather than
+  // process.env (readEnvFile design — secrets never enter the host process env).
+  const envName = `LITELLM_API_KEY_${folder.replace(/-/g, '_').toUpperCase()}`;
+  const envValue = readEnvFile([envName])[envName];
+  if (typeof envValue === 'string' && envValue.trim()) {
+    return envValue.trim();
+  }
+  const override = getGroupOverride(folder).litellmApiKey;
+  return typeof override === 'string' && override.trim()
+    ? override.trim()
+    : undefined;
+}
+
+export const LITELLM_BASE_URL =
+  process.env.LITELLM_BASE_URL || 'http://host.docker.internal:4000';
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

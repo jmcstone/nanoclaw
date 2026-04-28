@@ -689,6 +689,19 @@ async function runQuery(
       args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
     },
   };
+  // LiteLLM route MCP — only registered when this group has a virtual key.
+  // Container-runner injects LITELLM_API_KEY per-group from group-overrides.json.
+  const hasLitellm = !!process.env.LITELLM_API_KEY;
+  if (hasLitellm) {
+    mcpServers['litellm'] = {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'litellm-route-mcp-stdio.js')],
+      env: {
+        LITELLM_BASE_URL: process.env.LITELLM_BASE_URL ?? '',
+        LITELLM_API_KEY: process.env.LITELLM_API_KEY,
+      },
+    };
+  }
   if (hasContextMode) {
     const ctxRoot = resolveCtxModeRoot();
     if (ctxRoot) {
@@ -752,6 +765,7 @@ async function runQuery(
     'NotebookEdit',
     'mcp__nanoclaw__*',
     'mcp__ollama__*',
+    ...(hasLitellm ? ['mcp__litellm__*'] : []),
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
     ...(hasInbox ? ['mcp__messages__*'] : []),
