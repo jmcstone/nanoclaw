@@ -23,6 +23,10 @@ groups/*/**
 # Temp files
 .tmp-*
 
+# Python
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 
