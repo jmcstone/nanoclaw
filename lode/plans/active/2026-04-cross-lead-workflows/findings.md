@@ -71,13 +71,23 @@ Originally the plan said "move accounts.json." On investigation:
 
 So the migration is "move the whole `_Settings/` content to `_Shared/_Settings/`" with mailroom's compose mounts repointed accordingly. Madison Inbox's edit path becomes `/workspace/extra/shared/_Settings/rules.json` (her existing `_Shared/` RW mount from Phase 1 covers this). AVP gets read access for free via the same Phase-1 mount.
 
-### Attachments lifecycle for Phase 2 cross-group routing
+### How recipient groups read routed emails (revised: scoped MCP, not transit folder)
 
-- AVP has no `mcp__inbox__*` access (mailroom MCP gated on `telegram_inbox`).
-- Mailroom's `forward_to_group` rule action extracts attachments at routing time via `fetchAttachmentTool` (already existing) and writes to `_Shared/Attachments/<message_id>/<position>-<sanitizedFilename>`.
-- Receiving Madison reads from `/workspace/extra/shared/Attachments/` and copies what she wants to keep into her vault's `_attachments/` (existing per-group convention).
-- 30-day mtime GC keeps `_Shared/Attachments/` from growing unboundedly. Matches "scratch inbox" semantics already established for `/workspace/downloads/` in `practices.md`.
-- Phase 3 outbound (`send_forward`) does NOT need this path — mailroom's `send_forward` re-fetches attachments from `store.db` at send time given `original_message_id`.
+**Earlier draft proposed `_Shared/Attachments/` extraction at routing time.** Replaced with the cleaner design below after Jeff's feedback that bytes-on-disk is clunky and what AVP actually wants is the same kind of access Madison Inbox has, just scoped to her routed messages.
+
+**Final design:**
+- A new mailroom `routings` table: `(message_id, group_folder, rule_id, routed_at)` PK on `(message_id, group_folder)`.
+- Mailroom's existing inbox MCP server is registered for the recipient group's container, with **server-side authorization** keyed off the calling group's identity (HTTP header or per-group endpoint URL).
+- Read tools (`get_message`, `thread`, `attachment_to_path`) and message-bound send tools (`send_reply`, `send_reply_all`, `send_forward`) check `(message_id, calling_group)` against `routings`. New-outbound (`send_message`) uses an `accounts.json` allow-list instead.
+- Recipient calls `mcp__inbox__attachment_to_path(message_id, position)` when she wants a file — bytes land in her container's `/workspace/inbox-attachments/`. No `_Shared/Attachments/` transit dir, no extraction at routing time, no GC step.
+- Phase 3 send tools are the existing mailroom tools verbatim — threading via `getThreadingHeaders()` works automatically because the recipient calls the same code path Madison Inbox already does.
+
+**Why this beats the transit-folder design:**
+- No bytes-on-disk for routing; only when recipient explicitly asks
+- No `_Shared/Attachments/` GC required
+- No "proxy through Inbox" indirection for sends — recipient calls send tools directly with mailroom enforcing scope
+- Surface-area match: AVP's MCP tools have the same names + signatures as Inbox's, just narrower in what they return/accept
+- Future-proof: any new mailroom MCP tool inherits the routings-table scope automatically as long as it takes `message_id` as input
 
 ### `_Shared/` mounted RW to every group, not RO
 

@@ -7,6 +7,22 @@
 - Decisions locked: user-managed rules over thread-ownership tagging; proxy-through-Inbox for outbound; single approval point in AVP chat; `accounts.json` relocated to `_Shared/_Settings/`; default `include_original_attachments` reply=false / forward=true; `from` required on send, account-resolved otherwise.
 - `tracker.md` and `findings.md` written. Implementation not started.
 
+## 2026-04-28 — Phase 2/3 redesign: scoped inbox MCP replaces attachment transit + send proxy
+
+After Phase 1 shipped, Jeff pushed back on two earlier design choices:
+
+1. **"It's clunky to copy attachments to a shared folder when they're already in mailroom's store."** Agreed — dropped `_Shared/Attachments/` extraction step from Phase 2.
+2. **"What AVP gets is almost a wrapped version of some of the MCP tools Madison Inbox has."** That framing crystallized the right design.
+
+**New design** (replaces ~half of the old Phase 2 + all of the old Phase 3):
+- Phase 2 adds a `routings` table in mailroom: `(message_id, group_folder, rule_id, routed_at)`. Rule action renamed `forward_to_group` → `route_to_group` to avoid colliding with the Phase 1 Madison-to-Madison MCP tool.
+- Phase 3 stops building a `send_via_inbox` proxy. Instead, mailroom's existing inbox MCP gets a server-side authorization layer keyed off the calling group; routed-recipient containers register the same MCP, scoped to their own routings.
+- Recipient (e.g., AVP) sees the same tool surface as Madison Inbox: `mcp__inbox__get_message`, `attachment_to_path`, `send_reply{,_all}`, `send_forward`, `send_message`. Each call validates against `routings` (or against `accounts.json` allow-list for new-outbound).
+- Threading correctness is automatic — recipient calls existing mailroom send tools directly; `getThreadingHeaders()` runs as it does today.
+- No `_Shared/Attachments/` folder, no GC, no `original_message_id` payload field, no proxy hop.
+
+Tracker + findings updated. `_Shared/Attachments/` directory still exists on disk (created in Phase 1 as part of `_Shared/` skeleton) but has no consumers in the new design — leaving it as a noop dir for now in case future use cases emerge.
+
 ## 2026-04-28 — Plan review pass (10 issues raised, all resolved)
 
 Senior-engineer review of the plan surfaced 10 issues across 3 tiers. All resolved into tracker/findings updates without code changes:

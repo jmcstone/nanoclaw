@@ -29,25 +29,31 @@ Enable the AmericanVoxPop Madison to collaborate with the Inbox Madison on email
 
 ### Phase 2 — User-managed inbound routing rules
 
-- [ ] Add `forward_to_group` action type to mailroom rules engine (`src/rules/apply/{proton,gmail}.ts`)
-- [ ] When `forward_to_group` fires on a message with attachments: extract bytes via existing `fetchAttachmentTool`, write to `_Shared/Attachments/<message_id>/<position>-<sanitizedFilename>`, include the path list in the routed event payload. Failure to extract → forward text-only with `[attachments failed: see error log]` note.
-- [ ] Add `_Shared/Attachments/` 30-day mtime garbage-collector (cron entry or mailroom periodic task — decide during impl)
-- [ ] Extend `rules.json` schema to support the new action; document in `~/Projects/mailroom/lode/reference/rules-schema.md`
+Names: rule action is `route_to_group` (NOT `forward_to_group` — that's the Phase 1 Madison-to-Madison MCP tool, kept distinct).
+
+- [ ] Add `routings` table to mailroom's store: `(message_id, group_folder, rule_id, routed_at)` PK on `(message_id, group_folder)`, indexed on `(group_folder, routed_at)`. This is the authorization gate Phase 3 uses to scope AVP's view of the inbox.
+- [ ] Add `route_to_group` action type to mailroom rules engine (`src/rules/apply/{proton,gmail}.ts`). Action: insert `routings` row + emit IPC event for `nanoclaw` to deliver.
+- [ ] Routed event payload to nanoclaw includes: subject, sender, body preview (~500 char), `message_id`, attachment count, `from_account`, `routed_to` group folder. **Body and attachments are NOT copied** — recipient pulls via the scoped Phase 3 MCP when she needs more.
+- [ ] Extend `rules.json` schema to support the new action; document in `~/Projects/mailroom/lode/reference/rules-schema.md` and `src/rules/schema.md`
 - [ ] Inbox-side tool: propose / add / remove rule entries (Madison edits `_Shared/_Settings/rules.json` after Jeff approves in chat — same pattern as existing rules)
-- [ ] Mailroom dispatch event flows through `router.forwardTo` when rule matches
-- [ ] Test: add rule "from Deb + subject contains Business Directories → forward to AVP", send test email with attachment, confirm it lands in AVP chat with attachment path resolvable from `_Shared/Attachments/`
+- [ ] nanoclaw-side: extend `mailroom-subscriber` to accept `route_to_group`-flagged events and dispatch to the indicated `routed_to` group's chat (no fall-through to default Madison Inbox routing)
+- [ ] Test: add rule "from Deb + subject contains Business Directories → route to AVP", send test email with attachment, confirm AVP chat receives the routed-email message with `message_id` she can later use against the Phase 3 MCP
 
-### Phase 3 — Outbound email via Inbox proxy
+### Phase 3 — Scoped inbox MCP for routed-recipient groups
 
-- [ ] **Migrate mailroom config to `_Shared/_Settings/`** — see "accounts.json migration" detail below; supersedes the original "move accounts.json" bullet
-- [ ] Define `send_via_inbox` MCP tool signature in AVP container — ops: `send` / `reply` / `reply_all` / `forward`. For reply/reply_all/forward, payload **must carry `original_message_id`** (mailroom's stored id) so Inbox can invoke the existing send tool against the stored message; for `send` the field is omitted. (Tool renamed from earlier draft `request_email` to disambiguate from a future rule-action `draft_for_review`.)
-- [ ] Inbox-side executor: receives `send_via_inbox` payloads via router and proxies to mailroom's existing MCP tools — `mcp__inbox__send_message` (send), `mcp__inbox__send_reply{,_all}` (reply), `mcp__inbox__send_forward` (forward). **No new threading logic in nanoclaw** — mailroom's `getThreadingHeaders()` (`src/mcp/tools/reply_common.ts`) already preserves `In-Reply-To` / `References` from the stored message.
-- [ ] `from` resolution: required for `send`; for reply/reply_all/forward Inbox lets mailroom's send tool resolve from the stored message (its current default); explicit override forwarded as `from_account`
-- [ ] `include_original_attachments`: defaults — reply=false, forward=true; AVP confirms in chat before sending. Maps onto mailroom's `send_forward` `include_attachments` / `attachment_positions` args. Reply path: pass `include_attachments: false` to `send_reply{,_all}` (verify the tool accepts this; if not, file follow-up in mailroom)
-- [ ] Per-context defaults: `AmericanVoxPop/_Settings/email-defaults.json` (default_from, signature) — Madison-edited, Jeff-approved
-- [ ] Single approval point: Jeff approves in AVP chat; Inbox does not re-prompt (trusted lead-to-lead handoff)
-- [ ] Send-confirmation observability: `send_via_inbox` is synchronous within the proxy and returns `{ ok, message_id, sent_at, from_account }` or `{ ok: false, error }`. AVP reports outcome to Jeff in chat. Async failures (e.g. SMTP reject after acknowledgement) surface in Madison Inbox's chat — cross-group failure feedback is out of scope here
-- [ ] Test: full loop — Deb's reply lands in AVP via Phase 2 rule, you discuss with AVP, AVP sends a reply back, Inbox confirms `message_id`, threading verified by inspecting stored sent message's `In-Reply-To` / `References` headers
+Replaces earlier "outbound email via Inbox proxy" design. Instead of building a new `send_via_inbox` MCP tool that proxies through Inbox's container, **register mailroom's existing inbox MCP for the recipient group's container with server-side scoping** keyed off the `routings` table from Phase 2. Recipient sees the same tool surface Madison Inbox sees, just narrowed to her own routed messages plus new-outbound (governed by `from_account` allowlist).
+
+- [ ] **Migrate mailroom config to `_Shared/_Settings/`** — see "accounts.json migration" detail below; recipient groups need RO read of `accounts.json` for `from_account` validation in new-outbound
+- [ ] Mailroom MCP server: add server-side authorization layer keyed on calling group's folder name (HTTP header or per-group endpoint URL — decide during impl). Read tools (`get_message`, `thread`, `attachment_to_path`) and message-bound send tools (`send_reply`, `send_reply_all`, `send_forward`) require `(message_id, calling_group)` to exist in `routings`. New-outbound (`send_message`) requires `from_account` to be in `accounts.json` with a tag the calling group is allowed to send from (extend `accounts.json` schema with a per-account `allowed_groups: []` field if needed; default-empty means Inbox-only)
+- [ ] nanoclaw container-runner: when target group has any `routings` rows, register the inbox MCP for that container with the group-scoped endpoint
+- [ ] Threading: AVP calls `mcp__inbox__send_reply(message_id, body)` directly — mailroom's existing `getThreadingHeaders()` preserves `In-Reply-To` / `References`. **No proxy, no `original_message_id` payload field, no new threading logic anywhere**
+- [ ] Attachment access: AVP calls `mcp__inbox__attachment_to_path(message_id, position)` — mailroom writes bytes to AVP's container `/workspace/inbox-attachments/<message_id>/<filename>` (existing tool, scoped by routings check). No `_Shared/Attachments/` rendezvous, no extraction-at-routing-time
+- [ ] `from` resolution: `send_message` requires `from_account`; reply/forward tools default to recipient-account on the stored message (mailroom's existing default), explicit override allowed
+- [ ] `include_original_attachments` defaults: reply/reply_all = false, forward = true. Maps onto existing `send_reply{,_all}` / `send_forward` args. Verify reply tools accept `include_attachments: false`; if missing, file mailroom follow-up
+- [ ] Per-context defaults: `AmericanVoxPop/_Settings/email-defaults.json` (default_from, signature) — Madison-edited, Jeff-approved. Read by AVP at compose time; not a mailroom concern
+- [ ] Single approval point: Jeff approves in AVP chat. No second prompt anywhere — AVP calls send tool directly, mailroom executes
+- [ ] Send-confirmation observability: send tools return `{ ok, message_id, sent_at, from_account }` synchronously — same shape mailroom already returns to Inbox today
+- [ ] Test: full loop — Deb's reply routed to AVP via Phase 2 rule with `message_id=X`, AVP fetches body via `get_message(X)` and an attachment via `attachment_to_path(X, 0)`, AVP composes via Jeff-approved `send_reply(X, body, include_attachments=false)`, threading verified by inspecting the sent message's `In-Reply-To` / `References` headers
 
 #### accounts.json migration (Phase 3, replaces original one-line bullet)
 
@@ -71,8 +77,9 @@ Mailroom reads `rules.json`, `accounts.json`, and `rules-changelog.md` from a si
 | Proxy-through-Inbox for outbound email over giving AVP its own send creds | 2026-04-28 | Single audit trail, no duplicated credentials, gives a natural future approval gate point. Cheap to flip later if friction emerges. |
 | Single approval point in AVP chat (Inbox does not re-prompt) | 2026-04-28 | Jeff is in the loop where the draft is composed. Re-asking in Inbox would be redundant. Lead-to-lead trust within the trusted set. |
 | Move all three mailroom config files to `_Shared/_Settings/`, not just `accounts.json` | 2026-04-28 | Mailroom reads rules + accounts from a single `MAILROOM_CONFIG_DIR`; per-file mounts are a known-broken pattern. Single dir move keeps the proven directory-mount design. |
-| `_Shared/` mounted RW (not RO) into every group | 2026-04-28 | Phase 1 needs writes from any group (drop zones, attachment writes). Discipline of "Madisons don't edit what isn't theirs" matches existing per-group vault model. |
-| Attachment transit via `_Shared/Attachments/` written by mailroom rule action | 2026-04-28 | AVP doesn't have `mcp__inbox__*` access (gated on `telegram_inbox`); rule action extracts bytes once. 30-day GC matches scratch-inbox semantics from `practices.md`. |
+| `_Shared/` mounted RW (not RO) into every group | 2026-04-28 | Phase 1 needs writes from any group (drop zones). Discipline of "Madisons don't edit what isn't theirs" matches existing per-group vault model. |
+| **Replaced: scoped inbox MCP for recipient groups, gated by `routings` table** — supersedes earlier "extract attachments to `_Shared/Attachments/` + build `send_via_inbox` proxy" design | 2026-04-28 | Recipient gets the same MCP surface Madison Inbox has, scoped server-side to her routed messages. No bytes copied, no proxy-rebuild of threading semantics, no shared transit dir to GC. The `routings` table is the authorization handle — `(message_id, group_folder)` row exists ⇒ recipient can read/reply/forward. AVP gets subject + body + attachments naturally via the same tools Inbox uses. |
+| Rule action named `route_to_group`, not `forward_to_group` | 2026-04-28 | `forward_to_group` is the Phase 1 Madison-to-Madison MCP tool (already shipped). Different verb, different surface — `route_to_group` is mailroom's rule-engine action that delivers an inbound email to a group. Avoids semantic collision. |
 | `include_original_attachments` defaults: reply=false, forward=true | 2026-04-28 | Matches typical email client behavior. Override available. |
 | `from` required on `send`, defaults to recipient-account on reply/forward, override allowed | 2026-04-28 | Mirrors how every standard email client resolves the field. Mailroom's existing `send_reply` already handles this. |
 | `send_via_inbox` (renamed from `request_email`) | 2026-04-28 | Disambiguates from future rule-action `draft_for_review`. Tool name describes the proxy action explicitly. |
