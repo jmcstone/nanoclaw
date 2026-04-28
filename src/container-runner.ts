@@ -16,6 +16,8 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   OBSIDIAN_TASKS_DIR,
+  OLLAMA_ADMIN_TOOLS,
+  ONECLI_URL,
   resolveGroupModel,
   TIMEZONE,
 } from './config.js';
@@ -253,6 +255,11 @@ function buildContainerArgs(
     args.push('-e', `ANTHROPIC_MODEL=${modelOverride}`);
   }
 
+  // Forward Ollama admin tools flag if enabled
+  if (OLLAMA_ADMIN_TOOLS) {
+    args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
+  }
+
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
     '-e',
@@ -420,7 +427,12 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (!line) continue;
+        if (line.includes('[OLLAMA]')) {
+          logger.info({ container: group.folder }, line);
+        } else {
+          logger.debug({ container: group.folder }, line);
+        }
       }
       // Don't reset timeout on stderr — SDK writes debug logs continuously.
       // Timeout only resets on actual output (OUTPUT_MARKER in stdout).

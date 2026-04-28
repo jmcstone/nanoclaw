@@ -684,6 +684,10 @@ async function runQuery(
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
       },
     },
+    ollama: {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
+    },
   };
   if (hasContextMode) {
     const ctxRoot = resolveCtxModeRoot();
@@ -747,6 +751,7 @@ async function runQuery(
     'TodoWrite', 'ToolSearch', 'Skill',
     'NotebookEdit',
     'mcp__nanoclaw__*',
+    'mcp__ollama__*',
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
     ...(hasInbox ? ['mcp__messages__*'] : []),
