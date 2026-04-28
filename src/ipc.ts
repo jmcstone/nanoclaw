@@ -518,16 +518,25 @@ export async function processTaskIpc(
         }
       }
 
-      // Build attribution-prefixed text. If target requires a wake trigger
-      // (e.g. AVP needs "@Madison"), prepend it so the message actually wakes
-      // her container — without this, the Telegram delivery succeeds but the
-      // recipient never processes the forward. Path is shown relative to the
-      // shared root so it works in both source and target containers.
-      const attributionLine =
+      // Build the forwarded message. Two things matter:
+      //
+      // 1. Wake trigger — non-main groups only spawn on messages matching
+      //    their trigger like "@Madison". Without this prefix the forward
+      //    lands silently in the chat and the recipient never processes it.
+      //
+      // 2. Framing — name the sender so the recipient knows this is a
+      //    peer-to-peer Madison message and addresses her reply to that
+      //    Madison directly via forward_to_group, rather than answering
+      //    whoever else is in the chat.
+      const triggerPrefix =
         targetGroup.requiresTrigger !== false && targetGroup.trigger
-          ? `${targetGroup.trigger} [from ${sourceDisplayName}]`
-          : `[from ${sourceDisplayName}]`;
-      const lines: string[] = [attributionLine, '', data.message];
+          ? `${targetGroup.trigger} `
+          : '';
+      const lines: string[] = [
+        `${triggerPrefix}Message from ${sourceDisplayName} (group: ${sourceGroup}):`,
+        '',
+        data.message,
+      ];
       if (data.attachmentPath) {
         const relative = data.attachmentPath.replace(
           '/workspace/extra/shared/',
@@ -535,6 +544,10 @@ export async function processTaskIpc(
         );
         lines.push('', `Attachment: _Shared/${relative}`);
       }
+      lines.push(
+        '',
+        `Reply by calling forward_to_group(target="${sourceGroup}", message="...") — your reply lands in ${sourceDisplayName}'s chat, not this one.`,
+      );
       const forwardedText = lines.join('\n');
 
       try {

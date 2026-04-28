@@ -704,9 +704,13 @@ describe('forward_to_group', () => {
 
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0].jid).toBe('other@g.us');
-    expect(sentMessages[0].text).toContain('[from Third]');
+    expect(sentMessages[0].text).toContain('Message from Third');
     expect(sentMessages[0].text).toContain(
       'can you process this branding doc?',
+    );
+    // Reply guidance points the recipient at forward_to_group with the source folder.
+    expect(sentMessages[0].text).toContain(
+      'forward_to_group(target="third-group"',
     );
   });
 
@@ -836,7 +840,7 @@ describe('forward_to_group', () => {
 
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0].jid).toBe('main@g.us');
-    expect(sentMessages[0].text).toContain('[from Other]');
+    expect(sentMessages[0].text).toContain('Message from Other');
   });
 
   it('prepends target group trigger when requiresTrigger is not false', async () => {
@@ -854,7 +858,9 @@ describe('forward_to_group', () => {
       deps,
     );
 
-    expect(sentMessages[0].text.startsWith('@Andy [from Third]')).toBe(true);
+    expect(sentMessages[0].text.startsWith('@Andy Message from Third')).toBe(
+      true,
+    );
   });
 
   it('omits trigger when target group has requiresTrigger=false', async () => {
@@ -877,7 +883,7 @@ describe('forward_to_group', () => {
       deps,
     );
 
-    expect(sentMessages[0].text.startsWith('[from Third]')).toBe(true);
+    expect(sentMessages[0].text.startsWith('Message from Third')).toBe(true);
     expect(sentMessages[0].text).not.toContain('@Andy');
   });
 

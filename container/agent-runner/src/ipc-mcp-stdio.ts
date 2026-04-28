@@ -498,9 +498,9 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
 server.tool(
   'forward_to_group',
-  `Forward a message to another registered group's chat. Use this to hand off work to another Madison (e.g. ask Madison Inbox a question from AVP, or pass a file to Madison AlgoTrader for analysis).
+  `Send a peer-to-peer message to another Madison agent in another registered group. Use this to hand off work between Madisons (e.g. ask Madison Inbox a question from AVP, or pass a file to Madison AlgoTrader for analysis).
 
-The recipient sees the message attributed to your group: "[from <YourGroupName>]\\n\\n<your message>". They can respond by either replying in their own chat (where you, Jeff, will see it) or by calling forward_to_group back to your group's JID.
+This is Madison-to-Madison communication, not user-facing. Write the message addressed to the other Madison directly. The recipient gets a "Message from <YourGroupName>:" framing plus reply instructions, so she'll know it's from a peer Madison and reply via forward_to_group back to you — not to whoever else might be in the chat.
 
 For files, drop the file under /workspace/extra/shared/Inbox/<recipient-folder>/<filename> first, then pass that path as attachment_path. The recipient's container sees the same file at the same path. Trust model: any registered group can forward to any other — no per-call approval. Don't forward to your own group (rejected).`,
   {
@@ -512,7 +512,7 @@ For files, drop the file under /workspace/extra/shared/Inbox/<recipient-folder>/
     message: z
       .string()
       .describe(
-        'The message text to send. Will be prepended with "[from <YourGroupName>]" so the recipient knows who sent it.',
+        'The message you are sending to the other Madison. Address it to her directly — the system handles framing so she knows it came from your group.',
       ),
     attachment_path: z
       .string()
