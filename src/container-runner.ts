@@ -16,6 +16,7 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   LITELLM_BASE_URL,
+  OBSIDIAN_SHARED_DIR,
   OBSIDIAN_TASKS_DIR,
   OLLAMA_ADMIN_TOOLS,
   ONECLI_URL,
@@ -194,6 +195,19 @@ function buildVolumeMounts(
     containerPath: '/workspace/downloads',
     readonly: false,
   });
+
+  // Cross-group shared dropbox (Phase 1 of cross-lead-workflows). Every
+  // working-group container sees the same _Shared/ tree at /workspace/extra/shared/.
+  // RW because Madisons drop files for each other and write attachment transit
+  // payloads here. No-op when the host directory is absent (e.g., fresh install
+  // before /add-cross-lead-workflows or non-Obsidian setups).
+  if (fs.existsSync(OBSIDIAN_SHARED_DIR)) {
+    mounts.push({
+      hostPath: OBSIDIAN_SHARED_DIR,
+      containerPath: '/workspace/extra/shared',
+      readonly: false,
+    });
+  }
 
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other

@@ -677,3 +677,184 @@ describe('register_group success', () => {
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
   });
 });
+
+// --- forward_to_group ---
+
+describe('forward_to_group', () => {
+  let sentMessages: { jid: string; text: string }[];
+
+  beforeEach(() => {
+    sentMessages = [];
+    deps.sendMessage = async (jid, text) => {
+      sentMessages.push({ jid, text });
+    };
+  });
+
+  it('delivers message with [from <name>] attribution when target is a JID', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other@g.us',
+        message: 'can you process this branding doc?',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].jid).toBe('other@g.us');
+    expect(sentMessages[0].text).toContain('[from Third]');
+    expect(sentMessages[0].text).toContain(
+      'can you process this branding doc?',
+    );
+  });
+
+  it('resolves target by folder name', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other-group',
+        message: 'hello via folder',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].jid).toBe('other@g.us');
+  });
+
+  it('appends attachment path (relative to _Shared/) when provided', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other-group',
+        message: 'see attached',
+        attachmentPath:
+          '/workspace/extra/shared/Inbox/other-group/branding.pdf',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages[0].text).toContain(
+      'Attachment: _Shared/Inbox/other-group/branding.pdf',
+    );
+  });
+
+  it('rejects attachment_path outside /workspace/extra/shared/', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other-group',
+        message: 'hi',
+        attachmentPath: '/etc/passwd',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('rejects unregistered target', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'ghost@g.us',
+        message: 'hi',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('rejects self-forward (target folder === sourceGroup)', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'third@g.us',
+        message: 'hi',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('rejects request missing target', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        message: 'hi',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('rejects request missing message', async () => {
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other-group',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('non-main groups can forward to other groups (cross-group is the point)', async () => {
+    // Unlike schedule_task / pause_task / etc., forward_to_group's whole purpose
+    // is cross-group. The trust gate is "registered Madison only" enforced by
+    // the IPC directory ownership model.
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'main@g.us',
+        message: 'asking main something',
+      },
+      'other-group',
+      false, // not main
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].jid).toBe('main@g.us');
+    expect(sentMessages[0].text).toContain('[from Other]');
+  });
+
+  it('logs but does not throw when sendMessage fails', async () => {
+    deps.sendMessage = async () => {
+      throw new Error('telegram down');
+    };
+
+    await expect(
+      processTaskIpc(
+        {
+          type: 'forward_to_group',
+          target: 'other-group',
+          message: 'try',
+        },
+        'third-group',
+        false,
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+  });
+});

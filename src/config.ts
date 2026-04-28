@@ -112,6 +112,19 @@ export const GROUP_OVERRIDES_PATH = path.join(
 );
 export const OBSIDIAN_TASKS_DIR = path.join(OBSIDIAN_SETTINGS_DIR, 'tasks');
 
+// Cross-group dropbox: a shared directory mounted RW into every working-group
+// container at /workspace/extra/shared/. Used by `forward_to_group` for file
+// handoff between Madisons (Phase 1 of cross-lead-workflows). Trust model is
+// "registered Madisons only" — discipline beats per-file ACLs at this scale.
+export const OBSIDIAN_SHARED_DIR = path.join(
+  HOME_DIR,
+  'Documents',
+  'Obsidian',
+  'Main',
+  'NanoClaw',
+  '_Shared',
+);
+
 interface GlobalDefaults {
   maxMessagesPerPrompt?: number;
   idleTimeoutMs?: number;

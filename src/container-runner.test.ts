@@ -16,6 +16,7 @@ vi.mock('./config.js', () => ({
   DOWNLOADS_DIR: '/tmp/nanoclaw-test-downloads',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
+  OBSIDIAN_SHARED_DIR: '/tmp/nanoclaw-test-shared',
   TIMEZONE: 'America/Los_Angeles',
   resolveGroupModel: () => undefined,
 }));

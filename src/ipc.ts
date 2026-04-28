@@ -198,6 +198,10 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // forward_to_group fields
+    target?: string;
+    message?: string;
+    attachmentPath?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -445,6 +449,102 @@ export async function processTaskIpc(
         logger.warn(
           { sourceGroup },
           'Unauthorized refresh_groups attempt blocked',
+        );
+      }
+      break;
+
+    case 'forward_to_group':
+      // Cross-group message handoff (Phase 1 of cross-lead-workflows).
+      // Trust model: any registered group can forward to any other registered
+      // group. Source identity is verified by the IPC directory name (sourceGroup).
+      if (!data.target || !data.message) {
+        logger.warn(
+          { sourceGroup, hasTarget: !!data.target, hasMessage: !!data.message },
+          'Invalid forward_to_group request — missing target or message',
+        );
+        break;
+      }
+
+      // Resolve target: accept either a JID (registered) or a folder name.
+      let targetJid: string | undefined;
+      let targetGroup: RegisteredGroup | undefined;
+      if (registeredGroups[data.target]) {
+        targetJid = data.target;
+        targetGroup = registeredGroups[data.target];
+      } else {
+        for (const [jid, group] of Object.entries(registeredGroups)) {
+          if (group.folder === data.target) {
+            targetJid = jid;
+            targetGroup = group;
+            break;
+          }
+        }
+      }
+
+      if (!targetJid || !targetGroup) {
+        logger.warn(
+          { sourceGroup, target: data.target },
+          'forward_to_group: target group not registered',
+        );
+        break;
+      }
+
+      if (targetGroup.folder === sourceGroup) {
+        logger.warn(
+          { sourceGroup, target: data.target },
+          'forward_to_group: refusing self-forward',
+        );
+        break;
+      }
+
+      // Validate attachment_path stays within the shared mount.
+      if (
+        data.attachmentPath &&
+        !data.attachmentPath.startsWith('/workspace/extra/shared/')
+      ) {
+        logger.warn(
+          { sourceGroup, attachmentPath: data.attachmentPath },
+          'forward_to_group: attachment_path outside shared mount; rejected',
+        );
+        break;
+      }
+
+      // Find source group's display name for attribution. Look up by folder.
+      let sourceDisplayName = sourceGroup;
+      for (const group of Object.values(registeredGroups)) {
+        if (group.folder === sourceGroup) {
+          sourceDisplayName = group.name;
+          break;
+        }
+      }
+
+      // Build attribution-prefixed text. Path is shown relative to the shared
+      // root so it works in both source and target containers.
+      const lines: string[] = [`[from ${sourceDisplayName}]`, '', data.message];
+      if (data.attachmentPath) {
+        const relative = data.attachmentPath.replace(
+          '/workspace/extra/shared/',
+          '',
+        );
+        lines.push('', `Attachment: _Shared/${relative}`);
+      }
+      const forwardedText = lines.join('\n');
+
+      try {
+        await deps.sendMessage(targetJid, forwardedText);
+        logger.info(
+          {
+            sourceGroup,
+            targetFolder: targetGroup.folder,
+            targetJid,
+            hasAttachment: !!data.attachmentPath,
+          },
+          'forward_to_group delivered',
+        );
+      } catch (err) {
+        logger.error(
+          { sourceGroup, targetJid, err },
+          'forward_to_group: send failed',
         );
       }
       break;
