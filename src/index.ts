@@ -251,7 +251,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const hasTrigger = missedMessages.some(
       (m) =>
         triggerPattern.test(m.content.trim()) &&
-        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+        // Bot messages are pre-authorized by the layer that injected them
+        // (forward_to_group's IPC handler, mailroom-subscriber, scheduled
+        // tasks). Same logic as the sender-allowlist drop bypass below at
+        // the channel onMessage handler.
+        (m.is_from_me ||
+          m.is_bot_message ||
+          isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
   }
@@ -563,7 +569,12 @@ async function startMessageLoop(): Promise<void> {
             const hasTrigger = groupMessages.some(
               (m) =>
                 triggerPattern.test(m.content.trim()) &&
+                // Bot messages are pre-authorized by the layer that injected
+                // them (forward_to_group's IPC handler, mailroom-subscriber,
+                // scheduled tasks). Same logic as the sender-allowlist drop
+                // bypass at the channel onMessage handler.
                 (m.is_from_me ||
+                  m.is_bot_message ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
             if (!hasTrigger) continue;
