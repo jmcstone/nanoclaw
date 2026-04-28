@@ -546,7 +546,7 @@ export async function processTaskIpc(
       }
       lines.push(
         '',
-        `Reply by calling forward_to_group(target="${sourceGroup}", message="...") — your reply lands in ${sourceDisplayName}'s chat, not this one.`,
+        `This is a side conversation with ${sourceDisplayName}, not a redirect of any user task you may be working on. Treat it like an interruption from a colleague — answer her question, then return to whatever the user had you doing. If you and ${sourceDisplayName} have discussed related topics before, your memory may have context worth checking. Reply by calling forward_to_group(target="${sourceGroup}", message="...") — your reply lands in ${sourceDisplayName}'s chat, not this one.`,
       );
       const forwardedText = lines.join('\n');
 
