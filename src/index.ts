@@ -809,6 +809,14 @@ async function main(): Promise<void> {
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
     onTasksChanged: writeAllTaskSnapshots,
+    injectMessage: (chatJid, msg) => {
+      // forward_to_group's bypass for Telegram's bot-to-bot filter: store the
+      // message and trigger immediate processing on the recipient group.
+      storeMessage(msg);
+      if (registeredGroups[chatJid]) {
+        queue.enqueueMessageCheck(chatJid);
+      }
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

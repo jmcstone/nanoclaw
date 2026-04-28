@@ -63,6 +63,7 @@ beforeEach(() => {
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
     onTasksChanged: () => {},
+    injectMessage: () => {},
   };
 });
 
@@ -682,11 +683,20 @@ describe('register_group success', () => {
 
 describe('forward_to_group', () => {
   let sentMessages: { jid: string; text: string }[];
+  let injectedMessages: { jid: string; content: string; sender: string }[];
 
   beforeEach(() => {
     sentMessages = [];
+    injectedMessages = [];
     deps.sendMessage = async (jid, text) => {
       sentMessages.push({ jid, text });
+    };
+    deps.injectMessage = (jid, msg) => {
+      injectedMessages.push({
+        jid,
+        content: msg.content,
+        sender: msg.sender,
+      });
     };
   });
 
@@ -885,6 +895,49 @@ describe('forward_to_group', () => {
 
     expect(sentMessages[0].text.startsWith('Message from Third')).toBe(true);
     expect(sentMessages[0].text).not.toContain('@Andy');
+  });
+
+  it('also injects message into recipient pipeline (Telegram alone cannot wake bots)', async () => {
+    // Telegram filters bot-to-bot messages out of webhook updates, so the
+    // recipient's container never spawns from a Telegram-only delivery.
+    // forward_to_group must also call injectMessage to actually wake her.
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'other-group',
+        message: 'wake me up please',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(1);
+    expect(injectedMessages).toHaveLength(1);
+    expect(injectedMessages[0].jid).toBe('other@g.us');
+    expect(injectedMessages[0].sender).toBe('third-group');
+    // The injected content matches the Telegram delivery so chat history
+    // and processing pipeline see the same text.
+    expect(injectedMessages[0].content).toBe(sentMessages[0].text);
+  });
+
+  it('does not inject when authorization rejects the forward', async () => {
+    // Rejected forwards (unregistered target, self-forward, missing fields,
+    // unsafe attachment path) must not inject — otherwise unauthorized
+    // attempts could still wake the recipient.
+    await processTaskIpc(
+      {
+        type: 'forward_to_group',
+        target: 'ghost@g.us',
+        message: 'hi',
+      },
+      'third-group',
+      false,
+      deps,
+    );
+
+    expect(sentMessages).toHaveLength(0);
+    expect(injectedMessages).toHaveLength(0);
   });
 
   it('logs but does not throw when sendMessage fails', async () => {

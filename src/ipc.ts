@@ -14,7 +14,7 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { NewMessage, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -29,6 +29,12 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  // Inject a message into the recipient group's processing pipeline. Used
+  // by forward_to_group: the Telegram delivery is for human visibility but
+  // Telegram doesn't notify bots about other-bot messages, so the recipient's
+  // container would never spawn without a direct injection. Mirrors the
+  // (storeMessage + queue.enqueueMessageCheck) path used by mailroom-subscriber.
+  injectMessage: (chatJid: string, message: NewMessage) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -551,7 +557,25 @@ export async function processTaskIpc(
       const forwardedText = lines.join('\n');
 
       try {
+        // 1. Telegram delivery — chat visibility for human users. Cannot wake
+        //    the recipient's container on its own because Telegram filters
+        //    bot-to-bot messages out of group webhook updates.
         await deps.sendMessage(targetJid, forwardedText);
+
+        // 2. Direct pipeline injection — what actually wakes the recipient.
+        //    Mirrors the path mailroom-subscriber uses for inbound emails.
+        const injectedMessage: NewMessage = {
+          id: `forward-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chat_jid: targetJid,
+          sender: sourceGroup,
+          sender_name: sourceDisplayName,
+          content: forwardedText,
+          timestamp: new Date().toISOString(),
+          is_from_me: false,
+          is_bot_message: true,
+        };
+        deps.injectMessage(targetJid, injectedMessage);
+
         logger.info(
           {
             sourceGroup,
