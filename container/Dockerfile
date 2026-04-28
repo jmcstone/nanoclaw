@@ -41,12 +41,13 @@ RUN npm install -g agent-browser @anthropic-ai/claude-code
 # HuggingFace cache lives inside the image so the sentence-transformers
 # embedding model is always available without network access at runtime.
 ENV HF_HOME=/opt/a-mem/hf-cache
-ENV PATH="/opt/a-mem/.venv/bin:${PATH}"
+ENV PATH="/opt/doc-tools/.venv/bin:/opt/a-mem/.venv/bin:${PATH}"
 
 # Copy a-mem source (git submodule at container/a-mem-mcp/) before pip install
 # so layer caching works well — source changes bust the install, but base deps
 # stay cached.
 COPY a-mem-mcp/ /opt/a-mem-mcp/
+COPY doc-tools/ /opt/doc-tools/
 
 RUN python3 -m venv /opt/a-mem/.venv \
     && /opt/a-mem/.venv/bin/pip install --no-cache-dir --upgrade pip \
@@ -58,7 +59,13 @@ RUN python3 -m venv /opt/a-mem/.venv \
          ollama \
     && /opt/a-mem/.venv/bin/python -c \
          "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
-    && chmod -R a+rX /opt/a-mem /opt/a-mem-mcp
+    && python3 -m venv /opt/doc-tools/.venv \
+    && /opt/doc-tools/.venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/doc-tools/.venv/bin/pip install --no-cache-dir 'markitdown[all]' \
+    && /opt/doc-tools/.venv/bin/pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu docling \
+    && mkdir -p /opt/doc-tools/.venv/lib/python3.11/site-packages/rapidocr/models \
+    && chmod -R a+rX /opt/a-mem /opt/a-mem-mcp /opt/doc-tools \
+    && chmod -R a+rwX /opt/doc-tools/.venv/lib/python3.11/site-packages/rapidocr/models
 
 # context-mode MCP plugin (path resolved at runtime via createRequire).
 # NODE_PATH makes globally-installed packages (context-mode, agent-browser,
