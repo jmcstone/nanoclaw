@@ -64,7 +64,7 @@ Senior-engineer review of the plan surfaced 10 issues across 3 tiers. All resolv
 
 - **Tier 2 — spec tightening:**
   - **Attachments lifecycle (#2):** AVP has no `mcp__inbox__*` access (gated on `telegram_inbox`); designed `_Shared/Attachments/<message_id>/<position>-<filename>` transit area written by mailroom's `forward_to_group` rule action via existing `fetchAttachmentTool`. 30-day mtime GC. Phase 3 outbound doesn't need this — `send_forward` re-fetches from `store.db`.
-  - **`_Shared/Inbox/` addressing (#5):** `_Shared/Inbox/<groupName>/` per-recipient subdirs; pure convention, no enforcement.
+  - **`_Shared/Dropbox/` addressing (#5):** `_Shared/Dropbox/<groupName>/` per-recipient subdirs; pure convention, no enforcement.
   - **Forward failure modes (#6):** cold container → `group-queue` enqueue; unregistered → fall back to Madison Inbox + log; filesystem write failure → hard error; attachment failure → text-only with annotation.
   - **Phase 1 message-handoff test (#7):** added explicit AVP↔Inbox roundtrip test alongside the file handoff test.
   - **`request_email` naming collision (#8):** Phase 3 MCP tool renamed to `send_via_inbox`; future rule-action future-scope reserved as `draft_for_review`.
@@ -100,6 +100,6 @@ Senior-engineer review of the plan surfaced 10 issues across 3 tiers. All resolv
     - (a) Telegram filters bot-to-bot messages out of webhook updates — agent-to-agent messaging cannot ride on the chat platform.
     - (b) nanoclaw has at least four authorization layers (sender allowlist drop, sender-allowlist trigger gate, `is_bot_message` filter in `getMessagesSince`, target-trigger requirement) all designed for the threat model "messages come from external untrusted humans." Cross-Madison messages don't fit any of them.
     - (c) When successive fixes are needed to thread peer messages through those layers — each fix exposing another layer — the architecture is wrong, not the fix. File-mailbox sidesteps all of it.
-    - (d) Per-group `_attachments/` convention is the established pattern for files that should persist; `_Shared/Inbox/<target>/` is the new transit area for files moving between groups.
+    - (d) Per-group `_attachments/` convention is the established pattern for files that should persist; `_Shared/Dropbox/<target>/` is the new transit area for files moving between groups.
     - (e) Per-group agent-runner cache had a real bug (only checked `index.ts` mtime) — kept the fix.
 5. **What have I done?** Phase 1 mount + cache fix shipped. Stripped over-engineered `forward_to_group` after end-to-end testing exposed the platform mismatch. Captured lessons in `lode/lessons.md`. Plan and findings updated to reflect simpler model.

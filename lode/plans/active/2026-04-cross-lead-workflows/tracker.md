@@ -13,7 +13,7 @@ Enable Madisons in different groups to share files and (eventually, when needed)
 ### `_Shared/` cross-group dropbox
 
 - Host directory: `~/Documents/Obsidian/Main/NanoClaw/_Shared/`
-- Subfolders: `Inbox/{telegram_main,telegram_inbox,telegram_trading,telegram_avp}/` and `Attachments/`
+- Subfolders: `Dropbox/{telegram_main,telegram_inbox,telegram_trading,telegram_avp}/` and `Attachments/`
 - Mounted RW into every working-group container at `/workspace/extra/shared/`
 - Implementation: `OBSIDIAN_SHARED_DIR` constant in `src/config.ts`; mount added in `src/container-runner.ts` (gated on `existsSync` so fresh installs without the dir are no-ops)
 
@@ -25,12 +25,12 @@ Unrelated bug discovered while debugging: per-group agent-runner cache only chec
 
 File-mailbox pattern. Async, simple, transparent.
 
-- **Drop a file for another Madison:** write to `/workspace/extra/shared/Inbox/<recipient-group-folder>/<filename>`. The recipient sees the same file at the same container path because every group has the same RW mount.
+- **Drop a file for another Madison:** write to `/workspace/extra/shared/Dropbox/<recipient-group-folder>/<filename>`. The recipient sees the same file at the same container path because every group has the same RW mount.
 - **Drop a message:** write a `.md` file with the request. Naming convention: `<timestamp>-<short-title>.md` (e.g. `2026-04-28T15-30-from-inbox-business-directories.md`).
-- **Read what's been left for you:** when you're working with the user, peek at `/workspace/extra/shared/Inbox/<your-group>/`.
-- **Reply:** write a reply file under `/workspace/extra/shared/Inbox/<requester-group>/`.
+- **Read what's been left for you:** when you're working with the user, peek at `/workspace/extra/shared/Dropbox/<your-group>/`.
+- **Reply:** write a reply file under `/workspace/extra/shared/Dropbox/<requester-group>/`.
 
-The user (Jeff) coordinates timing — he tells the recipient "AVP, check your shared inbox" when he wants the handoff to happen. No automatic wake-up, no platform-mediated routing, no fake-message-injection.
+The user (Jeff) coordinates timing — he tells the recipient "AVP, check your dropbox" when he wants the handoff to happen. No automatic wake-up, no platform-mediated routing, no fake-message-injection.
 
 ## What got reverted (and why)
 
@@ -42,7 +42,7 @@ The earlier plan called for:
 - **Phase 2:** mailroom `route_to_group` rule action + `routings` table for inbound email routing to non-Inbox Madisons.
 - **Phase 3:** scoped `mcp__inbox__*` MCP for routed-recipient groups, server-side authorization keyed off the routings table.
 
-These are real and well-specified, but speculative. The use cases that motivated them (high-volume cold-email outreach with AVP handling replies via Inbox's send tools) haven't been pressure-tested against the file-mailbox model. The file-mailbox handles the "Jeff drops a doc, AVP processes it" use case without any Phase 2/3 work. The "Inbox routes Deb's reply to AVP" use case can also work via file-mailbox: Inbox writes a summary + thread-id reference into `_Shared/Inbox/telegram_avp/`, AVP reads it, drafts a reply for Inbox to send via her existing tools.
+These are real and well-specified, but speculative. The use cases that motivated them (high-volume cold-email outreach with AVP handling replies via Inbox's send tools) haven't been pressure-tested against the file-mailbox model. The file-mailbox handles the "Jeff drops a doc, AVP processes it" use case without any Phase 2/3 work. The "Inbox routes Deb's reply to AVP" use case can also work via file-mailbox: Inbox writes a summary + thread-id reference into `_Shared/Dropbox/telegram_avp/`, AVP reads it, drafts a reply for Inbox to send via her existing tools.
 
 If the file-mailbox model proves insufficient (latency, volume, ergonomics), Phase 2/3 are still on the shelf and can be picked up. Until then, YAGNI.
 

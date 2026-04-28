@@ -91,8 +91,8 @@ So the migration is "move the whole `_Settings/` content to `_Shared/_Settings/`
 
 ### `_Shared/` mounted RW to every group, not RO
 
-- Phase 1's drop zone (`_Shared/Inbox/{groupName}/`) needs writes from any group when `forward_to_group` writes a file payload.
-- Phase 2's `_Shared/Attachments/` is written by mailroom but read by recipients; mailroom container needs RW, recipient containers need RO — but recipients also write to their own subdirs in `_Shared/Inbox/`, so a single RW mount per agent container is simpler.
+- Phase 1's drop zone (`_Shared/Dropbox/{groupName}/`) needs writes from any group when `forward_to_group` writes a file payload.
+- Phase 2's `_Shared/Attachments/` is written by mailroom but read by recipients; mailroom container needs RW, recipient containers need RO — but recipients also write to their own subdirs in `_Shared/Dropbox/`, so a single RW mount per agent container is simpler.
 - Trust model is "registered Madisons only" — same as why each group has full RW on her own vault. Discipline beats per-file ACLs at this scale.
 
 ### Failure modes for `router.forwardTo` / `forward_to_group`
@@ -114,7 +114,7 @@ So the migration is "move the whole `_Settings/` content to `_Shared/_Settings/`
 
 ## Use cases captured (from design conversation)
 
-1. Jeff drops branding doc into `_Shared/Inbox/americanvoxpop/` → AVP processes → updates Business Directories assets at `~/Documents/Obsidian/Main/NanoClaw/AmericanVoxPop/Digital Presence/Business Directories/Assets/`.
+1. Jeff drops branding doc into `_Shared/Dropbox/americanvoxpop/` → AVP processes → updates Business Directories assets at `~/Documents/Obsidian/Main/NanoClaw/AmericanVoxPop/Digital Presence/Business Directories/Assets/`.
 2. Jeff and AVP review existing assets, decide on outreach → AVP composes email → Jeff approves in AVP chat → Inbox sends via `send_via_inbox`.
 3. Business owner replies to outreach → mailroom rule (e.g., "from Deb with Business Directories keyword") routes to AVP via `forward_to_group` → AVP processes response, updates docs, drafts follow-up using `send_via_inbox` with `original_message_id` set to the routed message.
 
