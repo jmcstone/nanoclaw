@@ -233,9 +233,7 @@ function buildVolumeMounts(
       let max = 0;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, entry.name);
-        const m = entry.isDirectory()
-          ? newestMtime(p)
-          : fs.statSync(p).mtimeMs;
+        const m = entry.isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs;
         if (m > max) max = m;
       }
       return max;

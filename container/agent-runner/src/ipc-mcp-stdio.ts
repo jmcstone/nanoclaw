@@ -496,69 +496,6 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
-server.tool(
-  'forward_to_group',
-  `Send a peer-to-peer message to another Madison agent in another registered group. Use this to hand off work between Madisons (e.g. ask Madison Inbox a question from AVP, or pass a file to Madison AlgoTrader for analysis).
-
-This is Madison-to-Madison communication, not user-facing. Write the message addressed to the other Madison directly. The recipient gets a "Message from <YourGroupName>:" framing plus reply instructions, so she'll know it's from a peer Madison and reply via forward_to_group back to you — not to whoever else might be in the chat.
-
-For files, drop the file under /workspace/extra/shared/Inbox/<recipient-folder>/<filename> first, then pass that path as attachment_path. The recipient's container sees the same file at the same path. Trust model: any registered group can forward to any other — no per-call approval. Don't forward to your own group (rejected).`,
-  {
-    target: z
-      .string()
-      .describe(
-        'Target group folder name (e.g. "telegram_avp", "telegram_inbox") OR full JID (e.g. "tg:-1003800188692"). Look up folder names in available_groups.json.',
-      ),
-    message: z
-      .string()
-      .describe(
-        'The message you are sending to the other Madison. Address it to her directly — the system handles framing so she knows it came from your group.',
-      ),
-    attachment_path: z
-      .string()
-      .optional()
-      .describe(
-        'Optional file path. Must start with "/workspace/extra/shared/" — typically /workspace/extra/shared/Inbox/<target-folder>/<filename>. Mention the path in the message so the recipient knows what to look at.',
-      ),
-  },
-  async (args) => {
-    if (
-      args.attachment_path &&
-      !args.attachment_path.startsWith('/workspace/extra/shared/')
-    ) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `attachment_path must start with /workspace/extra/shared/. Got "${args.attachment_path}". Move the file to /workspace/extra/shared/Inbox/<target>/ first.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const data: Record<string, string | undefined> = {
-      type: 'forward_to_group',
-      target: args.target,
-      message: args.message,
-      attachmentPath: args.attachment_path || undefined,
-      createdBy: groupFolder,
-      timestamp: new Date().toISOString(),
-    };
-
-    writeIpcFile(TASKS_DIR, data);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Forwarded to "${args.target}". The recipient's chat will receive the message with "[from ${groupFolder}]" attribution.`,
-        },
-      ],
-    };
-  },
-);
-
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

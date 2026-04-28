@@ -1,105 +1,71 @@
 # Cross-Lead Workflows — Tracker
 
-Branch: `feat/cross-lead-workflows` *(planning only — not yet created)*
+Branch: `feat/cross-lead-workflows`
 
-**Scope:** This plan touches **two repos** — nanoclaw (`~/containers/nanoclaw`) and mailroom (`~/Projects/mailroom`). Phase 2 modifies mailroom's rules engine; Phase 3 modifies mailroom's docker-compose mounts. Phases must be released in coordination — flip mailroom mounts only when both repos are ready.
+**Status: pivoted to simple file-mailbox model after Phase 1 messaging path proved over-engineered. Phase 1 _Shared/ mount stays. Phase 2/3 (mailroom routing + scoped MCP) deferred until concrete pain shows up.**
 
 ## Goal
 
-Enable the AmericanVoxPop Madison to collaborate with the Inbox Madison on email-driven workflows: receive files Jeff drops for processing, hand emails between leads via user-managed routing rules, and send/reply/forward email through Inbox's existing email infrastructure — all without breaking per-group isolation for memory and vaults.
+Enable Madisons in different groups to share files and (eventually, when needed) hand off email work — without breaking per-group memory/vault isolation, and without fighting Telegram's bot-to-bot filtering or nanoclaw's existing authorization layers.
 
-## Currently in Phase 0 — design captured, awaiting go-ahead to implement Phase 1
+## What shipped
 
-## Phases
+### `_Shared/` cross-group dropbox
 
-### Phase 1 — Cross-group foundation (file + message handoff)
+- Host directory: `~/Documents/Obsidian/Main/NanoClaw/_Shared/`
+- Subfolders: `Inbox/{telegram_main,telegram_inbox,telegram_trading,telegram_avp}/` and `Attachments/`
+- Mounted RW into every working-group container at `/workspace/extra/shared/`
+- Implementation: `OBSIDIAN_SHARED_DIR` constant in `src/config.ts`; mount added in `src/container-runner.ts` (gated on `existsSync` so fresh installs without the dir are no-ops)
 
-- [ ] Create `~/Documents/Obsidian/Main/NanoClaw/_Shared/` with subfolders: `Inbox/{groupName}/` (addressed drop zones — see addressing note below), `Attachments/` (durable email-attachment transit area)
-- [ ] Mount `_Shared/` RW into every working-group container at `/workspace/extra/shared/` (RW because Phase 1 needs writes from any group; trust model is "registered Madisons only")
-- [ ] Add `router.forwardTo(groupJid, message, attachmentRef?)` in `src/router.ts`. Failure modes: target container cold → enqueue via existing `group-queue`; group unregistered → log error and fall back to Madison Inbox (mirrors `findEmailTargetJid` behaviour); filesystem write failure → hard error, surface to caller
-- [ ] Expose `forward_to_group` MCP tool inside containers (wraps router call); returns `{ ok: bool, queued: bool, error?: string }`
-- [ ] **Test A (file handoff):** drop branding doc in `_Shared/Inbox/americanvoxpop/`, ask AVP to process it into `Digital Presence/Business Directories/Assets/`
-- [ ] **Test B (message handoff):** from Inbox chat, instruct Madison to use `forward_to_group` to ask AVP for her business-directory schema. Verify roundtrip: AVP receives with `[from Inbox]` attribution, AVP responds, response shows back in Inbox with attribution
+### Agent-runner cache invalidation fix
 
-#### `_Shared/Inbox/` addressing convention
+Unrelated bug discovered while debugging: per-group agent-runner cache only checked `index.ts` mtime, missing edits to other source files. Fixed to compare the newest mtime across the entire source tree and `rmSync` before `cpSync` so deleted source files don't linger. See `lode/lessons.md`.
 
-- Path: `_Shared/Inbox/<groupName>/<filename>` where `<groupName>` matches the orchestrator's group folder (e.g. `americanvoxpop`, `algotrader`, `inbox`)
-- Pure convention — no code enforces the subdir. Jeff (or `forward_to_group` writer) writes to the right path. Recipient Madison watches her own subdir and moves files to her vault's `_attachments/` per existing practices.md pattern.
-- All groups have RW on the whole `_Shared/` tree. If discipline becomes an issue we can split mounts; not worth doing prematurely.
+## How agents use `_Shared/` today
 
-### Phase 2 — User-managed inbound routing rules
+File-mailbox pattern. Async, simple, transparent.
 
-Names: rule action is `route_to_group` (NOT `forward_to_group` — that's the Phase 1 Madison-to-Madison MCP tool, kept distinct).
+- **Drop a file for another Madison:** write to `/workspace/extra/shared/Inbox/<recipient-group-folder>/<filename>`. The recipient sees the same file at the same container path because every group has the same RW mount.
+- **Drop a message:** write a `.md` file with the request. Naming convention: `<timestamp>-<short-title>.md` (e.g. `2026-04-28T15-30-from-inbox-business-directories.md`).
+- **Read what's been left for you:** when you're working with the user, peek at `/workspace/extra/shared/Inbox/<your-group>/`.
+- **Reply:** write a reply file under `/workspace/extra/shared/Inbox/<requester-group>/`.
 
-- [ ] Add `routings` table to mailroom's store: `(message_id, group_folder, rule_id, routed_at)` PK on `(message_id, group_folder)`, indexed on `(group_folder, routed_at)`. This is the authorization gate Phase 3 uses to scope AVP's view of the inbox.
-- [ ] Add `route_to_group` action type to mailroom rules engine (`src/rules/apply/{proton,gmail}.ts`). Action: insert `routings` row + emit IPC event for `nanoclaw` to deliver.
-- [ ] Routed event payload to nanoclaw includes: subject, sender, body preview (~500 char), `message_id`, attachment count, `from_account`, `routed_to` group folder. **Body and attachments are NOT copied** — recipient pulls via the scoped Phase 3 MCP when she needs more.
-- [ ] Extend `rules.json` schema to support the new action; document in `~/Projects/mailroom/lode/reference/rules-schema.md` and `src/rules/schema.md`
-- [ ] Inbox-side tool: propose / add / remove rule entries (Madison edits `_Shared/_Settings/rules.json` after Jeff approves in chat — same pattern as existing rules)
-- [ ] nanoclaw-side: extend `mailroom-subscriber` to accept `route_to_group`-flagged events and dispatch to the indicated `routed_to` group's chat (no fall-through to default Madison Inbox routing)
-- [ ] Test: add rule "from Deb + subject contains Business Directories → route to AVP", send test email with attachment, confirm AVP chat receives the routed-email message with `message_id` she can later use against the Phase 3 MCP
+The user (Jeff) coordinates timing — he tells the recipient "AVP, check your shared inbox" when he wants the handoff to happen. No automatic wake-up, no platform-mediated routing, no fake-message-injection.
 
-### Phase 3 — Scoped inbox MCP for routed-recipient groups
+## What got reverted (and why)
 
-Replaces earlier "outbound email via Inbox proxy" design. Instead of building a new `send_via_inbox` MCP tool that proxies through Inbox's container, **register mailroom's existing inbox MCP for the recipient group's container with server-side scoping** keyed off the `routings` table from Phase 2. Recipient sees the same tool surface Madison Inbox sees, just narrowed to her own routed messages plus new-outbound (governed by `from_account` allowlist).
+The original Phase 1 design also shipped a `forward_to_group` MCP tool that delivered messages to the recipient's Telegram chat AND injected them into her processing pipeline. After six follow-up commits chasing failures across multiple authorization layers (Telegram bot-to-bot filtering, target-trigger requirements, sender-allowlist gating, `is_bot_message` filters in the message-pulling SQL), the design proved fundamentally mis-matched with the platform's threat model. Pivoted to file-mailboxes. See `lode/lessons.md` for the lesson; `progress.md` for the full chronology.
 
-- [ ] **Migrate mailroom config to `_Shared/_Settings/`** — see "accounts.json migration" detail below; recipient groups need RO read of `accounts.json` for `from_account` validation in new-outbound
-- [ ] Mailroom MCP server: add server-side authorization layer keyed on calling group's folder name (HTTP header or per-group endpoint URL — decide during impl). Read tools (`get_message`, `thread`, `attachment_to_path`) and message-bound send tools (`send_reply`, `send_reply_all`, `send_forward`) require `(message_id, calling_group)` to exist in `routings`. New-outbound (`send_message`) requires `from_account` to be in `accounts.json` with a tag the calling group is allowed to send from (extend `accounts.json` schema with a per-account `allowed_groups: []` field if needed; default-empty means Inbox-only)
-- [ ] nanoclaw container-runner: when target group has any `routings` rows, register the inbox MCP for that container with the group-scoped endpoint
-- [ ] Threading: AVP calls `mcp__inbox__send_reply(message_id, body)` directly — mailroom's existing `getThreadingHeaders()` preserves `In-Reply-To` / `References`. **No proxy, no `original_message_id` payload field, no new threading logic anywhere**
-- [ ] Attachment access: AVP calls `mcp__inbox__attachment_to_path(message_id, position)` — mailroom writes bytes to AVP's container `/workspace/inbox-attachments/<message_id>/<filename>` (existing tool, scoped by routings check). No `_Shared/Attachments/` rendezvous, no extraction-at-routing-time
-- [ ] `from` resolution: `send_message` requires `from_account`; reply/forward tools default to recipient-account on the stored message (mailroom's existing default), explicit override allowed
-- [ ] `include_original_attachments` defaults: reply/reply_all = false, forward = true. Maps onto existing `send_reply{,_all}` / `send_forward` args. Verify reply tools accept `include_attachments: false`; if missing, file mailroom follow-up
-- [ ] Per-context defaults: `AmericanVoxPop/_Settings/email-defaults.json` (default_from, signature) — Madison-edited, Jeff-approved. Read by AVP at compose time; not a mailroom concern
-- [ ] Single approval point: Jeff approves in AVP chat. No second prompt anywhere — AVP calls send tool directly, mailroom executes
-- [ ] Send-confirmation observability: send tools return `{ ok, message_id, sent_at, from_account }` synchronously — same shape mailroom already returns to Inbox today
-- [ ] Test: full loop — Deb's reply routed to AVP via Phase 2 rule with `message_id=X`, AVP fetches body via `get_message(X)` and an attachment via `attachment_to_path(X, 0)`, AVP composes via Jeff-approved `send_reply(X, body, include_attachments=false)`, threading verified by inspecting the sent message's `In-Reply-To` / `References` headers
+## Phase 2 / Phase 3 — deferred
 
-#### accounts.json migration (Phase 3, replaces original one-line bullet)
+The earlier plan called for:
+- **Phase 2:** mailroom `route_to_group` rule action + `routings` table for inbound email routing to non-Inbox Madisons.
+- **Phase 3:** scoped `mcp__inbox__*` MCP for routed-recipient groups, server-side authorization keyed off the routings table.
 
-Mailroom reads `rules.json`, `accounts.json`, and `rules-changelog.md` from a single `MAILROOM_CONFIG_DIR` (default `/var/mailroom/config`, currently bind-mounted from `Inbox/_Settings/`). Per-file mounts are explicitly broken (inode-pinning issue resolved in Phase 9 of `mail-push-redesign`). So splitting only `accounts.json` would force a second config dir or fragile per-file mounts. **Move all three together.**
+These are real and well-specified, but speculative. The use cases that motivated them (high-volume cold-email outreach with AVP handling replies via Inbox's send tools) haven't been pressure-tested against the file-mailbox model. The file-mailbox handles the "Jeff drops a doc, AVP processes it" use case without any Phase 2/3 work. The "Inbox routes Deb's reply to AVP" use case can also work via file-mailbox: Inbox writes a summary + thread-id reference into `_Shared/Inbox/telegram_avp/`, AVP reads it, drafts a reply for Inbox to send via her existing tools.
 
-- [ ] Create `~/Documents/Obsidian/Main/NanoClaw/_Shared/_Settings/`
-- [ ] Move `rules.json`, `accounts.json`, `rules-changelog.md` from `Inbox/_Settings/` → `_Shared/_Settings/`
-- [ ] Update mailroom `docker-compose.yml` bind mount on **both** `ingestor` and `inbox-mcp` services: `${HOME}/Documents/Obsidian/Main/NanoClaw/_Shared/_Settings:/var/mailroom/config:ro`
-- [ ] Madison Inbox container already gets `_Shared/` RW from Phase 1 — confirm she can edit `_Shared/_Settings/rules.json` from `/workspace/extra/shared/_Settings/`
-- [ ] AVP container also already gets `_Shared/` RW from Phase 1 — gives her `accounts.json` read access for `from` validation. (AVP won't edit it; convention only.)
-- [ ] Run mailroom `rules-validate` CLI from inside containers against new path before declaring complete
-- [ ] Update docs: nanoclaw `lode/infrastructure/madison-pipeline.md`; mailroom `lode/infrastructure/mailroom-rules.md`; mailroom `lode/reference/rules-schema.md`. Old `Inbox/_Settings/rules.json` references → new `_Shared/_Settings/rules.json` paths
-- [ ] Verify legacy `MAILROOM_DATA_DIR` fallback still works for one deploy cycle (defensive — currently expected to be unused)
+If the file-mailbox model proves insufficient (latency, volume, ergonomics), Phase 2/3 are still on the shelf and can be picked up. Until then, YAGNI.
 
 ## Decisions
 
 | Decision | Decided on | Rationale |
 |---|---|---|
-| Path 1+2 (shared dropbox + router forward) over swarm or fan-out | 2026-04-28 | Use cases need *real* Madisons (with vaults/memory/tools); swarm doesn't get us existing Inbox email infra; fan-out is overkill for targeted handoffs. |
-| User-managed rules (Madison edits, Jeff approves) over static thread-ownership tagging | 2026-04-28 | Process is being flushed out — rules will change. Matches existing mailroom rules pattern (rules.json + mtime poll). Avoids hidden state. |
-| Proxy-through-Inbox for outbound email over giving AVP its own send creds | 2026-04-28 | Single audit trail, no duplicated credentials, gives a natural future approval gate point. Cheap to flip later if friction emerges. |
-| Single approval point in AVP chat (Inbox does not re-prompt) | 2026-04-28 | Jeff is in the loop where the draft is composed. Re-asking in Inbox would be redundant. Lead-to-lead trust within the trusted set. |
-| Move all three mailroom config files to `_Shared/_Settings/`, not just `accounts.json` | 2026-04-28 | Mailroom reads rules + accounts from a single `MAILROOM_CONFIG_DIR`; per-file mounts are a known-broken pattern. Single dir move keeps the proven directory-mount design. |
-| `_Shared/` mounted RW (not RO) into every group | 2026-04-28 | Phase 1 needs writes from any group (drop zones). Discipline of "Madisons don't edit what isn't theirs" matches existing per-group vault model. |
-| **Replaced: scoped inbox MCP for recipient groups, gated by `routings` table** — supersedes earlier "extract attachments to `_Shared/Attachments/` + build `send_via_inbox` proxy" design | 2026-04-28 | Recipient gets the same MCP surface Madison Inbox has, scoped server-side to her routed messages. No bytes copied, no proxy-rebuild of threading semantics, no shared transit dir to GC. The `routings` table is the authorization handle — `(message_id, group_folder)` row exists ⇒ recipient can read/reply/forward. AVP gets subject + body + attachments naturally via the same tools Inbox uses. |
-| Rule action named `route_to_group`, not `forward_to_group` | 2026-04-28 | `forward_to_group` is the Phase 1 Madison-to-Madison MCP tool (already shipped). Different verb, different surface — `route_to_group` is mailroom's rule-engine action that delivers an inbound email to a group. Avoids semantic collision. |
-| `include_original_attachments` defaults: reply=false, forward=true | 2026-04-28 | Matches typical email client behavior. Override available. |
-| `from` required on `send`, defaults to recipient-account on reply/forward, override allowed | 2026-04-28 | Mirrors how every standard email client resolves the field. Mailroom's existing `send_reply` already handles this. |
-| `send_via_inbox` (renamed from `request_email`) | 2026-04-28 | Disambiguates from future rule-action `draft_for_review`. Tool name describes the proxy action explicitly. |
-| Threading correctness handled at mailroom layer, not nanoclaw | 2026-04-28 | Verified: `getThreadingHeaders()` already merges `In-Reply-To`/`References` from stored message. Proxy contract requirement: `send_via_inbox` payload must carry `original_message_id`. |
+| `_Shared/` mounted RW into every working-group container | 2026-04-28 | Foundation for any cross-group collaboration. RW because both reading and writing happen on every Madison's side. |
+| Move all three mailroom config files to `_Shared/_Settings/` (deferred) | 2026-04-28 | Rationale stands but only relevant if Phase 3 (scoped inbox MCP) is built. Skip until then. |
+| File-mailbox over `forward_to_group` MCP | 2026-04-28 | After 6 commits trying to make MCP-driven cross-Madison messaging work end-to-end, the layered authorization fights and Telegram bot-to-bot filtering made the architecture unrecognizable. File-mailbox needs zero new authorization paths and the user naturally coordinates handoff timing. |
+| Phase 2/3 deferred, not abandoned | 2026-04-28 | Plan and findings remain in tree. Picking them up later requires concrete pain points, not speculation. |
 
 ## Errors
 
 | Error | Resolution |
 |---|---|
 
-*(empty — populated during implementation)*
+*(empty — no implementation work currently active)*
 
 ## Related
 
-- `lode/groups.md` — group roster, current isolation model
-- `lode/practices.md` — per-group data layout, attachments convention (`_attachments/` per vault)
-- `lode/infrastructure/madison-pipeline.md` — mailroom-subscriber inbound path (extends here)
-- `~/Projects/mailroom/lode/infrastructure/mailroom-rules.md` — current rule engine + rules.json shape (will be updated for new mount path)
-- `~/Projects/mailroom/lode/reference/rules-schema.md` — rule schema (extend in Phase 2)
-- `src/router.ts` — where `forwardTo` lands
-- `src/channels/email-routing.ts` — `findEmailTargetJid`; superseded for AVP-owned threads by Phase 2 rules
-- `~/Projects/mailroom/src/mcp/tools/reply_common.ts` — `getThreadingHeaders()` proves Phase 3 threading is already correct at the send layer
-- `~/Projects/mailroom/src/rules/loader.ts` — `MAILROOM_CONFIG_DIR` reader; documents the single-dir constraint that drives the migration design
+- `lode/lessons.md` — two new lessons from this plan: (a) don't fight the chat platform's threat model for agent-to-agent traffic; (b) cache invalidation must consider whole source trees, not single files
+- `lode/groups.md` — group roster
+- `lode/practices.md` — per-group `_attachments/` convention (still relevant for files a Madison wants to keep long-term after pulling from `_Shared/`)
+- `~/Projects/mailroom/lode/infrastructure/mailroom-rules.md` — would be relevant if Phase 2/3 are picked up later
+- `src/container-runner.ts` — `_Shared/` mount + the cache-invalidation fix

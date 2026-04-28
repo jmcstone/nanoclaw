@@ -251,13 +251,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const hasTrigger = missedMessages.some(
       (m) =>
         triggerPattern.test(m.content.trim()) &&
-        // Bot messages are pre-authorized by the layer that injected them
-        // (forward_to_group's IPC handler, mailroom-subscriber, scheduled
-        // tasks). Same logic as the sender-allowlist drop bypass below at
-        // the channel onMessage handler.
-        (m.is_from_me ||
-          m.is_bot_message ||
-          isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
   }
@@ -569,12 +563,7 @@ async function startMessageLoop(): Promise<void> {
             const hasTrigger = groupMessages.some(
               (m) =>
                 triggerPattern.test(m.content.trim()) &&
-                // Bot messages are pre-authorized by the layer that injected
-                // them (forward_to_group's IPC handler, mailroom-subscriber,
-                // scheduled tasks). Same logic as the sender-allowlist drop
-                // bypass at the channel onMessage handler.
                 (m.is_from_me ||
-                  m.is_bot_message ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
             if (!hasTrigger) continue;
@@ -820,14 +809,6 @@ async function main(): Promise<void> {
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
     onTasksChanged: writeAllTaskSnapshots,
-    injectMessage: (chatJid, msg) => {
-      // forward_to_group's bypass for Telegram's bot-to-bot filter: store the
-      // message and trigger immediate processing on the recipient group.
-      storeMessage(msg);
-      if (registeredGroups[chatJid]) {
-        queue.enqueueMessageCheck(chatJid);
-      }
-    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

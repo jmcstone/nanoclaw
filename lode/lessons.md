@@ -200,3 +200,37 @@ The `--` separator is required so flags like `-d` reach docker-compose, not env-
 - Reviewing parallel-agent outputs and surfacing inconsistencies → Opus
 
 **Reference**: `lode/plans/active/2026-04-mail-push-redesign/progress.md` Phase 10 entries for the working pattern.
+
+---
+
+## Don't fight the chat platform's threat model — agent-to-agent traffic belongs on a separate bus
+
+**Rule**: When two agents share a chat platform (Telegram, Slack, Discord) but each has its own bot identity in its own conversation, do **not** try to deliver agent-to-agent messages by sending through the platform. Use a side channel — file mailbox, internal queue, or DB injection — for agent-to-agent comms. The chat platform is the user-visible interface; the side channel is the agent transport.
+
+**Why**: Telegram explicitly filters bot-to-bot messages out of group webhook updates ("bots cannot see messages from other bots, regardless of mode" — loop prevention). Even if you bypass that with a `Bot-to-Bot Communication Mode` toggle, Telegram themselves warn it "can easily result in infinite interaction loops" and require manual rate-limit safeguards. Beyond the Telegram restriction, every authorization layer in a chat-bot stack is built around the threat model "messages come from external untrusted humans" — sender allowlists, trigger gating, `is_bot_message` filters, channel-source verification. Agent-to-agent messages don't fit any of those gates. Trying to thread them through anyway means peeling off layer after layer of "trust this one source" exceptions — each fix exposes another filter. That's the smell.
+
+**Incident**: `cross-lead-workflows` Phase 1 (2026-04-28). Original design: `forward_to_group` MCP tool + IPC handler that sent the message via Telegram and trusted the chat to deliver. Six follow-up commits chasing layer-by-layer failures: agent-runner cache invalidation, target-trigger prepend, message framing iterations, pipeline injection bypass for the bot-to-bot Telegram filter, `is_bot_message` bypass in the trigger check, and finally a `getMessagesSince` filter that excluded `is_bot_message=true` rows from the input the trigger check ran against. Each fix worked in isolation; the cumulative architecture was unrecognizable. Pivoted to a file-mailbox model: `_Shared/Inbox/<target>/` directory mounted RW into every container, agents read/write files, human coordinates handoffs. Zero new authorization paths, zero fights with the platform.
+
+**How to apply**:
+- Test the core hypothesis early: send one peer message and confirm the recipient's container actually wakes up. If it doesn't, *that* is the architectural fact you need to design around — not something to patch through.
+- When a fix-fight starts producing more than two follow-up commits with names like "...so X actually works" or "...bypass Y in Z," step back. The cause is usually that the layered filters between A and B were designed for a different traffic shape and you're approximating "same shape" by punching holes. Holes accumulate.
+- Default for agent-to-agent on a chat platform: shared filesystem mailbox. Async, simple, transparent (humans see history if mailbox is in a synced folder), no platform-specific limitations to fight.
+- Default for "does the user need to see this?": chat platform. That's its job.
+- The two questions are independent. Conflating them ("the chat is the comm bus AND the user UI") is what created the original mismatch.
+
+**Reference**: `lode/plans/active/2026-04-cross-lead-workflows/` — full pivot story in `progress.md`. The `_Shared/` mount + agent-runner cache fix from this plan are the keepers; everything else got reverted.
+
+---
+
+## Per-group agent-runner cache must compare the whole source tree, not a single file
+
+**Rule**: When caching a directory of source files keyed on mtime, the invalidation check has to consider *all* files in the tree (or a hash of the tree), not just one sentinel file. Edits to non-sentinel files silently leave stale caches that mask freshly-shipped behavior.
+
+**Why**: `container-runner.ts` cached each group's `agent-runner-src/` and decided whether to refresh based on `index.ts` mtime alone. An edit to `ipc-mcp-stdio.ts` (a sibling file in the same dir, where new MCP tools get registered) changed the source tree but left `index.ts` untouched — so the cache check returned "still fresh" and every container booted with the old code. The container image had the new tool, but the per-group bind-mount overrode it. Symptom looked like the agent simply didn't see the tool at all, which sent debugging in the wrong direction (was the tool registered? was the container talking to the right MCP?) before the actual cache-staleness was discovered.
+
+**How to apply**:
+- For mtime-based directory caches, walk the tree and compare the newest mtime found, not a single file's mtime.
+- When in doubt, just `rm -rf` the cached dir before re-copy — `rmSync` + `cpSync` is two lines and eliminates a class of "stale subpath" bugs that mtime checks miss (e.g. files deleted in source but still in cache).
+- Test the cache-invalidation path with edits to a *non-obvious* file in the source tree, not just the sentinel.
+
+**Incident**: 2026-04-28 — `forward_to_group` MCP tool was added to `ipc-mcp-stdio.ts`, image rebuilt, service restarted, but Madison reported "I don't have a `forward_to_group` tool in my available toolset." Cache fix in commit `45c2454`.

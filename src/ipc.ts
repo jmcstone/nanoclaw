@@ -14,7 +14,7 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { NewMessage, RegisteredGroup } from './types.js';
+import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -29,12 +29,6 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
-  // Inject a message into the recipient group's processing pipeline. Used
-  // by forward_to_group: the Telegram delivery is for human visibility but
-  // Telegram doesn't notify bots about other-bot messages, so the recipient's
-  // container would never spawn without a direct injection. Mirrors the
-  // (storeMessage + queue.enqueueMessageCheck) path used by mailroom-subscriber.
-  injectMessage: (chatJid: string, message: NewMessage) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -204,10 +198,6 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
-    // forward_to_group fields
-    target?: string;
-    message?: string;
-    attachmentPath?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -455,140 +445,6 @@ export async function processTaskIpc(
         logger.warn(
           { sourceGroup },
           'Unauthorized refresh_groups attempt blocked',
-        );
-      }
-      break;
-
-    case 'forward_to_group':
-      // Cross-group message handoff (Phase 1 of cross-lead-workflows).
-      // Trust model: any registered group can forward to any other registered
-      // group. Source identity is verified by the IPC directory name (sourceGroup).
-      if (!data.target || !data.message) {
-        logger.warn(
-          { sourceGroup, hasTarget: !!data.target, hasMessage: !!data.message },
-          'Invalid forward_to_group request — missing target or message',
-        );
-        break;
-      }
-
-      // Resolve target: accept either a JID (registered) or a folder name.
-      let targetJid: string | undefined;
-      let targetGroup: RegisteredGroup | undefined;
-      if (registeredGroups[data.target]) {
-        targetJid = data.target;
-        targetGroup = registeredGroups[data.target];
-      } else {
-        for (const [jid, group] of Object.entries(registeredGroups)) {
-          if (group.folder === data.target) {
-            targetJid = jid;
-            targetGroup = group;
-            break;
-          }
-        }
-      }
-
-      if (!targetJid || !targetGroup) {
-        logger.warn(
-          { sourceGroup, target: data.target },
-          'forward_to_group: target group not registered',
-        );
-        break;
-      }
-
-      if (targetGroup.folder === sourceGroup) {
-        logger.warn(
-          { sourceGroup, target: data.target },
-          'forward_to_group: refusing self-forward',
-        );
-        break;
-      }
-
-      // Validate attachment_path stays within the shared mount.
-      if (
-        data.attachmentPath &&
-        !data.attachmentPath.startsWith('/workspace/extra/shared/')
-      ) {
-        logger.warn(
-          { sourceGroup, attachmentPath: data.attachmentPath },
-          'forward_to_group: attachment_path outside shared mount; rejected',
-        );
-        break;
-      }
-
-      // Find source group's display name for attribution. Look up by folder.
-      let sourceDisplayName = sourceGroup;
-      for (const group of Object.values(registeredGroups)) {
-        if (group.folder === sourceGroup) {
-          sourceDisplayName = group.name;
-          break;
-        }
-      }
-
-      // Build the forwarded message. Two things matter:
-      //
-      // 1. Wake trigger — non-main groups only spawn on messages matching
-      //    their trigger like "@Madison". Without this prefix the forward
-      //    lands silently in the chat and the recipient never processes it.
-      //
-      // 2. Framing — name the sender so the recipient knows this is a
-      //    peer-to-peer Madison message and addresses her reply to that
-      //    Madison directly via forward_to_group, rather than answering
-      //    whoever else is in the chat.
-      const triggerPrefix =
-        targetGroup.requiresTrigger !== false && targetGroup.trigger
-          ? `${targetGroup.trigger} `
-          : '';
-      const lines: string[] = [
-        `${triggerPrefix}Message from ${sourceDisplayName} (group: ${sourceGroup}):`,
-        '',
-        data.message,
-      ];
-      if (data.attachmentPath) {
-        const relative = data.attachmentPath.replace(
-          '/workspace/extra/shared/',
-          '',
-        );
-        lines.push('', `Attachment: _Shared/${relative}`);
-      }
-      lines.push(
-        '',
-        `This is a side conversation with ${sourceDisplayName}, not a redirect of any user task you may be working on. Treat it like an interruption from a colleague — answer her question, then return to whatever the user had you doing. If you and ${sourceDisplayName} have discussed related topics before, your memory may have context worth checking. Reply by calling forward_to_group(target="${sourceGroup}", message="...") — your reply lands in ${sourceDisplayName}'s chat, not this one.`,
-      );
-      const forwardedText = lines.join('\n');
-
-      try {
-        // 1. Telegram delivery — chat visibility for human users. Cannot wake
-        //    the recipient's container on its own because Telegram filters
-        //    bot-to-bot messages out of group webhook updates.
-        await deps.sendMessage(targetJid, forwardedText);
-
-        // 2. Direct pipeline injection — what actually wakes the recipient.
-        //    Mirrors the path mailroom-subscriber uses for inbound emails.
-        const injectedMessage: NewMessage = {
-          id: `forward-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          chat_jid: targetJid,
-          sender: sourceGroup,
-          sender_name: sourceDisplayName,
-          content: forwardedText,
-          timestamp: new Date().toISOString(),
-          is_from_me: false,
-          is_bot_message: true,
-        };
-        deps.injectMessage(targetJid, injectedMessage);
-
-        logger.info(
-          {
-            sourceGroup,
-            targetFolder: targetGroup.folder,
-            targetJid,
-            hasAttachment: !!data.attachmentPath,
-          },
-          'forward_to_group delivered',
-        );
-      } catch (err) {
-        logger.error(
-          { sourceGroup, targetJid, err },
-          'forward_to_group: send failed',
         );
       }
       break;
