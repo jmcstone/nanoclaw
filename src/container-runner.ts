@@ -41,6 +41,16 @@ import { RegisteredGroup } from './types.js';
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
+function newestMtime(dir: string): number {
+  let max = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    const m = entry.isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs;
+    if (m > max) max = m;
+  }
+  return max;
+}
+
 export interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -196,11 +206,7 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Cross-group shared dropbox (Phase 1 of cross-lead-workflows). Every
-  // working-group container sees the same _Shared/ tree at /workspace/extra/shared/.
-  // RW because Madisons drop files for each other and write attachment transit
-  // payloads here. No-op when the host directory is absent (e.g., fresh install
-  // before /add-cross-lead-workflows or non-Obsidian setups).
+  // No-op when the host directory is absent (fresh install or non-Obsidian setups).
   if (fs.existsSync(OBSIDIAN_SHARED_DIR)) {
     mounts.push({
       hostPath: OBSIDIAN_SHARED_DIR,
@@ -225,22 +231,10 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    // Cache invalidation: compare the newest mtime across the entire source
-    // tree against the cached copy's newest mtime. The earlier index.ts-only
-    // check missed edits to other agent-runner files (e.g. ipc-mcp-stdio.ts),
-    // leaving stale per-group caches that masked freshly-shipped MCP tools.
-    const newestMtime = (dir: string): number => {
-      let max = 0;
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const p = path.join(dir, entry.name);
-        const m = entry.isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs;
-        if (m > max) max = m;
-      }
-      return max;
-    };
+    const srcMtime = newestMtime(agentRunnerSrc);
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
-      newestMtime(agentRunnerSrc) > newestMtime(groupAgentRunnerDir);
+      srcMtime > newestMtime(groupAgentRunnerDir);
     if (needsCopy) {
       fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });

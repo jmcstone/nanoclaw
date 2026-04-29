@@ -95,14 +95,18 @@ export const MAX_EMAIL_PREVIEW_CHARS = Math.max(
   parseInt(process.env.MAX_EMAIL_PREVIEW_CHARS || '200', 10) || 200,
 );
 
-// Obsidian-resident settings (visible + editable on any device via sync).
-// Host-side only — never mounted into containers.
-export const OBSIDIAN_SETTINGS_DIR = path.join(
+const NANOCLAW_OBSIDIAN_DIR = path.join(
   HOME_DIR,
   'Documents',
   'Obsidian',
   'Main',
   'NanoClaw',
+);
+
+// Obsidian-resident settings (visible + editable on any device via sync).
+// Host-side only — never mounted into containers.
+export const OBSIDIAN_SETTINGS_DIR = path.join(
+  NANOCLAW_OBSIDIAN_DIR,
   '_Settings',
 );
 export const DEFAULTS_PATH = path.join(OBSIDIAN_SETTINGS_DIR, 'defaults.json');
@@ -112,18 +116,7 @@ export const GROUP_OVERRIDES_PATH = path.join(
 );
 export const OBSIDIAN_TASKS_DIR = path.join(OBSIDIAN_SETTINGS_DIR, 'tasks');
 
-// Cross-group dropbox: a shared directory mounted RW into every working-group
-// container at /workspace/extra/shared/. Used by `forward_to_group` for file
-// handoff between Madisons (Phase 1 of cross-lead-workflows). Trust model is
-// "registered Madisons only" — discipline beats per-file ACLs at this scale.
-export const OBSIDIAN_SHARED_DIR = path.join(
-  HOME_DIR,
-  'Documents',
-  'Obsidian',
-  'Main',
-  'NanoClaw',
-  '_Shared',
-);
+export const OBSIDIAN_SHARED_DIR = path.join(NANOCLAW_OBSIDIAN_DIR, '_Shared');
 
 interface GlobalDefaults {
   maxMessagesPerPrompt?: number;
