@@ -16,8 +16,13 @@ vi.mock('./config.js', () => ({
   DOWNLOADS_DIR: '/tmp/nanoclaw-test-downloads',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
+  LITELLM_BASE_URL: 'http://localhost:4000',
   OBSIDIAN_SHARED_DIR: '/tmp/nanoclaw-test-shared',
+  OBSIDIAN_TASKS_DIR: '/tmp/nanoclaw-test-tasks',
+  OLLAMA_ADMIN_TOOLS: false,
+  ONECLI_URL: 'http://localhost:10254',
   TIMEZONE: 'America/Los_Angeles',
+  resolveGroupLitellmKey: () => undefined,
   resolveGroupModel: () => undefined,
 }));
 
