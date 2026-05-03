@@ -678,6 +678,17 @@ async function runQuery(
   const hasInbox = containerInput.groupFolder === 'telegram_inbox';
   log(`messages MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
 
+  // AgentMail MCP — registered only when container-runner injected both
+  // env vars (i.e. this group has an inbox configured via
+  // AGENTMAIL_INBOX_<FOLDER>). Scoped to a single inbox per group; the
+  // server still has org-wide reach via the API key, but Madison is
+  // instructed (in CLAUDE.md) to operate only on her own inbox id.
+  const hasAgentMail =
+    !!process.env.AGENTMAIL_API_KEY && !!process.env.AGENTMAIL_INBOX_ID;
+  log(
+    `agentmail MCP: ${hasAgentMail ? `enabled (inbox=${process.env.AGENTMAIL_INBOX_ID})` : 'disabled'}`,
+  );
+
   const mcpServers: Record<string, any> = {
     nanoclaw: {
       command: 'node',
@@ -738,6 +749,16 @@ async function runQuery(
       url: 'http://host.docker.internal:18080/mcp',
     };
   }
+  if (hasAgentMail) {
+    mcpServers['agentmail'] = {
+      command: 'npx',
+      args: ['-y', 'agentmail-mcp'],
+      env: {
+        AGENTMAIL_API_KEY: process.env.AGENTMAIL_API_KEY!,
+        AGENTMAIL_INBOX_ID: process.env.AGENTMAIL_INBOX_ID!,
+      },
+    };
+  }
 
   const trawlCfg = containerInput.trawl;
   const hasTrawl = trawlCfg?.enabled === true;
@@ -773,6 +794,7 @@ async function runQuery(
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
     ...(hasInbox ? ['mcp__messages__*'] : []),
+    ...(hasAgentMail ? ['mcp__agentmail__*'] : []),
     ...trawlAllowed,
   ];
 

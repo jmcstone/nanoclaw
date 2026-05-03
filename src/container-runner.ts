@@ -21,6 +21,8 @@ import {
   OBSIDIAN_TASKS_DIR,
   OLLAMA_ADMIN_TOOLS,
   ONECLI_URL,
+  resolveAgentMailApiKey,
+  resolveGroupAgentMailInbox,
   resolveGroupLitellmKey,
   resolveGroupModel,
   TIMEZONE,
@@ -277,6 +279,8 @@ function buildContainerArgs(
   containerName: string,
   modelOverride?: string,
   litellmApiKey?: string,
+  agentmailApiKey?: string,
+  agentmailInboxId?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -300,6 +304,16 @@ function buildContainerArgs(
   if (litellmApiKey) {
     args.push('-e', `LITELLM_BASE_URL=${LITELLM_BASE_URL}`);
     args.push('-e', `LITELLM_API_KEY=${litellmApiKey}`);
+  }
+
+  // AgentMail per-group inbox. Both env vars must be present for the
+  // agent-runner to register the agentmail-mcp server. Mirrors LiteLLM's
+  // pattern: secret stays in host .env, injected only into the spawned
+  // container, never into the host process env.
+  // V2 NOTE: Move this to OneCLI vault. See lode/v2-migration-notes/agentmail.md.
+  if (agentmailApiKey && agentmailInboxId) {
+    args.push('-e', `AGENTMAIL_API_KEY=${agentmailApiKey}`);
+    args.push('-e', `AGENTMAIL_INBOX_ID=${agentmailInboxId}`);
   }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
@@ -369,11 +383,17 @@ export async function runContainerAgent(
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const modelOverride = resolveGroupModel(group.folder);
   const litellmApiKey = resolveGroupLitellmKey(group.folder);
+  const agentmailInboxId = resolveGroupAgentMailInbox(group.folder);
+  const agentmailApiKey = agentmailInboxId
+    ? resolveAgentMailApiKey()
+    : undefined;
   const containerArgs = buildContainerArgs(
     mounts,
     containerName,
     modelOverride,
     litellmApiKey,
+    agentmailApiKey,
+    agentmailInboxId,
   );
 
   logger.debug(

@@ -5,10 +5,7 @@ import {
   isAgentMailSenderAllowed,
   loadAgentMailAllowlist,
 } from '../agentmail-allowlist.js';
-import {
-  discoverAgentMailInboxes,
-  resolveAgentMailApiKey,
-} from '../config.js';
+import { discoverAgentMailInboxes, resolveAgentMailApiKey } from '../config.js';
 import { logger } from '../logger.js';
 import { Channel, NewMessage, RegisteredGroup } from '../types.js';
 import { ChannelOpts, registerChannel } from './registry.js';
@@ -77,7 +74,10 @@ class AgentMailChannel implements Channel {
       const entry = this.allowlist[folder];
       if (!entry) {
         logger.warn(
-          { folder, allowlistPath: '~/.config/nanoclaw/agentmail-allowlist.json' },
+          {
+            folder,
+            allowlistPath: '~/.config/nanoclaw/agentmail-allowlist.json',
+          },
           'AgentMail: folder configured but missing from allowlist — ALL inbound mail will be dropped',
         );
       } else if (
@@ -377,9 +377,6 @@ function parseEmailAddress(raw: string): string {
   return raw.trim();
 }
 
-registerChannel(
-  'agentmail',
-  (opts: ChannelOpts) => new AgentMailChannel(opts),
-);
+registerChannel('agentmail', (opts: ChannelOpts) => new AgentMailChannel(opts));
 
 export { AgentMailChannel };

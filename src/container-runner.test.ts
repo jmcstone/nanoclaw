@@ -24,6 +24,8 @@ vi.mock('./config.js', () => ({
   TIMEZONE: 'America/Los_Angeles',
   resolveGroupLitellmKey: () => undefined,
   resolveGroupModel: () => undefined,
+  resolveAgentMailApiKey: () => undefined,
+  resolveGroupAgentMailInbox: () => undefined,
 }));
 
 // Mock logger

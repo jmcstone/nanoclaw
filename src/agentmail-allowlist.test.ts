@@ -27,7 +27,9 @@ function writeConfig(content: unknown): string {
 
 describe('loadAgentMailAllowlist', () => {
   test('missing file returns empty allowlist (deny-all default)', () => {
-    const out = loadAgentMailAllowlist(path.join(tmpDir, 'does-not-exist.json'));
+    const out = loadAgentMailAllowlist(
+      path.join(tmpDir, 'does-not-exist.json'),
+    );
     expect(out).toEqual({});
   });
 
@@ -72,9 +74,9 @@ describe('loadAgentMailAllowlist', () => {
 
 describe('isAgentMailSenderAllowed', () => {
   test('denies when folder absent (deny-by-default)', () => {
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'alice@avp.com', {}),
-    ).toBe(false);
+    expect(isAgentMailSenderAllowed('telegram_avp', 'alice@avp.com', {})).toBe(
+      false,
+    );
   });
 
   test('denies when entry has no rules and allowAny false', () => {
@@ -97,27 +99,27 @@ describe('isAgentMailSenderAllowed', () => {
     const cfg = {
       telegram_avp: { allowedSenders: ['Alice@AVP.com'] },
     };
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'alice@avp.com', cfg),
-    ).toBe(true);
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'ALICE@AVP.COM', cfg),
-    ).toBe(true);
+    expect(isAgentMailSenderAllowed('telegram_avp', 'alice@avp.com', cfg)).toBe(
+      true,
+    );
+    expect(isAgentMailSenderAllowed('telegram_avp', 'ALICE@AVP.COM', cfg)).toBe(
+      true,
+    );
   });
 
   test('domain match (case-insensitive)', () => {
     const cfg = {
       telegram_avp: { allowedDomains: ['AVP.com'] },
     };
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'bob@avp.com', cfg),
-    ).toBe(true);
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'bob@AVP.COM', cfg),
-    ).toBe(true);
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'bob@other.com', cfg),
-    ).toBe(false);
+    expect(isAgentMailSenderAllowed('telegram_avp', 'bob@avp.com', cfg)).toBe(
+      true,
+    );
+    expect(isAgentMailSenderAllowed('telegram_avp', 'bob@AVP.COM', cfg)).toBe(
+      true,
+    );
+    expect(isAgentMailSenderAllowed('telegram_avp', 'bob@other.com', cfg)).toBe(
+      false,
+    );
   });
 
   test('mixed: sender list AND domain list both consulted', () => {
@@ -127,9 +129,9 @@ describe('isAgentMailSenderAllowed', () => {
         allowedDomains: ['avp.com'],
       },
     };
-    expect(
-      isAgentMailSenderAllowed('telegram_avp', 'team@avp.com', cfg),
-    ).toBe(true);
+    expect(isAgentMailSenderAllowed('telegram_avp', 'team@avp.com', cfg)).toBe(
+      true,
+    );
     expect(
       isAgentMailSenderAllowed('telegram_avp', 'external-vip@partner.io', cfg),
     ).toBe(true);

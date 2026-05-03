@@ -221,9 +221,7 @@ describe('buildInboundMessage', () => {
   });
 
   test('allows sender via domain match', () => {
-    const event = classifyInbound(
-      makeInboundFrame({ from: 'bob@avp.com' }),
-    );
+    const event = classifyInbound(makeInboundFrame({ from: 'bob@avp.com' }));
     const out = buildInboundMessage(
       event,
       makeInboxMap(),
