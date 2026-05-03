@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { readEnvFile } from './env.js';
+import { readEnvFile, readEnvKeysWithPrefix } from './env.js';
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
@@ -45,6 +45,17 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   '.config',
   'nanoclaw',
   'sender-allowlist.json',
+);
+// AgentMail per-inbox sender allowlist. Lives outside the project root so it
+// can't be tampered with from inside any container. Default policy is
+// **deny-all** (no entry for a folder ⇒ drop every inbound) because email is
+// an untrusted external surface — the opposite of SENDER_ALLOWLIST_PATH which
+// defaults to allow-all for trusted Telegram chats.
+export const AGENTMAIL_ALLOWLIST_PATH = path.join(
+  HOME_DIR,
+  '.config',
+  'nanoclaw',
+  'agentmail-allowlist.json',
 );
 // Optional external data root (e.g. ~/containers/data/NanoClaw for BTRFS snapshots).
 // When set, all persistent data lives outside the project directory.
@@ -234,6 +245,45 @@ export function resolveGroupLitellmKey(folder: string): string | undefined {
 
 export const LITELLM_BASE_URL =
   process.env.LITELLM_BASE_URL || 'http://host.docker.internal:4000';
+
+// AgentMail integration: per-group inbox ownership. Each group folder may
+// declare which AgentMail inbox it owns via `AGENTMAIL_INBOX_<FOLDER>=...`
+// in .env. The host channel subscribes to all configured inboxes over a
+// single WebSocket; the agent-runner mounts agentmail-mcp scoped to the
+// owning group's inbox. AGENTMAIL_API_KEY is shared across all inboxes.
+//
+// V2 NOTE: this reads .env directly to bypass process.env exposure, mirroring
+// resolveGroupLitellmKey. In v2, AgentMail credentials should move to OneCLI
+// vault (containers never see raw secrets). See lode/v2-migration-notes/agentmail.md.
+export function resolveAgentMailApiKey(): string | undefined {
+  const value = readEnvFile(['AGENTMAIL_API_KEY']).AGENTMAIL_API_KEY;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveGroupAgentMailInbox(folder: string): string | undefined {
+  const envName = `AGENTMAIL_INBOX_${folder.replace(/-/g, '_').toUpperCase()}`;
+  const value = readEnvFile([envName])[envName];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Discover every group folder that has an AgentMail inbox configured.
+ * Returns a folder→inboxId map. Used by the host channel at startup to
+ * decide which inboxes to subscribe to.
+ */
+export function discoverAgentMailInboxes(): Record<string, string> {
+  const prefix = 'AGENTMAIL_INBOX_';
+  const all = readEnvKeysWithPrefix(prefix);
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(all)) {
+    if (key === 'AGENTMAIL_INBOX_API_KEY') continue;
+    const folderUpper = key.slice(prefix.length);
+    if (!folderUpper) continue;
+    const folder = folderUpper.toLowerCase();
+    result[folder] = value;
+  }
+  return result;
+}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

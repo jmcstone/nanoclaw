@@ -18,4 +18,10 @@ import './telegram.js';
 // configured email target group via the existing onMessage pipeline).
 import './mailroom-subscriber.js';
 
+// agentmail — per-group AgentMail inboxes. Each registered group folder may
+// own one inbox via AGENTMAIL_INBOX_<FOLDER>=... in .env. Inbound mail comes
+// in over a single WebSocket; outbound is via agentmail-mcp inside the
+// container. Disabled when AGENTMAIL_API_KEY is absent.
+import './agentmail.js';
+
 // whatsapp
