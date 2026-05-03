@@ -24,9 +24,9 @@ WHY THIS EXISTS — the failure mode this prevents:
       `sessions[group.folder]` cache doesn't immediately re-stamp the
       cleared sessionId on the next message
 
-This replaces ~/containers/mailroom/restart-all.sh and restart-inbox.sh.
-Those shell scripts still work; this just makes the workflow safer and
-adds multi-select.
+This is the canonical NanoClaw restart workflow. (It replaced the older
+~/containers/mailroom/restart-all.sh and restart-inbox.sh shell scripts
+— those have been removed.)
 
 Usage:
     ./scripts/restart.py                # interactive picker
