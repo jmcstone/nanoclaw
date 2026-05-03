@@ -37,6 +37,13 @@ Usage:
 Adding a new MCP server: append to MCP_SERVICES below. Set `affects=["*"]`
 if every group consumes it (like trawl wildcard mode), else list the
 specific group folders.
+
+Two server kinds are supported:
+  - Long-lived Docker container (e.g. trawl, mailroom-inbox-mcp). Set
+    `container="<name>"`; the script docker-restarts and waits.
+  - Stdio MCP spawned by the agent SDK per-invocation (e.g. agentmail-mcp).
+    Set `container=None`; the script only clears sessions and bounces
+    nanoclaw — there's no container to restart.
 """
 
 from __future__ import annotations
@@ -48,7 +55,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -62,9 +69,39 @@ NANOCLAW_SERVICE = "nanoclaw"  # systemd --user unit name
 @dataclass
 class McpService:
     key: str                              # short selector, e.g. "trawl"
-    container: str                        # docker container name
-    affects: list[str]                    # group folders OR ["*"] for all
+    container: Optional[str]              # docker container name, or None for stdio-MCP
+    affects: list[str] = field(default_factory=list)  # group folders OR ["*"] for all
     health_url: Optional[str] = None      # if set, HTTP-wait after restart
+    discover_affects: Optional[Callable[[], list[str]]] = None  # populates affects at build time
+
+
+def _discover_agentmail_affected() -> list[str]:
+    """Scan .env for AGENTMAIL_INBOX_<FOLDER>=... keys and return the folder
+    list. Empty list ⇒ AgentMail not configured ⇒ entry is hidden from the
+    picker. Mirrors src/config.ts:discoverAgentMailInboxes() so host and
+    helper agree on which groups the integration touches."""
+    env_path = Path.cwd() / ".env"
+    if not env_path.exists():
+        return []
+    folders: list[str] = []
+    prefix = "AGENTMAIL_INBOX_"
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        eq = line.find("=")
+        if eq == -1:
+            continue
+        key = line[:eq].strip()
+        if not key.startswith(prefix) or key == prefix:
+            continue
+        # Skip the API key itself if someone follows the naming pattern
+        if key == "AGENTMAIL_INBOX_API_KEY":
+            continue
+        folder = key[len(prefix):].lower()
+        if folder:
+            folders.append(folder)
+    return folders
 
 
 MCP_SERVICES: list[McpService] = [
@@ -83,6 +120,15 @@ MCP_SERVICES: list[McpService] = [
         container="trawl-trawl-1",
         affects=["*"],
         health_url="https://trawl.crested-gecko.ts.net/mcp",
+    ),
+    # Stdio MCP — spawned per-invocation by the agent SDK as `npx -y agentmail-mcp`.
+    # No container to restart; this entry exists so we can targeted-clear sessions
+    # for AgentMail-configured groups without nuking everything via "sessions: all".
+    # Hidden from the picker on installs that haven't configured any inbox.
+    McpService(
+        key="agentmail",
+        container=None,
+        discover_affects=_discover_agentmail_affected,
     ),
 ]
 
@@ -212,6 +258,28 @@ def remove_dangling(dry_run: bool) -> None:
 def build_options() -> list[Option]:
     options: list[Option] = []
     for s in MCP_SERVICES:
+        # Stdio MCP services discover their affected folders at build time so
+        # the picker reflects current .env state. Hide the entry when nothing
+        # is configured — keeps the picker clean on minimal installs.
+        if s.discover_affects is not None:
+            s.affects = s.discover_affects()
+            if not s.affects:
+                continue
+
+        if s.container is None:
+            # Stdio MCP: no container to probe; show as session-clear-only.
+            affects = "all groups" if s.affects == ["*"] else ", ".join(s.affects)
+            options.append(Option(
+                key=s.key,
+                kind="mcp",
+                label=f"{s.key} (stdio MCP)",
+                detail=f"clear sessions → restart nanoclaw  · affects: {affects}",
+                state="n/a",
+                healthy=True,
+                service=s,
+            ))
+            continue
+
         st = container_state(s.container)
         affects = "all groups" if s.affects == ["*"] else ", ".join(s.affects)
         options.append(Option(
@@ -352,6 +420,9 @@ def main() -> int:
         print("  (nothing to do)")
         return 0
     for s in mcps:
+        if s.container is None:
+            print(f"  - {s.key}: stdio MCP — no container restart, sessions only")
+            continue
         print(f"  - restart MCP container: {s.container}")
         if s.health_url:
             print(f"      then wait for HTTP {s.health_url}")
@@ -376,11 +447,17 @@ def main() -> int:
 
     print()
     print("=== Executing ===")
-    # Restart all MCPs first, then wait — cheaper to overlap boot times.
+    # Restart all container-backed MCPs first, then wait — cheaper to overlap
+    # boot times. Stdio MCPs (container is None) skip both phases; clearing the
+    # session and bouncing nanoclaw is the entire fix for those.
     for s in mcps:
+        if s.container is None:
+            continue
         restart_container(s.container, args.dry_run)
     if not args.dry_run:
         for s in mcps:
+            if s.container is None:
+                continue
             if s.health_url:
                 wait_for_url(s.health_url)
             else:
