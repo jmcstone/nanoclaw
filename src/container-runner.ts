@@ -4,6 +4,7 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -212,6 +213,18 @@ function buildVolumeMounts(
       hostPath: OBSIDIAN_SHARED_DIR,
       containerPath: '/workspace/extra/shared',
       readonly: false,
+    });
+  }
+
+  // Google Data integration (GA4, YouTube Analytics, etc.). Read-only — keys
+  // must not be writable from inside the container. Absent on installs that
+  // haven't enabled it.
+  const googleDataDir = path.join(os.homedir(), '.google-data');
+  if (fs.existsSync(googleDataDir)) {
+    mounts.push({
+      hostPath: googleDataDir,
+      containerPath: '/workspace/google-data',
+      readonly: true,
     });
   }
 

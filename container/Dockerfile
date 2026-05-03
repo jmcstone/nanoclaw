@@ -37,6 +37,12 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
+# Google Data libraries — used by ~/.google-data/bin/*.mjs scripts
+# (GA4 Data API + googleapis for YouTube Analytics & Data API v3).
+# NODE_PATH=/usr/local/lib/node_modules (set below) makes them resolvable
+# from any working directory, so scripts in the read-only mount can import them.
+RUN npm install -g @google-analytics/data googleapis
+
 # --- a-mem MCP (semantic memory over ChromaDB + Ollama) ---
 # HuggingFace cache lives inside the image so the sentence-transformers
 # embedding model is always available without network access at runtime.
