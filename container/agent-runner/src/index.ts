@@ -664,8 +664,12 @@ async function runQuery(
   // container_config; groups without it get no a-mem tools.
   const hasAmem = fs.existsSync('/workspace/extra/a-mem');
   log(`a-mem MCP: ${hasAmem ? 'enabled' : 'disabled'}`);
-  const hasContextMode = fs.existsSync('/workspace/extra/context-mode');
-  log(`context-mode: ${hasContextMode ? 'enabled' : 'disabled'}`);
+  // Forced off: context-mode's "MUST refuse" / "forbidden_actions" framing
+  // was leaking into the agent's behavior and producing user-visible refusals
+  // on small-file Obsidian edits. Re-enable per-group by reverting this line
+  // once upstream prompt language is softened.
+  const hasContextMode = false && fs.existsSync('/workspace/extra/context-mode');
+  log(`context-mode: ${hasContextMode ? 'enabled' : 'disabled (forced off)'}`);
   // Inbox MCP is enabled only for Madison Inbox (telegram_inbox). The
   // mailroom stack publishes its MCP server on the host at
   // 127.0.0.1:18080 (loopback-only; host 8080 is taken by registry-ui),
