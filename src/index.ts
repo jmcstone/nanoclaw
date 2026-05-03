@@ -648,12 +648,51 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
-  // Graceful shutdown handlers
+  // Graceful shutdown handlers.
+  //
+  // SPLIT-BRAIN PREVENTION — DO NOT REMOVE WITHOUT REPLACEMENT.
+  //
+  // Channel `disconnect()` calls (Telegram, Gmail, etc.) can block on network
+  // I/O — a hung WebSocket close or a stuck SMTP/IMAP poll will park us here
+  // indefinitely. Without a hard ceiling, the orchestrator stays alive in
+  // half-shutdown state for ~90s (systemd's default TimeoutStopSec), during
+  // which a second instance can be started and BOTH will:
+  //   - poll the same Telegram bot tokens
+  //   - read/write the same SQLite session table
+  //   - manage the same `sessions[group.folder]` cache with different IDs
+  // The observed symptom is the agent "forgetting" prior turns: each spawn
+  // resumes whichever sessionId happens to be in memory in the process that
+  // grabbed the message, so the transcript splits across two SDK lineages.
+  //
+  // Layered timeouts (inner → outer):
+  //   queue.shutdown(5000)   — drain in-flight tasks, 5s budget
+  //   forceExit (8s)         — exit even if disconnect() never returns
+  //   systemd TimeoutStopSec — SIGKILL backstop, set to 15s in the unit file
+  //                            (~/.config/systemd/user/nanoclaw.service)
+  // The 8s force-exit must stay strictly less than systemd's TimeoutStopSec
+  // so we exit on our own terms (with logs flushed) rather than being killed.
+  //
+  // V2 UPGRADE NOTE: if shutdown is refactored, preserve these invariants:
+  //   1. Some bounded force-exit must exist — never await disconnect unbounded.
+  //   2. Force-exit budget < systemd TimeoutStopSec (currently 15s).
+  //   3. The systemd unit's ExecStartPre cleanup (which kills lingering
+  //      orchestrator processes before starting a new one) is a belt to this
+  //      suspenders — keep both, they protect against different failure modes
+  //      (this one: clean shutdown; that one: crashes / unclean exits).
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    const forceExit = setTimeout(() => {
+      logger.warn(
+        { signal },
+        'Shutdown exceeded 8s budget — forcing exit to prevent split-brain',
+      );
+      process.exit(1);
+    }, 8000);
+    forceExit.unref();
     proxyServer.close();
-    await queue.shutdown(10000);
+    await queue.shutdown(5000);
     for (const ch of channels) await ch.disconnect();
+    clearTimeout(forceExit);
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
