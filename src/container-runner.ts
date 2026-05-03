@@ -310,6 +310,13 @@ function buildContainerArgs(
   // host services (credential proxy, ollama, mailroom inbox-mcp).
   args.push(...hostGatewayArgs());
 
+  // Use Tailscale MagicDNS so tailnet hostnames (e.g. trawl.crested-gecko.ts.net)
+  // resolve. Docker's default copies the host's resolv.conf, which on jarvis
+  // lists the LAN router first; the router answers NXDOMAIN for *.ts.net and
+  // glibc doesn't fall through to 100.100.100.100. MagicDNS forwards global
+  // queries upstream so this remains the sole resolver safely.
+  args.push('--dns', '100.100.100.100');
+
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
   // or when getuid is unavailable (native Windows without WSL).
