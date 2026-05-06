@@ -68,11 +68,18 @@ NANOCLAW_SERVICE = "nanoclaw"  # systemd --user unit name
 # ---------------------------------------------------------------------------
 @dataclass
 class McpService:
-    key: str                              # short selector, e.g. "trawl"
-    container: Optional[str]              # docker container name, or None for stdio-MCP
+    key: str  # short selector, e.g. "trawl"
+    container: Optional[str]  # docker container name (for state probe), or None for stdio-MCP
     affects: list[str] = field(default_factory=list)  # group folders OR ["*"] for all
-    health_url: Optional[str] = None      # if set, HTTP-wait after restart
-    discover_affects: Optional[Callable[[], list[str]]] = None  # populates affects at build time
+    health_url: Optional[str] = None  # if set, HTTP-wait after restart
+    # `dcc` is a make-based docker-compose wrapper that injects env-vault secrets;
+    # it must run from a dir containing docker-compose.yml and takes a *service*
+    # name, not a container name. Set both for any container-backed entry.
+    compose_dir: Optional[Path] = None
+    service: Optional[str] = None
+    discover_affects: Optional[Callable[[], list[str]]] = (
+        None  # populates affects at build time
+    )
 
 
 def _discover_agentmail_affected() -> list[str]:
@@ -98,26 +105,34 @@ def _discover_agentmail_affected() -> list[str]:
         # Skip the API key itself if someone follows the naming pattern
         if key == "AGENTMAIL_INBOX_API_KEY":
             continue
-        folder = key[len(prefix):].lower()
+        folder = key[len(prefix) :].lower()
         if folder:
             folders.append(folder)
     return folders
 
 
+_CONTAINERS = Path.home() / "containers"
+
 MCP_SERVICES: list[McpService] = [
     McpService(
         key="mailroom-inbox",
         container="mailroom-inbox-mcp-1",
+        compose_dir=_CONTAINERS / "mailroom",
+        service="inbox-mcp",
         affects=["telegram_inbox"],
     ),
     McpService(
         key="mailroom-ingestor",
         container="mailroom-ingestor-1",
+        compose_dir=_CONTAINERS / "mailroom",
+        service="ingestor",
         affects=["telegram_inbox"],
     ),
     McpService(
         key="trawl",
         container="trawl-trawl-1",
+        compose_dir=_CONTAINERS / "trawl",
+        service="trawl",
         affects=["*"],
         health_url="https://trawl.crested-gecko.ts.net/mcp",
     ),
@@ -138,12 +153,12 @@ MCP_SERVICES: list[McpService] = [
 # ---------------------------------------------------------------------------
 @dataclass
 class Option:
-    key: str                              # selector matched against --pick
-    kind: str                             # "mcp" | "sessions" | "nanoclaw"
+    key: str  # selector matched against --pick
+    kind: str  # "mcp" | "sessions" | "nanoclaw"
     label: str
     detail: str
-    state: str                            # raw state string (e.g. "running")
-    healthy: bool                         # used only for the status glyph
+    state: str  # raw state string (e.g. "running")
+    healthy: bool  # used only for the status glyph
     service: Optional[McpService] = None  # set when kind == "mcp"
 
 
@@ -154,7 +169,9 @@ def container_state(name: str) -> str:
     try:
         r = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Status}}", name],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return r.stdout.strip()
     except subprocess.CalledProcessError:
@@ -164,7 +181,8 @@ def container_state(name: str) -> str:
 def systemd_state(svc: str) -> str:
     r = subprocess.run(
         ["systemctl", "--user", "is-active", svc],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return r.stdout.strip() or "unknown"
 
@@ -182,8 +200,10 @@ def wait_for_url(url: str, timeout: int = 30) -> bool:
         except (URLError, OSError):
             pass
         time.sleep(1)
-    print(f"    ! {url} not responding after {timeout}s — continuing anyway",
-          file=sys.stderr)
+    print(
+        f"    ! {url} not responding after {timeout}s — continuing anyway",
+        file=sys.stderr,
+    )
     return False
 
 
@@ -194,18 +214,23 @@ def wait_for_container_running(name: str, timeout: int = 30) -> bool:
         if container_state(name) == "running":
             return True
         time.sleep(1)
-    print(f"    ! {name} not running after {timeout}s — continuing anyway",
-          file=sys.stderr)
+    print(
+        f"    ! {name} not running after {timeout}s — continuing anyway",
+        file=sys.stderr,
+    )
     return False
 
 
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
-def restart_container(name: str, dry_run: bool) -> None:
-    print(f"  → docker restart {name}")
+def restart_container(s: McpService, dry_run: bool) -> None:
+    # `dcc` reads docker-compose.yml from cwd and operates on service names.
+    if s.compose_dir is None or s.service is None:
+        raise ValueError(f"{s.key}: container-backed entry needs compose_dir + service")
+    print(f"  → (cd {s.compose_dir}) dcc r {s.service}")
     if not dry_run:
-        subprocess.run(["docker", "restart", name], check=True)
+        subprocess.run(["dcc", "r", s.service], check=True, cwd=s.compose_dir)
 
 
 def clear_sessions(folders: Sequence[str], dry_run: bool) -> None:
@@ -227,7 +252,8 @@ def stop_nanoclaw(dry_run: bool) -> None:
     print(f"  → systemctl --user stop {NANOCLAW_SERVICE}")
     if not dry_run:
         subprocess.run(
-            ["systemctl", "--user", "stop", NANOCLAW_SERVICE], check=True,
+            ["systemctl", "--user", "stop", NANOCLAW_SERVICE],
+            check=True,
         )
 
 
@@ -235,7 +261,8 @@ def start_nanoclaw(dry_run: bool) -> None:
     print(f"  → systemctl --user start {NANOCLAW_SERVICE}")
     if not dry_run:
         subprocess.run(
-            ["systemctl", "--user", "start", NANOCLAW_SERVICE], check=True,
+            ["systemctl", "--user", "start", NANOCLAW_SERVICE],
+            check=True,
         )
 
 
@@ -245,7 +272,9 @@ def remove_dangling(dry_run: bool) -> None:
         return
     r = subprocess.run(
         ["docker", "ps", "-a", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     names = [n for n in r.stdout.splitlines() if n.startswith("nanoclaw-")]
     if names:
@@ -269,45 +298,53 @@ def build_options() -> list[Option]:
         if s.container is None:
             # Stdio MCP: no container to probe; show as session-clear-only.
             affects = "all groups" if s.affects == ["*"] else ", ".join(s.affects)
-            options.append(Option(
-                key=s.key,
-                kind="mcp",
-                label=f"{s.key} (stdio MCP)",
-                detail=f"clear sessions → restart nanoclaw  · affects: {affects}",
-                state="n/a",
-                healthy=True,
-                service=s,
-            ))
+            options.append(
+                Option(
+                    key=s.key,
+                    kind="mcp",
+                    label=f"{s.key} (stdio MCP)",
+                    detail=f"clear sessions → restart nanoclaw  · affects: {affects}",
+                    state="n/a",
+                    healthy=True,
+                    service=s,
+                )
+            )
             continue
 
         st = container_state(s.container)
         affects = "all groups" if s.affects == ["*"] else ", ".join(s.affects)
-        options.append(Option(
-            key=s.key,
-            kind="mcp",
-            label=s.container,
-            detail=f"({st}) → affects: {affects}",
-            state=st,
-            healthy=(st == "running"),
-            service=s,
-        ))
+        options.append(
+            Option(
+                key=s.key,
+                kind="mcp",
+                label=s.container,
+                detail=f"({st}) → affects: {affects}",
+                state=st,
+                healthy=(st == "running"),
+                service=s,
+            )
+        )
     nc = systemd_state(NANOCLAW_SERVICE)
-    options.append(Option(
-        key="nanoclaw",
-        kind="nanoclaw",
-        label="nanoclaw service",
-        detail=f"({nc}) — restart orchestrator only",
-        state=nc,
-        healthy=(nc == "active"),
-    ))
-    options.append(Option(
-        key="sessions",
-        kind="sessions",
-        label="sessions: clear all",
-        detail="wipe every session pointer (force fresh tool lists)",
-        state="n/a",
-        healthy=True,
-    ))
+    options.append(
+        Option(
+            key="nanoclaw",
+            kind="nanoclaw",
+            label="nanoclaw service",
+            detail=f"({nc}) — restart orchestrator only",
+            state=nc,
+            healthy=(nc == "active"),
+        )
+    )
+    options.append(
+        Option(
+            key="sessions",
+            kind="sessions",
+            label="sessions: clear all",
+            detail="wipe every session pointer (force fresh tool lists)",
+            state="n/a",
+            healthy=True,
+        )
+    )
     return options
 
 
@@ -337,8 +374,7 @@ def parse_selection(raw: str, options: list[Option]) -> list[int]:
             print(f"  ! unknown selector: {tok}", file=sys.stderr)
         else:
             print(
-                f"  ! ambiguous: {tok} matches "
-                f"{[options[i].key for i in matches]}",
+                f"  ! ambiguous: {tok} matches {[options[i].key for i in matches]}",
                 file=sys.stderr,
             )
     return sorted(picked)
@@ -371,14 +407,18 @@ def main() -> int:
             "  ./scripts/restart.py --all --dry-run  # preview full reset\n"
         ),
     )
-    ap.add_argument("--dry-run", action="store_true",
-                    help="show the plan, change nothing")
-    ap.add_argument("--pick",
-                    help="non-interactive selection (comma-separated)")
-    ap.add_argument("--all", action="store_true",
-                    help="select everything (equivalent to old restart-all.sh)")
-    ap.add_argument("--yes", "-y", action="store_true",
-                    help="skip the confirmation prompt")
+    ap.add_argument(
+        "--dry-run", action="store_true", help="show the plan, change nothing"
+    )
+    ap.add_argument("--pick", help="non-interactive selection (comma-separated)")
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="select everything (equivalent to old restart-all.sh)",
+    )
+    ap.add_argument(
+        "--yes", "-y", action="store_true", help="skip the confirmation prompt"
+    )
     args = ap.parse_args()
 
     if not NANOCLAW_DB.exists():
@@ -453,7 +493,7 @@ def main() -> int:
     for s in mcps:
         if s.container is None:
             continue
-        restart_container(s.container, args.dry_run)
+        restart_container(s, args.dry_run)
     if not args.dry_run:
         for s in mcps:
             if s.container is None:
