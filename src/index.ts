@@ -16,6 +16,7 @@ import {
   TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from './config.js';
+import { pickAckPhrase } from './ack.js';
 import { initBotPool } from './channels/telegram.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
@@ -74,6 +75,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { startMetricsSampler } from './metrics-sampler.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -285,6 +287,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+
+  // Fire-and-forget instant ack so the user knows we received their message.
+  // Long agent runs (briefings, research) can otherwise look like silence —
+  // typing indicators expire after ~5s on Telegram and don't exist on email.
+  channel
+    .sendMessage(chatJid, pickAckPhrase())
+    .catch((err) =>
+      logger.warn({ chatJid, err }, 'Failed to send input-ack message'),
+    );
+
   let hadError = false;
   let outputSentToUser = false;
 
@@ -811,6 +823,10 @@ async function main(): Promise<void> {
   if (TELEGRAM_BOT_POOL.length > 0) {
     await initBotPool(TELEGRAM_BOT_POOL);
   }
+
+  // Start resource metrics sampler (host CPU/RSS, nanoclaw-* containers, disk).
+  // Filters by container name prefix so other containers on the host are ignored.
+  startMetricsSampler();
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
