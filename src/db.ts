@@ -84,6 +84,22 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS metrics_samples (
+      ts TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      source TEXT NOT NULL,
+      cpu_pct REAL,
+      rss_bytes INTEGER,
+      net_rx_bytes INTEGER,
+      net_tx_bytes INTEGER,
+      block_read_bytes INTEGER,
+      block_write_bytes INTEGER,
+      disk_bytes INTEGER,
+      extra TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics_samples(ts);
+    CREATE INDEX IF NOT EXISTS idx_metrics_kind_source ON metrics_samples(kind, source, ts);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -799,4 +815,54 @@ function migrateJsonState(): void {
       }
     }
   }
+}
+
+export interface MetricSampleRow {
+  ts: string;
+  kind: 'orchestrator' | 'container' | 'disk';
+  source: string;
+  cpuPct?: number | null;
+  rssBytes?: number | null;
+  netRxBytes?: number | null;
+  netTxBytes?: number | null;
+  blockReadBytes?: number | null;
+  blockWriteBytes?: number | null;
+  diskBytes?: number | null;
+  extra?: string | null;
+}
+
+export function recordMetricSamples(rows: MetricSampleRow[]): void {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(`
+    INSERT INTO metrics_samples
+      (ts, kind, source, cpu_pct, rss_bytes, net_rx_bytes, net_tx_bytes,
+       block_read_bytes, block_write_bytes, disk_bytes, extra)
+    VALUES (@ts, @kind, @source, @cpuPct, @rssBytes, @netRxBytes, @netTxBytes,
+            @blockReadBytes, @blockWriteBytes, @diskBytes, @extra)
+  `);
+  const insertAll = db.transaction((items: MetricSampleRow[]) => {
+    for (const r of items) {
+      stmt.run({
+        ts: r.ts,
+        kind: r.kind,
+        source: r.source,
+        cpuPct: r.cpuPct ?? null,
+        rssBytes: r.rssBytes ?? null,
+        netRxBytes: r.netRxBytes ?? null,
+        netTxBytes: r.netTxBytes ?? null,
+        blockReadBytes: r.blockReadBytes ?? null,
+        blockWriteBytes: r.blockWriteBytes ?? null,
+        diskBytes: r.diskBytes ?? null,
+        extra: r.extra ?? null,
+      });
+    }
+  });
+  insertAll(rows);
+}
+
+export function pruneMetricsOlderThan(isoCutoff: string): number {
+  const info = db
+    .prepare(`DELETE FROM metrics_samples WHERE ts < ?`)
+    .run(isoCutoff);
+  return info.changes;
 }
