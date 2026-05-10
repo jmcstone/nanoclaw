@@ -81,6 +81,53 @@ RUN python3 -m venv /opt/a-mem/.venv \
 RUN npm install -g context-mode
 ENV NODE_PATH=/usr/local/lib/node_modules
 
+# --- Dev tools layer ---
+# Added for the AVP-Outreach Madison variant; harmless for other Madisons.
+# Kept as a separate layer so the heavy a-mem / doc-tools layers stay cached
+# when these versions bump.
+RUN apt-get update && apt-get install -y \
+    ripgrep \
+    fd-find \
+    jq \
+    fzf \
+    build-essential \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI (pinned binary release) — simpler than maintaining its apt repo
+# key + source.list inside the Dockerfile.
+RUN ARCH=$(dpkg --print-architecture) \
+    && GH_VERSION=2.62.0 \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gh.tar.gz \
+    && tar -xzf /tmp/gh.tar.gz -C /tmp \
+    && mv /tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh /usr/local/bin/gh \
+    && rm -rf /tmp/gh*
+
+# uv + uvx (Astral Python package manager) — pinned binary release.
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) UV_ARCH=x86_64-unknown-linux-gnu ;; \
+         arm64) UV_ARCH=aarch64-unknown-linux-gnu ;; \
+         *) echo "unsupported arch: $ARCH" && exit 1 ;; \
+       esac \
+    && UV_VERSION=0.5.4 \
+    && curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_ARCH}.tar.gz" -o /tmp/uv.tar.gz \
+    && tar -xzf /tmp/uv.tar.gz -C /tmp \
+    && mv /tmp/uv-${UV_ARCH}/uv /tmp/uv-${UV_ARCH}/uvx /usr/local/bin/ \
+    && rm -rf /tmp/uv*
+
+# Bake a default SSH config so `git@gitlab.com` uses the per-group mounted
+# key when present. NanoClaw forces additional mounts under
+# /workspace/extra/, so the IdentityFile path points there — groups that
+# mount their gitlab key as containerPath ".ssh/gitlab" get it at
+# /workspace/extra/.ssh/gitlab. Groups that don't mount the key are
+# unaffected: git push to gitlab.com simply won't work for them.
+RUN mkdir -p /home/node/.ssh \
+    && printf 'Host gitlab.com\n  IdentityFile /workspace/extra/.ssh/gitlab\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' > /home/node/.ssh/config \
+    && chmod 700 /home/node/.ssh \
+    && chmod 600 /home/node/.ssh/config \
+    && chown -R node:node /home/node/.ssh
+
 # Create app directory
 WORKDIR /app
 
