@@ -25,7 +25,10 @@ export default [
           ignoreRestSiblings: true,
         },
       ],
-      'no-catch-all/no-catch-all': 'warn',
+      // Promoted from 'warn' after a one-time cleanup of all 80 existing
+      // violations. Catch-all swallows hide real bugs; require an inline
+      // disable comment with intent justification when truly needed.
+      'no-catch-all/no-catch-all': 'error',
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
