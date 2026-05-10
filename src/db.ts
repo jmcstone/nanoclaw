@@ -164,6 +164,21 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add bot_username column for per-group Telegram bot routing.
+  // NULL = fall back to the default bot (TELEGRAM_BOT_TOKEN). Each new
+  // dedicated bot stores its lowercased username here so the listener
+  // knows which chats to claim and the sender knows which bot's API to use.
+  try {
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN bot_username TEXT`);
+  } catch (err) {
+    if (
+      !(err instanceof Error) ||
+      !err.message.toLowerCase().includes('duplicate column')
+    )
+      throw err;
+    /* column already exists */
+  }
+
   // Add created_at and message_count to sessions if they don't exist (migration)
   try {
     database.exec(`ALTER TABLE sessions ADD COLUMN created_at TEXT`);
@@ -715,6 +730,7 @@ export function getRegisteredGroup(
         container_config: string | null;
         requires_trigger: number | null;
         is_main: number | null;
+        bot_username: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -737,6 +753,7 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    botUsername: row.bot_username ?? undefined,
   };
 }
 
@@ -745,8 +762,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, bot_username)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -756,6 +773,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
+    group.botUsername ? group.botUsername.toLowerCase() : null,
   );
 }
 
@@ -769,6 +787,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    bot_username: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -790,6 +809,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      botUsername: row.bot_username ?? undefined,
     };
   }
   return result;

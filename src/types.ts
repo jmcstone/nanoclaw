@@ -40,6 +40,10 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  // Telegram only: bot username (lowercased) that owns this chat. NULL/undefined
+  // falls back to the default bot (TELEGRAM_BOT_TOKEN). Set this when a group
+  // should be served by a dedicated bot identity rather than the shared default.
+  botUsername?: string;
 }
 
 export interface NewMessage {
