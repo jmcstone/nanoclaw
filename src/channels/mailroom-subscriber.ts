@@ -174,7 +174,7 @@ class MailroomSubscriber implements Channel {
         }
         this.dispatch(parsed, payloadKind);
         await fs.promises.unlink(filePath);
-      // eslint-disable-next-line no-catch-all/no-catch-all -- fs/JSON/schema errors all handled the same: quarantine the file
+        // eslint-disable-next-line no-catch-all/no-catch-all -- fs/JSON/schema errors all handled the same: quarantine the file
       } catch (err) {
         logger.error(
           { file, err },
@@ -184,7 +184,7 @@ class MailroomSubscriber implements Channel {
         try {
           await fs.promises.mkdir(errorsDir, { recursive: true });
           await fs.promises.rename(filePath, path.join(errorsDir, file));
-        // eslint-disable-next-line no-catch-all/no-catch-all -- mkdir+rename can throw diverse fs errors; log and continue
+          // eslint-disable-next-line no-catch-all/no-catch-all -- mkdir+rename can throw diverse fs errors; log and continue
         } catch (renameErr) {
           logger.error(
             { file, err: renameErr },

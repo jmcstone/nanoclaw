@@ -141,7 +141,7 @@ function readDefaults(): GlobalDefaults {
     if (!fs.existsSync(DEFAULTS_PATH)) return {};
     const parsed = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
     return parsed && typeof parsed === 'object' ? parsed : {};
-  // eslint-disable-next-line no-catch-all/no-catch-all -- fs read and JSON.parse can both fail; graceful degrade to empty defaults
+    // eslint-disable-next-line no-catch-all/no-catch-all -- fs read and JSON.parse can both fail; graceful degrade to empty defaults
   } catch {
     return {};
   }
@@ -198,7 +198,7 @@ function readGroupOverrides(): Record<string, GroupOverride> {
     const raw = fs.readFileSync(GROUP_OVERRIDES_PATH, 'utf8');
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : {};
-  // eslint-disable-next-line no-catch-all/no-catch-all -- fs read and JSON.parse can both fail; graceful degrade to empty overrides
+    // eslint-disable-next-line no-catch-all/no-catch-all -- fs read and JSON.parse can both fail; graceful degrade to empty overrides
   } catch {
     return {};
   }

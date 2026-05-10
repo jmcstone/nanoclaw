@@ -116,7 +116,7 @@ export function cleanupOrphans(): void {
     for (const name of orphans) {
       try {
         stopContainer(name);
-      // eslint-disable-next-line no-catch-all/no-catch-all -- container may have already stopped; all errors are ignorable during cleanup
+        // eslint-disable-next-line no-catch-all/no-catch-all -- container may have already stopped; all errors are ignorable during cleanup
       } catch {
         /* already stopped */
       }
@@ -127,7 +127,7 @@ export function cleanupOrphans(): void {
         'Stopped orphaned containers',
       );
     }
-  // eslint-disable-next-line no-catch-all/no-catch-all -- docker ps can throw diverse exec errors; orphan cleanup is best-effort
+    // eslint-disable-next-line no-catch-all/no-catch-all -- docker ps can throw diverse exec errors; orphan cleanup is best-effort
   } catch (err) {
     logger.warn({ err }, 'Failed to clean up orphaned containers');
   }

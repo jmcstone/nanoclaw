@@ -38,7 +38,7 @@ export function loadSenderAllowlist(
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, 'utf-8');
-  // eslint-disable-next-line no-catch-all/no-catch-all -- fs read can fail for various reasons; all gracefully degrade to default config
+    // eslint-disable-next-line no-catch-all/no-catch-all -- fs read can fail for various reasons; all gracefully degrade to default config
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       logger.warn(

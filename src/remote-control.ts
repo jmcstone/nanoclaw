@@ -40,7 +40,7 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  // eslint-disable-next-line no-catch-all/no-catch-all -- process.kill(pid, 0) throws ESRCH/EPERM; both mean the process is unreachable
+    // eslint-disable-next-line no-catch-all/no-catch-all -- process.kill(pid, 0) throws ESRCH/EPERM; both mean the process is unreachable
   } catch {
     return false;
   }
@@ -118,7 +118,7 @@ export async function startRemoteControl(
       stdio: ['pipe', stdoutFd, stderrFd],
       detached: true,
     });
-  // eslint-disable-next-line no-catch-all/no-catch-all -- spawn can throw diverse errors (ENOENT, EACCES, etc.); report as failure
+    // eslint-disable-next-line no-catch-all/no-catch-all -- spawn can throw diverse errors (ENOENT, EACCES, etc.); report as failure
   } catch (err: any) {
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
@@ -187,11 +187,11 @@ export async function startRemoteControl(
       if (Date.now() - startTime >= URL_TIMEOUT_MS) {
         try {
           process.kill(-pid, 'SIGTERM');
-        // eslint-disable-next-line no-catch-all/no-catch-all -- process group kill throws ESRCH/EPERM; fall back to pid kill
+          // eslint-disable-next-line no-catch-all/no-catch-all -- process group kill throws ESRCH/EPERM; fall back to pid kill
         } catch {
           try {
             process.kill(pid, 'SIGTERM');
-          // eslint-disable-next-line no-catch-all/no-catch-all -- process already dead; ignore kill errors
+            // eslint-disable-next-line no-catch-all/no-catch-all -- process already dead; ignore kill errors
           } catch {
             // already dead
           }
@@ -222,7 +222,7 @@ export function stopRemoteControl():
   const { pid } = activeSession;
   try {
     process.kill(pid, 'SIGTERM');
-  // eslint-disable-next-line no-catch-all/no-catch-all -- process already dead; ESRCH/EPERM are both ignorable on stop
+    // eslint-disable-next-line no-catch-all/no-catch-all -- process already dead; ESRCH/EPERM are both ignorable on stop
   } catch {
     // already dead
   }

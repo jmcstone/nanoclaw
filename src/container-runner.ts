@@ -536,7 +536,7 @@ export async function runContainerAgent(
       );
       try {
         stopContainer(containerName);
-      // eslint-disable-next-line no-catch-all/no-catch-all -- stopContainer can throw diverse docker/exec errors; fall back to SIGKILL
+        // eslint-disable-next-line no-catch-all/no-catch-all -- stopContainer can throw diverse docker/exec errors; fall back to SIGKILL
       } catch (err) {
         logger.warn(
           { group: group.name, containerName, err },
@@ -817,7 +817,7 @@ export function writeTasksSnapshot(
       };
       fs.writeFileSync(obsidianFile, JSON.stringify(snapshot, null, 2));
     }
-  // eslint-disable-next-line no-catch-all/no-catch-all -- Obsidian mirror is best-effort; fs errors are all non-fatal
+    // eslint-disable-next-line no-catch-all/no-catch-all -- Obsidian mirror is best-effort; fs errors are all non-fatal
   } catch (err) {
     logger.warn(
       { groupFolder, err },
