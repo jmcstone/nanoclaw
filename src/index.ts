@@ -59,6 +59,7 @@ import {
 import {
   computeGroupMcpHash,
   groupMcpOptionsFromConfig,
+  probeMcpVersions,
 } from './mcp-tool-discovery.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -402,7 +403,14 @@ async function runAgent(
     group.folder,
     group.containerConfig as Record<string, unknown> | undefined,
   );
-  const { hash: currentToolHash } = computeGroupMcpHash(mcpOpts);
+  // Folding live MCP boot versions into the hash auto-rotates Madison's
+  // session on any MCP process restart. See probeMcpVersions for caching
+  // and last-good fallback behaviour.
+  const serverVersions = await probeMcpVersions(mcpOpts);
+  const { hash: currentToolHash } = computeGroupMcpHash({
+    ...mcpOpts,
+    serverVersions,
+  });
   if (sessionId) {
     const storedHash = getSessionToolHash(group.folder);
     if (storedHash === null) {

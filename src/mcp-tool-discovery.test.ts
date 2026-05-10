@@ -10,6 +10,8 @@ import {
 import {
   computeGroupMcpHash,
   groupMcpOptionsFromConfig,
+  probeMcpVersions,
+  _resetVersionProbeStateForTest,
   type GroupMcpOptions,
 } from './mcp-tool-discovery.js';
 
@@ -350,5 +352,197 @@ describe('hash mismatch → session cleared', () => {
     }
     expect(cleared).toBe(false);
     expect(getSessionInfo('test_group')).toBeDefined();
+  });
+});
+
+// --------------------------------------------------------------------------
+// Per-server version folding into hash (boot-nonce restart detection)
+// --------------------------------------------------------------------------
+
+describe('serverVersions hash folding', () => {
+  it('same versions → same hash', () => {
+    const base: GroupMcpOptions = {
+      groupFolder: 'g',
+      hasAmem: false,
+      hasContextMode: false,
+      trawl: { enabled: true, url: 'https://t.example/mcp' },
+      serverVersions: { trawl: 'nonce-A' },
+    };
+    expect(computeGroupMcpHash(base).hash).toBe(computeGroupMcpHash(base).hash);
+  });
+
+  it('changing trawl version bumps the hash (simulates trawl restart)', () => {
+    const before: GroupMcpOptions = {
+      groupFolder: 'g',
+      hasAmem: false,
+      hasContextMode: false,
+      trawl: { enabled: true, url: 'https://t.example/mcp' },
+      serverVersions: { trawl: 'nonce-A' },
+    };
+    const after: GroupMcpOptions = {
+      ...before,
+      serverVersions: { trawl: 'nonce-B' },
+    };
+    expect(computeGroupMcpHash(before).hash).not.toBe(
+      computeGroupMcpHash(after).hash,
+    );
+  });
+
+  it('changing messages version bumps the hash for telegram_inbox', () => {
+    const before: GroupMcpOptions = {
+      groupFolder: 'telegram_inbox',
+      hasAmem: false,
+      hasContextMode: false,
+      serverVersions: { messages: 'nonce-A' },
+    };
+    const after: GroupMcpOptions = {
+      ...before,
+      serverVersions: { messages: 'nonce-B' },
+    };
+    expect(computeGroupMcpHash(before).hash).not.toBe(
+      computeGroupMcpHash(after).hash,
+    );
+  });
+
+  it('version for an inactive server is ignored (no spurious mismatch)', () => {
+    // 'messages' is only active for telegram_inbox. Folding a stale messages
+    // version into a non-inbox group must not change the hash.
+    const noVersions: GroupMcpOptions = {
+      groupFolder: 'g',
+      hasAmem: false,
+      hasContextMode: false,
+    };
+    const withInactive: GroupMcpOptions = {
+      ...noVersions,
+      serverVersions: { messages: 'nonce-X' },
+    };
+    expect(computeGroupMcpHash(noVersions).hash).toBe(
+      computeGroupMcpHash(withInactive).hash,
+    );
+  });
+
+  it('absent serverVersions matches legacy (no-version) hash', () => {
+    const legacy: GroupMcpOptions = {
+      groupFolder: 'telegram_inbox',
+      hasAmem: false,
+      hasContextMode: false,
+      trawl: { enabled: true, url: 'https://t.example/mcp' },
+    };
+    const explicitlyEmpty: GroupMcpOptions = {
+      ...legacy,
+      serverVersions: {},
+    };
+    expect(computeGroupMcpHash(legacy).hash).toBe(
+      computeGroupMcpHash(explicitlyEmpty).hash,
+    );
+  });
+});
+
+// --------------------------------------------------------------------------
+// probeMcpVersions — caching + last-good fallback on probe failure
+// --------------------------------------------------------------------------
+
+describe('probeMcpVersions', () => {
+  beforeEach(() => {
+    _resetVersionProbeStateForTest();
+  });
+
+  it('returns versions for enabled MCPs (trawl + messages on telegram_inbox)', async () => {
+    const calls: string[] = [];
+    const versions = await probeMcpVersions(
+      {
+        groupFolder: 'telegram_inbox',
+        hasAmem: false,
+        hasContextMode: false,
+        trawl: { enabled: true, url: 'https://t.example/mcp' },
+      },
+      async (url) => {
+        calls.push(url);
+        return url.includes('t.example') ? 'trawl-v1' : 'inbox-v1';
+      },
+    );
+    expect(versions).toEqual({ trawl: 'trawl-v1', messages: 'inbox-v1' });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('omits trawl when disabled', async () => {
+    const versions = await probeMcpVersions(
+      {
+        groupFolder: 'g',
+        hasAmem: false,
+        hasContextMode: false,
+        trawl: { enabled: false },
+      },
+      async () => 'should-not-be-called',
+    );
+    expect(versions).toEqual({});
+  });
+
+  it('falls back to last-good on probe failure (no session churn)', async () => {
+    // Use URL variation to dodge the per-URL cache while keeping the same
+    // group + server name (which is what last-good is keyed on).
+    const probe = async (url: string) =>
+      url === 'https://up.example/mcp' ? 'nonce-A' : null;
+
+    // 1. Probe URL_A succeeds → primes last-good[g][trawl] = 'nonce-A'.
+    const v1 = await probeMcpVersions(
+      {
+        groupFolder: 'g',
+        hasAmem: false,
+        hasContextMode: false,
+        trawl: { enabled: true, url: 'https://up.example/mcp' },
+      },
+      probe,
+    );
+    expect(v1).toEqual({ trawl: 'nonce-A' });
+
+    // 2. Same group, different URL (so URL cache misses) that probe fails.
+    //    Without last-good fallback, key would be absent → hash would change
+    //    → spurious session churn. With fallback, we reuse 'nonce-A'.
+    const v2 = await probeMcpVersions(
+      {
+        groupFolder: 'g',
+        hasAmem: false,
+        hasContextMode: false,
+        trawl: { enabled: true, url: 'https://down.example/mcp' },
+      },
+      probe,
+    );
+    expect(v2).toEqual({ trawl: 'nonce-A' });
+  });
+
+  it('omits the key entirely when probe fails AND no last-good exists', async () => {
+    const versions = await probeMcpVersions(
+      {
+        groupFolder: 'fresh_group',
+        hasAmem: false,
+        hasContextMode: false,
+        trawl: { enabled: true, url: 'https://down.example/mcp' },
+      },
+      async () => null,
+    );
+    // No last-good → key absent. computeGroupMcpHash treats this as no
+    // version contribution, so the hash falls back to the legacy name-only
+    // shape — matching pre-rollout behavior, no false-positive churn.
+    expect(versions).toEqual({});
+  });
+
+  it('caches per-URL within the TTL window (no re-probe)', async () => {
+    let calls = 0;
+    const probe = async () => {
+      calls += 1;
+      return `nonce-${calls}`;
+    };
+    const opts: GroupMcpOptions = {
+      groupFolder: 'g',
+      hasAmem: false,
+      hasContextMode: false,
+      trawl: { enabled: true, url: 'https://t.example/mcp' },
+    };
+    const v1 = await probeMcpVersions(opts, probe);
+    const v2 = await probeMcpVersions(opts, probe);
+    expect(v1).toEqual({ trawl: 'nonce-1' });
+    expect(v2).toEqual({ trawl: 'nonce-1' }); // cache hit
+    expect(calls).toBe(1);
   });
 });
