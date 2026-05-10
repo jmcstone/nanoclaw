@@ -66,6 +66,7 @@ export function loadAgentMailAllowlist(
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, 'utf-8');
+  // eslint-disable-next-line no-catch-all/no-catch-all -- fs read can fail for various reasons; all gracefully degrade to empty allowlist
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return EMPTY_ALLOWLIST;
@@ -80,7 +81,8 @@ export function loadAgentMailAllowlist(
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
     logger.warn({ path: filePath }, 'agentmail-allowlist: invalid JSON');
     return EMPTY_ALLOWLIST;
   }

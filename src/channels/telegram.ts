@@ -36,6 +36,7 @@ async function sendTelegramMessage(
       ...options,
       parse_mode: 'Markdown',
     });
+  // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (parse-mode, network, rate-limit); fall back to plain text
   } catch (err) {
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
@@ -76,6 +77,7 @@ export async function initBotPool(tokens: string[]): Promise<void> {
         { username: me.username, id: me.id, poolSize: poolApis.length },
         'Pool bot initialized',
       );
+    // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (auth, network) during bot init
     } catch (err) {
       logger.error({ err }, 'Failed to initialize pool bot');
     }
@@ -132,6 +134,7 @@ export async function sendPoolMessage(
         { sender, groupFolder, poolIndex: idx },
         'Assigned and renamed pool bot',
       );
+    // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors on setMyName; non-fatal, send anyway
     } catch (err) {
       logger.warn(
         { sender, err },
@@ -160,6 +163,7 @@ export async function sendPoolMessage(
       'Pool message sent',
     );
     return true;
+  // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (network, rate-limit, auth) on send
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
     return false;
@@ -352,6 +356,7 @@ export class TelegramChannel implements Channel {
         const containerPath = `/workspace/downloads/telegram/${destName}`;
         logger.info({ chatJid, destPath }, 'Telegram photo downloaded');
         storeNonText(ctx, `[Photo: ${containerPath}]`);
+      // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API and fs can throw diverse errors; fall back to placeholder
       } catch (err) {
         logger.error({ chatJid, err }, 'Failed to download Telegram photo');
         storeNonText(ctx, '[Photo] (download failed)');
@@ -401,6 +406,7 @@ export class TelegramChannel implements Channel {
           ctx,
           `[Document: ${fileName}] Downloaded to: ${containerPath}`,
         );
+      // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API and fs can throw diverse errors; fall back to placeholder
       } catch (err) {
         logger.error(
           { chatJid, fileName, err },
@@ -473,6 +479,7 @@ export class TelegramChannel implements Channel {
         { jid, length: text.length, threadId },
         'Telegram message sent',
       );
+    // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (network, rate-limit, auth) on send
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
@@ -499,6 +506,7 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
       await this.bot.api.sendChatAction(numericId, 'typing');
+    // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors on chat action; typing is best-effort
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }

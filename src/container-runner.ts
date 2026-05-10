@@ -20,7 +20,6 @@ import {
   OBSIDIAN_SHARED_DIR,
   OBSIDIAN_TASKS_DIR,
   OLLAMA_ADMIN_TOOLS,
-  ONECLI_URL,
   resolveAgentMailApiKey,
   resolveGroupAgentMailInbox,
   resolveGroupLitellmKey,
@@ -485,6 +484,7 @@ export async function runContainerAgent(
             // so idle timers start even for "silent" query completions.
             outputChain = outputChain.then(() => onOutput(parsed));
           } catch (err) {
+            if (!(err instanceof SyntaxError)) throw err;
             logger.warn(
               { group: group.name, error: err },
               'Failed to parse streamed output chunk',
@@ -536,6 +536,7 @@ export async function runContainerAgent(
       );
       try {
         stopContainer(containerName);
+      // eslint-disable-next-line no-catch-all/no-catch-all -- stopContainer can throw diverse docker/exec errors; fall back to SIGKILL
       } catch (err) {
         logger.warn(
           { group: group.name, containerName, err },
@@ -740,6 +741,7 @@ export async function runContainerAgent(
 
         resolve(output);
       } catch (err) {
+        if (!(err instanceof SyntaxError)) throw err;
         logger.error(
           {
             group: group.name,
@@ -815,6 +817,7 @@ export function writeTasksSnapshot(
       };
       fs.writeFileSync(obsidianFile, JSON.stringify(snapshot, null, 2));
     }
+  // eslint-disable-next-line no-catch-all/no-catch-all -- Obsidian mirror is best-effort; fs errors are all non-fatal
   } catch (err) {
     logger.warn(
       { groupFolder, err },

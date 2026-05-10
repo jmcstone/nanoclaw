@@ -193,6 +193,7 @@ async function defaultMcpVersionFetcher(url: string): Promise<string | null> {
       body,
       signal: controller.signal,
     });
+  // eslint-disable-next-line no-catch-all/no-catch-all -- fetch can throw diverse network/abort errors; return null on any failure
   } catch {
     return null;
   } finally {
@@ -202,6 +203,7 @@ async function defaultMcpVersionFetcher(url: string): Promise<string | null> {
   let text: string;
   try {
     text = await res.text();
+  // eslint-disable-next-line no-catch-all/no-catch-all -- res.text() can throw diverse stream errors; return null on any failure
   } catch {
     return null;
   }
@@ -213,7 +215,8 @@ async function defaultMcpVersionFetcher(url: string): Promise<string | null> {
       const parsed = JSON.parse(json);
       const v = parsed?.result?.serverInfo?.version;
       if (typeof v === 'string') return v;
-    } catch {
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
       // try next line
     }
   }

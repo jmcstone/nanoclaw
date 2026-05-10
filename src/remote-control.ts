@@ -30,7 +30,8 @@ function saveState(session: RemoteControlSession): void {
 function clearState(): void {
   try {
     fs.unlinkSync(STATE_FILE);
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     // ignore
   }
 }
@@ -39,6 +40,7 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
+  // eslint-disable-next-line no-catch-all/no-catch-all -- process.kill(pid, 0) throws ESRCH/EPERM; both mean the process is unreachable
   } catch {
     return false;
   }
@@ -52,7 +54,8 @@ export function restoreRemoteControl(): void {
   let data: string;
   try {
     data = fs.readFileSync(STATE_FILE, 'utf-8');
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     return;
   }
 
@@ -67,7 +70,8 @@ export function restoreRemoteControl(): void {
     } else {
       clearState();
     }
-  } catch {
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
     clearState();
   }
 }
@@ -114,6 +118,7 @@ export async function startRemoteControl(
       stdio: ['pipe', stdoutFd, stderrFd],
       detached: true,
     });
+  // eslint-disable-next-line no-catch-all/no-catch-all -- spawn can throw diverse errors (ENOENT, EACCES, etc.); report as failure
   } catch (err: any) {
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
@@ -153,7 +158,8 @@ export async function startRemoteControl(
       let content = '';
       try {
         content = fs.readFileSync(STDOUT_FILE, 'utf-8');
-      } catch {
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
         // File might not have content yet
       }
 
@@ -181,9 +187,11 @@ export async function startRemoteControl(
       if (Date.now() - startTime >= URL_TIMEOUT_MS) {
         try {
           process.kill(-pid, 'SIGTERM');
+        // eslint-disable-next-line no-catch-all/no-catch-all -- process group kill throws ESRCH/EPERM; fall back to pid kill
         } catch {
           try {
             process.kill(pid, 'SIGTERM');
+          // eslint-disable-next-line no-catch-all/no-catch-all -- process already dead; ignore kill errors
           } catch {
             // already dead
           }
@@ -214,6 +222,7 @@ export function stopRemoteControl():
   const { pid } = activeSession;
   try {
     process.kill(pid, 'SIGTERM');
+  // eslint-disable-next-line no-catch-all/no-catch-all -- process already dead; ESRCH/EPERM are both ignorable on stop
   } catch {
     // already dead
   }

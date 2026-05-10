@@ -119,7 +119,8 @@ async function sampleContainers(now: string): Promise<MetricSampleRow[]> {
       let parsed: DockerStatsRow;
       try {
         parsed = JSON.parse(line);
-      } catch {
+      } catch (err) {
+        if (!(err instanceof SyntaxError)) throw err;
         continue;
       }
       const name = parsed.Name?.trim();
@@ -140,6 +141,7 @@ async function sampleContainers(now: string): Promise<MetricSampleRow[]> {
       });
     }
     return rows;
+  // eslint-disable-next-line no-catch-all/no-catch-all -- docker stats can throw diverse exec/network errors; sampler must not crash the loop
   } catch (err) {
     logger.debug({ err }, 'metrics: docker stats failed');
     return [];
@@ -183,6 +185,7 @@ async function dirSize(p: string): Promise<number | null> {
     });
     const n = parseInt(stdout.split(/\s+/)[0], 10);
     return Number.isFinite(n) ? n : null;
+  // eslint-disable-next-line no-catch-all/no-catch-all -- du can throw diverse exec errors; return null on any failure
   } catch (err) {
     logger.debug({ err, path: p }, 'metrics: du failed');
     return null;
@@ -244,6 +247,7 @@ export function startMetricsSampler(
       const orch = sampleOrchestrator(now);
       const containers = await sampleContainers(now);
       recordMetricSamples([orch, ...containers]);
+    // eslint-disable-next-line no-catch-all/no-catch-all -- graceful degrade — sampler must not crash the loop
     } catch (err) {
       logger.warn({ err }, 'metrics: stats tick failed');
     }
@@ -255,6 +259,7 @@ export function startMetricsSampler(
     try {
       const rows = await sampleDisk(now);
       recordMetricSamples(rows);
+    // eslint-disable-next-line no-catch-all/no-catch-all -- graceful degrade — sampler must not crash the loop
     } catch (err) {
       logger.warn({ err }, 'metrics: disk tick failed');
     }
@@ -270,6 +275,7 @@ export function startMetricsSampler(
       if (removed > 0) {
         logger.debug({ removed, cutoff }, 'metrics: pruned old samples');
       }
+    // eslint-disable-next-line no-catch-all/no-catch-all -- graceful degrade — sampler must not crash the loop
     } catch (err) {
       logger.warn({ err }, 'metrics: prune failed');
     }

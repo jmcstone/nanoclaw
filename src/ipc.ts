@@ -51,6 +51,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
         const stat = fs.statSync(path.join(ipcBaseDir, f));
         return stat.isDirectory() && f !== 'errors';
       });
+    // eslint-disable-next-line no-catch-all/no-catch-all -- fs.readdirSync/statSync can throw diverse errors; retry after interval
     } catch (err) {
       logger.error({ err }, 'Error reading IPC base directory');
       setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
@@ -119,6 +120,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 }
               }
               fs.unlinkSync(filePath);
+            // eslint-disable-next-line no-catch-all/no-catch-all -- JSON.parse/sendMessage/fs errors all handled the same: quarantine the file
             } catch (err) {
               logger.error(
                 { file, sourceGroup, err },
@@ -133,6 +135,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
             }
           }
         }
+      // eslint-disable-next-line no-catch-all/no-catch-all -- fs.readdirSync can throw diverse errors; skip this group's messages
       } catch (err) {
         logger.error(
           { err, sourceGroup },
@@ -153,6 +156,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
               // Pass source group identity to processTaskIpc for authorization
               await processTaskIpc(data, sourceGroup, isMain, deps);
               fs.unlinkSync(filePath);
+            // eslint-disable-next-line no-catch-all/no-catch-all -- JSON.parse/processTaskIpc/fs errors all handled the same: quarantine the file
             } catch (err) {
               logger.error(
                 { file, sourceGroup, err },
@@ -167,6 +171,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
             }
           }
         }
+      // eslint-disable-next-line no-catch-all/no-catch-all -- fs.readdirSync can throw diverse errors; skip this group's tasks
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
       }
@@ -245,6 +250,7 @@ export async function processTaskIpc(
               tz: TIMEZONE,
             });
             nextRun = interval.next().toISOString();
+          // eslint-disable-next-line no-catch-all/no-catch-all -- CronExpressionParser throws diverse errors for invalid expressions
           } catch {
             logger.warn(
               { scheduleValue: data.schedule_value },
@@ -401,6 +407,7 @@ export async function processTaskIpc(
                 { tz: TIMEZONE },
               );
               updates.next_run = interval.next().toISOString();
+            // eslint-disable-next-line no-catch-all/no-catch-all -- CronExpressionParser throws diverse errors for invalid expressions
             } catch {
               logger.warn(
                 { taskId: data.taskId, value: updatedTask.schedule_value },

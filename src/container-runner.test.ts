@@ -116,7 +116,6 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { spawn } from 'child_process';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 

@@ -83,6 +83,7 @@ async function runTask(
   let groupDir: string;
   try {
     groupDir = resolveGroupFolderPath(task.group_folder);
+  // eslint-disable-next-line no-catch-all/no-catch-all -- resolveGroupFolderPath throws for invalid folder paths; pause the task
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     // Stop retry churn for malformed legacy rows.
@@ -216,8 +217,10 @@ async function runTask(
       { taskId: task.id, durationMs: Date.now() - startTime },
       'Task completed',
     );
+  // eslint-disable-next-line no-catch-all/no-catch-all -- runContainerAgent can throw diverse container/spawn errors; log as task failure
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
+
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, error }, 'Task failed');
   }
@@ -270,6 +273,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           runTask(currentTask, deps),
         );
       }
+    // eslint-disable-next-line no-catch-all/no-catch-all -- scheduler loop must not crash; diverse errors from DB/container all handled the same
     } catch (err) {
       logger.error({ err }, 'Error in scheduler loop');
     }

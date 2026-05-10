@@ -107,14 +107,16 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
     );
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* column already exists */
   }
 
   // Add script column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN script TEXT`);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* column already exists */
   }
 
@@ -127,7 +129,8 @@ function createSchema(database: Database.Database): void {
     database
       .prepare(`UPDATE messages SET is_bot_message = 1 WHERE content LIKE ?`)
       .run(`${ASSISTANT_NAME}:%`);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* column already exists */
   }
 
@@ -140,7 +143,8 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `UPDATE registered_groups SET is_main = 1 WHERE folder = 'main'`,
     );
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* column already exists */
   }
 
@@ -150,20 +154,23 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `UPDATE sessions SET created_at = '${new Date().toISOString()}'`,
     );
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* columns already exist */
   }
   try {
     database.exec(
       `ALTER TABLE sessions ADD COLUMN message_count INTEGER DEFAULT 0`,
     );
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* column already exists */
   }
   // Add tool_list_hash to sessions if it doesn't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE sessions ADD COLUMN tool_list_hash TEXT`);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* column already exists */
   }
 
@@ -184,7 +191,8 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `UPDATE chats SET channel = 'telegram', is_group = 0 WHERE jid LIKE 'tg:%'`,
     );
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.toLowerCase().includes('duplicate column')) throw err;
     /* columns already exist */
   }
 }
@@ -765,6 +773,7 @@ function migrateJsonState(): void {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       fs.renameSync(filePath, `${filePath}.migrated`);
       return data;
+    // eslint-disable-next-line no-catch-all/no-catch-all -- fs read and JSON.parse can both fail; graceful degrade to null
     } catch {
       return null;
     }
@@ -807,6 +816,7 @@ function migrateJsonState(): void {
     for (const [jid, group] of Object.entries(groups)) {
       try {
         setRegisteredGroup(jid, group);
+      // eslint-disable-next-line no-catch-all/no-catch-all -- setRegisteredGroup can throw for invalid folder or SQLite errors; log and skip
       } catch (err) {
         logger.warn(
           { jid, folder: group.folder, err },

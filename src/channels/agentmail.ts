@@ -96,6 +96,7 @@ class AgentMailChannel implements Channel {
 
     try {
       this.socket = await this.client.websockets.connect();
+    // eslint-disable-next-line no-catch-all/no-catch-all -- AgentMail SDK throws diverse network/auth errors on connect
     } catch (err) {
       logger.error({ err }, 'AgentMail: WebSocket connect failed');
       return;
@@ -142,6 +143,7 @@ class AgentMailChannel implements Channel {
       );
       try {
         this.socket?.sendSubscribe({ type: 'subscribe', inboxIds });
+      // eslint-disable-next-line no-catch-all/no-catch-all -- AgentMail SDK throws diverse errors on sendSubscribe
       } catch (err) {
         logger.error({ err }, 'AgentMail: re-subscribe failed');
       }
@@ -167,6 +169,7 @@ class AgentMailChannel implements Channel {
     this.connected = false;
     try {
       this.socket?.close();
+    // eslint-disable-next-line no-catch-all/no-catch-all -- socket close can throw diverse errors; all are ignorable on disconnect
     } catch (err) {
       logger.debug({ err }, 'AgentMail: socket close error (ignored)');
     }

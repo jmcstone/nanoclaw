@@ -9,7 +9,6 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
-  ONECLI_URL,
   POLL_INTERVAL,
   resolveSessionMaxAgeHours,
   resolveSessionMaxMessages,
@@ -98,7 +97,8 @@ function loadState(): void {
   const agentTs = getRouterState('last_agent_timestamp');
   try {
     lastAgentTimestamp = agentTs ? JSON.parse(agentTs) : {};
-  } catch {
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
     logger.warn('Corrupted last_agent_timestamp in DB, resetting');
     lastAgentTimestamp = {};
   }
@@ -157,6 +157,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   let groupDir: string;
   try {
     groupDir = resolveGroupFolderPath(group.folder);
+  // eslint-disable-next-line no-catch-all/no-catch-all -- resolveGroupFolderPath throws for invalid folder paths; log and reject
   } catch (err) {
     logger.warn(
       { jid, folder: group.folder, err },
@@ -519,6 +520,7 @@ async function runAgent(
     }
 
     return 'success';
+  // eslint-disable-next-line no-catch-all/no-catch-all -- container invocation can throw diverse errors (spawn, network, timeout)
   } catch (err) {
     logger.error({ group: group.name, err }, 'Agent error');
     return 'error';
@@ -621,6 +623,7 @@ async function startMessageLoop(): Promise<void> {
           }
         }
       }
+    // eslint-disable-next-line no-catch-all/no-catch-all -- message loop must not crash; diverse errors from DB/queue are all handled the same way
     } catch (err) {
       logger.error({ err }, 'Error in message loop');
     }
