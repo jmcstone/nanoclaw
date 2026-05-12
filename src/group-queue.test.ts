@@ -481,4 +481,139 @@ describe('GroupQueue', () => {
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
   });
+
+  // --- isActive ---
+
+  it('isActive returns false when no container is running', () => {
+    expect(queue.isActive('group1@g.us')).toBe(false);
+  });
+
+  it('isActive returns true while a message-processing container is running', async () => {
+    let resolveProcess: () => void;
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(queue.isActive('group1@g.us')).toBe(true);
+
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(queue.isActive('group1@g.us')).toBe(false);
+  });
+
+  it('isActive returns false during task-container runs', async () => {
+    let resolveTask: () => void;
+    const taskFn = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveTask = resolve;
+      });
+    });
+
+    queue.enqueueTask('group1@g.us', 'task-1', taskFn);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Task container is running; isActive should still be false because it's
+    // gated on isTaskContainer !== true (message hash-rotation should only
+    // recycle message containers, not in-flight scheduled task runs).
+    expect(queue.isActive('group1@g.us')).toBe(false);
+
+    resolveTask!();
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  // --- recycleContainer ---
+
+  it('recycleContainer is a no-op when no container is active', async () => {
+    await expect(
+      queue.recycleContainer('group1@g.us', 100),
+    ).resolves.toBeUndefined();
+  });
+
+  it('recycleContainer writes _close and resolves when container exits cleanly', async () => {
+    const fs = await import('fs');
+    const { EventEmitter } = await import('events');
+
+    let resolveProcess: () => void;
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Fake ChildProcess: EventEmitter-shaped with the bits recycleContainer reads.
+    const fakeProc: any = new EventEmitter();
+    fakeProc.exitCode = null;
+    fakeProc.signalCode = null;
+    fakeProc.kill = vi.fn();
+    queue.registerProcess('group1@g.us', fakeProc, 'container-1', 'test-group');
+
+    const writeFileSync = vi.mocked(fs.default.writeFileSync);
+    writeFileSync.mockClear();
+
+    const recyclePromise = queue.recycleContainer('group1@g.us', 5_000);
+
+    // _close should have been written immediately
+    const closeWrites = writeFileSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    );
+    expect(closeWrites).toHaveLength(1);
+
+    // Container exits before grace timeout → recycle resolves without SIGTERM
+    fakeProc.exitCode = 0;
+    fakeProc.emit('exit');
+    await recyclePromise;
+
+    expect(fakeProc.kill).not.toHaveBeenCalled();
+
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('recycleContainer escalates to SIGTERM after graceMs expires', async () => {
+    const { EventEmitter } = await import('events');
+
+    let resolveProcess: () => void;
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const fakeProc: any = new EventEmitter();
+    fakeProc.exitCode = null;
+    fakeProc.signalCode = null;
+    fakeProc.kill = vi.fn();
+    queue.registerProcess('group1@g.us', fakeProc, 'container-1', 'test-group');
+
+    const recyclePromise = queue.recycleContainer('group1@g.us', 1_000);
+
+    // Advance past the grace period — container has NOT exited yet
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(fakeProc.kill).toHaveBeenCalledWith('SIGTERM');
+
+    // Now exit; recycle resolves
+    fakeProc.exitCode = 143;
+    fakeProc.emit('exit');
+    await recyclePromise;
+
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
+  });
 });

@@ -224,6 +224,21 @@ export function _setRegisteredGroups(
 }
 
 /**
+ * Compute the current MCP tool hash for a group by probing live MCP servers
+ * and folding their boot versions into computeGroupMcpHash. Used both at
+ * cold-spawn (runAgent) and on the IPC fast-path (message loop) to detect
+ * MCP-version drift while a container is alive — see recycleContainer.
+ */
+async function getCurrentMcpToolHash(group: RegisteredGroup): Promise<string> {
+  const mcpOpts = groupMcpOptionsFromConfig(
+    group.folder,
+    group.containerConfig as Record<string, unknown> | undefined,
+  );
+  const serverVersions = await probeMcpVersions(mcpOpts);
+  return computeGroupMcpHash({ ...mcpOpts, serverVersions }).hash;
+}
+
+/**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
@@ -603,7 +618,36 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          // Before routing to a running container via IPC, check whether the
+          // active MCP server set has changed since that container spawned.
+          // The Claude SDK locks its MCP tool list at session init, so an
+          // in-place refresh isn't possible — we have to recycle the container.
+          // The probe is 5s-bounded with a 30s URL cache (mcp-tool-discovery),
+          // so back-to-back messages pay ~0; once-per-30s pays ≤5s worst case.
+          let mustRecycle = false;
+          if (queue.isActive(chatJid)) {
+            const currentToolHash = await getCurrentMcpToolHash(group);
+            const storedHash = getSessionToolHash(group.folder);
+            if (storedHash && storedHash !== currentToolHash) {
+              logger.info(
+                {
+                  group: group.folder,
+                  oldHash: storedHash.slice(0, 16),
+                  newHash: currentToolHash.slice(0, 16),
+                },
+                'MCP tool hash changed since spawn — recycling running container',
+              );
+              mustRecycle = true;
+            }
+          }
+          if (mustRecycle) {
+            await queue.recycleContainer(chatJid);
+            // Fall through to enqueueMessageCheck below: state.active is now
+            // false (or about to flip via runForGroup's finally block).
+            // runAgent will re-probe + rotate the session as part of cold spawn.
+          }
+
+          if (!mustRecycle && queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -618,7 +662,10 @@ async function startMessageLoop(): Promise<void> {
                 logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
               );
           } else {
-            // No active container — enqueue for a new one
+            // No active container (or just recycled) — enqueue a fresh one.
+            // We deliberately do NOT advance lastAgentTimestamp here; the new
+            // container's processGroupMessages will refetch via getMessagesSince
+            // from the cursor, picking up everything in this batch.
             queue.enqueueMessageCheck(chatJid);
           }
         }

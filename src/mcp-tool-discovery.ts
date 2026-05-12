@@ -30,12 +30,26 @@ import { createHash } from 'crypto';
 // silently sever the version-folding wiring.
 const SERVER_TRAWL = 'trawl';
 const SERVER_MESSAGES = 'messages';
+const SERVER_TASKS = 'tasks';
 
 // Inbox-mcp publishes on the docker_gwbridge IP per ~/containers/mailroom/
 // docker-compose.yml. Agent containers reach it via host.docker.internal,
 // which resolves to this same IP from inside containers — but the
 // orchestrator runs on the host, so we hit the bridge IP directly.
 const INBOX_MCP_PROBE_URL = 'http://172.31.0.1:18080/mcp';
+
+// Tasks-mcp publishes on the docker0 gateway via the same pattern — see
+// ~/containers/tasks/docker-compose.yml `mcp.ports`. Keep the two constants
+// in sync if the host port ever changes.
+const TASKS_MCP_PROBE_URL = 'http://172.31.0.1:18088/mcp';
+
+// Which groups get mcp__tasks__* registered. Tasks-mcp writes to Jeff's
+// Obsidian Tasks vault, so it should only be enabled where a Madison
+// instance has a legitimate reason to manage tasks — currently the inbox
+// (where she triages email-derived todos) and main (where Jeff talks to
+// her directly). Keep this in sync with the same gate in
+// container/agent-runner/src/index.ts.
+const TASKS_ELIGIBLE_GROUPS = new Set(['telegram_inbox', 'telegram_main']);
 
 // Mirror of TRAWL_DEFAULT_URL in container/agent-runner/src/index.ts. Trawl
 // configs in registered_groups frequently leave trawl.url unset (the agent-
@@ -93,10 +107,11 @@ export interface GroupMcpOptions {
   trawl?: TrawlConfig;
   /**
    * Per-server boot versions reported by `initialize` (keys: 'trawl',
-   * 'messages'). Populated by probeMcpVersions(). When present and the
-   * key matches an active server, the version is folded into the hash so
-   * an MCP process restart bumps the hash. Absent → no version contribution
-   * (back-compat: pre-probe call sites and unit tests get the legacy hash).
+   * 'messages', 'tasks'). Populated by probeMcpVersions(). When present
+   * and the key matches an active server, the version is folded into the
+   * hash so an MCP process restart bumps the hash. Absent → no version
+   * contribution (back-compat: pre-probe call sites and unit tests get the
+   * legacy hash).
    */
   serverVersions?: Record<string, string>;
 }
@@ -110,6 +125,7 @@ export interface GroupMcpOptions {
  *   - context-mode — when hasContextMode
  *   - a-mem     — when hasAmem
  *   - messages  — when groupFolder === 'telegram_inbox'
+ *   - tasks     — when groupFolder is in TASKS_ELIGIBLE_GROUPS
  *   - trawl     — when trawl.enabled === true
  *
  * For Trawl, the hash also covers mode + allowlist fields + URL so that
@@ -121,6 +137,7 @@ export function computeGroupMcpHash(options: GroupMcpOptions): McpServerSet {
   if (options.hasContextMode) names.push('context-mode');
   if (options.hasAmem) names.push('a-mem');
   if (options.groupFolder === 'telegram_inbox') names.push(SERVER_MESSAGES);
+  if (TASKS_ELIGIBLE_GROUPS.has(options.groupFolder)) names.push(SERVER_TASKS);
   if (options.trawl?.enabled === true) names.push(SERVER_TRAWL);
 
   const sorted = [...names].sort();
@@ -231,6 +248,8 @@ async function defaultMcpVersionFetcher(url: string): Promise<string | null> {
  * - Trawl: probes `opts.trawl.url` when trawl.enabled === true.
  * - Inbox-mcp ('messages'): probes the docker-bridge URL when groupFolder is
  *   'telegram_inbox'.
+ * - Tasks-mcp ('tasks'): probes the docker-bridge URL when groupFolder is in
+ *   TASKS_ELIGIBLE_GROUPS.
  * - Stdio MCPs (e.g. agentmail): not probed — they spawn fresh per Madison
  *   invocation, so transport-session and tool-list staleness can't accumulate.
  *
@@ -255,6 +274,9 @@ export async function probeMcpVersions(
   }
   if (opts.groupFolder === 'telegram_inbox') {
     targets[SERVER_MESSAGES] = INBOX_MCP_PROBE_URL;
+  }
+  if (TASKS_ELIGIBLE_GROUPS.has(opts.groupFolder)) {
+    targets[SERVER_TASKS] = TASKS_MCP_PROBE_URL;
   }
 
   // Probe all targets concurrently — each is a 5s-bounded HTTP roundtrip and

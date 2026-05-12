@@ -678,6 +678,18 @@ async function runQuery(
   const hasInbox = containerInput.groupFolder === 'telegram_inbox';
   log(`messages MCP: ${hasInbox ? 'enabled' : 'disabled'}`);
 
+  // Tasks-mcp — Streamable HTTP MCP server at ~/containers/tasks (published on
+  // 172.31.0.1:18088 → loopback-to-bridge only). Writes to Jeff's Obsidian
+  // Tasks vault, so we only enable it where a Madison instance has a
+  // legitimate reason to manage tasks: the inbox (email-derived todos) and
+  // the main chat (where Jeff talks to her directly). Keep this gate in
+  // sync with TASKS_ELIGIBLE_GROUPS in src/mcp-tool-discovery.ts so the
+  // session-rotation hash stays consistent with what's actually registered.
+  const hasTasks =
+    containerInput.groupFolder === 'telegram_inbox' ||
+    containerInput.groupFolder === 'telegram_main';
+  log(`tasks MCP: ${hasTasks ? 'enabled' : 'disabled'}`);
+
   // AgentMail MCP — registered only when container-runner injected both
   // env vars (i.e. this group has an inbox configured via
   // AGENTMAIL_INBOX_<FOLDER>). Scoped to a single inbox per group; the
@@ -749,6 +761,12 @@ async function runQuery(
       url: 'http://host.docker.internal:18080/mcp',
     };
   }
+  if (hasTasks) {
+    mcpServers['tasks'] = {
+      type: 'http',
+      url: 'http://host.docker.internal:18088/mcp',
+    };
+  }
   if (hasAgentMail) {
     mcpServers['agentmail'] = {
       command: 'npx',
@@ -794,6 +812,7 @@ async function runQuery(
     ...(hasAmem ? ['mcp__a-mem__*'] : []),
     ...(hasContextMode ? ['mcp__context-mode__*'] : []),
     ...(hasInbox ? ['mcp__messages__*'] : []),
+    ...(hasTasks ? ['mcp__tasks__*'] : []),
     ...(hasAgentMail ? ['mcp__agentmail__*'] : []),
     ...trawlAllowed,
   ];

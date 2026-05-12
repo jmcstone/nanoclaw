@@ -96,6 +96,52 @@ describe('computeGroupMcpHash', () => {
     );
   });
 
+  it('includes tasks server for tasks-eligible folders only', () => {
+    const inbox: GroupMcpOptions = {
+      groupFolder: 'telegram_inbox',
+      hasAmem: false,
+      hasContextMode: false,
+    };
+    const main: GroupMcpOptions = { ...inbox, groupFolder: 'telegram_main' };
+    const other: GroupMcpOptions = { ...inbox, groupFolder: 'telegram_avp' };
+    expect(computeGroupMcpHash(inbox).serverNames).toContain('tasks');
+    expect(computeGroupMcpHash(main).serverNames).toContain('tasks');
+    expect(computeGroupMcpHash(other).serverNames).not.toContain('tasks');
+  });
+
+  it('tasks version folds into the hash for tasks-eligible groups', () => {
+    const main: GroupMcpOptions = {
+      groupFolder: 'telegram_main',
+      hasAmem: false,
+      hasContextMode: false,
+    };
+    const noVer = computeGroupMcpHash(main);
+    const withV1 = computeGroupMcpHash({
+      ...main,
+      serverVersions: { tasks: 'v1' },
+    });
+    const withV2 = computeGroupMcpHash({
+      ...main,
+      serverVersions: { tasks: 'v2' },
+    });
+    expect(noVer.hash).not.toBe(withV1.hash);
+    expect(withV1.hash).not.toBe(withV2.hash);
+  });
+
+  it('tasks version on a non-eligible group does NOT affect the hash (inactive-key isolation)', () => {
+    const other: GroupMcpOptions = {
+      groupFolder: 'telegram_avp',
+      hasAmem: false,
+      hasContextMode: false,
+    };
+    const noVer = computeGroupMcpHash(other);
+    const stray = computeGroupMcpHash({
+      ...other,
+      serverVersions: { tasks: 'should-be-ignored' },
+    });
+    expect(noVer.hash).toBe(stray.hash);
+  });
+
   it('always includes nanoclaw in server names', () => {
     const opts: GroupMcpOptions = {
       groupFolder: 'g',
@@ -447,7 +493,7 @@ describe('probeMcpVersions', () => {
     _resetVersionProbeStateForTest();
   });
 
-  it('returns versions for enabled MCPs (trawl + messages on telegram_inbox)', async () => {
+  it('returns versions for enabled MCPs (trawl + messages + tasks on telegram_inbox)', async () => {
     const calls: string[] = [];
     const versions = await probeMcpVersions(
       {
@@ -458,11 +504,52 @@ describe('probeMcpVersions', () => {
       },
       async (url) => {
         calls.push(url);
-        return url.includes('t.example') ? 'trawl-v1' : 'inbox-v1';
+        if (url.includes('t.example')) return 'trawl-v1';
+        if (url.includes(':18080')) return 'inbox-v1';
+        if (url.includes(':18088')) return 'tasks-v1';
+        return null;
       },
     );
-    expect(versions).toEqual({ trawl: 'trawl-v1', messages: 'inbox-v1' });
-    expect(calls).toHaveLength(2);
+    expect(versions).toEqual({
+      trawl: 'trawl-v1',
+      messages: 'inbox-v1',
+      tasks: 'tasks-v1',
+    });
+    expect(calls).toHaveLength(3);
+  });
+
+  it('includes tasks server for telegram_main (eligible) without inbox', async () => {
+    const calls: string[] = [];
+    const versions = await probeMcpVersions(
+      {
+        groupFolder: 'telegram_main',
+        hasAmem: false,
+        hasContextMode: false,
+      },
+      async (url) => {
+        calls.push(url);
+        return url.includes(':18088') ? 'tasks-v1' : null;
+      },
+    );
+    expect(versions).toEqual({ tasks: 'tasks-v1' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('omits tasks server for groups not in the tasks-eligible set', async () => {
+    const calls: string[] = [];
+    const versions = await probeMcpVersions(
+      {
+        groupFolder: 'telegram_avp',
+        hasAmem: false,
+        hasContextMode: false,
+      },
+      async (url) => {
+        calls.push(url);
+        return 'whatever';
+      },
+    );
+    expect(versions).toEqual({});
+    expect(calls).toHaveLength(0);
   });
 
   it('omits trawl when disabled', async () => {

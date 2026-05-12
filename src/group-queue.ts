@@ -1,4 +1,4 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -175,6 +175,96 @@ export class GroupQueue {
       // eslint-disable-next-line no-catch-all/no-catch-all -- fs ops (mkdir, write, rename) can throw diverse errors; return false on any failure
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Is a message-processing container currently active for this group?
+   * Returns false during task-container runs and when no container is running.
+   */
+  isActive(groupJid: string): boolean {
+    const state = this.groups.get(groupJid);
+    return state?.active === true && state?.isTaskContainer !== true;
+  }
+
+  /**
+   * Force the running container to exit so the next message spawns a fresh
+   * one. Used when MCP server versions change while a container is alive —
+   * the SDK locks its tool list at session init, so an in-place refresh isn't
+   * possible. Writes the `_close` sentinel for a clean shutdown, then waits
+   * up to `graceMs` for the child to exit; if it doesn't, escalates to
+   * SIGTERM + `docker stop` and waits another 10s before giving up.
+   *
+   * Resolves when the child process has exited (state.active is then cleared
+   * by runForGroup's finally block) or after the second-stage timeout.
+   */
+  async recycleContainer(
+    groupJid: string,
+    graceMs: number = 10_000,
+  ): Promise<void> {
+    const state = this.groups.get(groupJid);
+    if (!state?.active || !state.process) return;
+    const proc = state.process;
+    const containerName = state.containerName;
+
+    logger.info(
+      { groupJid, containerName },
+      'Recycling container (MCP tool hash changed since spawn)',
+    );
+
+    this.closeStdin(groupJid);
+
+    const waitForExit = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          resolve();
+          return;
+        }
+        proc.once('exit', () => resolve());
+      });
+
+    const timeout = (ms: number): Promise<'timeout'> =>
+      new Promise<'timeout'>((resolve) =>
+        setTimeout(() => resolve('timeout'), ms),
+      );
+
+    const stage1 = await Promise.race([
+      waitForExit().then(() => 'exited' as const),
+      timeout(graceMs),
+    ]);
+    if (stage1 === 'exited') return;
+
+    logger.warn(
+      { groupJid, containerName, graceMs },
+      'Container did not exit after _close sentinel; escalating to SIGTERM + docker stop',
+    );
+    try {
+      proc.kill('SIGTERM');
+      // eslint-disable-next-line no-catch-all/no-catch-all -- proc.kill can throw if PID is gone; safe to ignore here
+    } catch {
+      /* ignore */
+    }
+    if (containerName) {
+      try {
+        spawn('docker', ['stop', '--time', '5', containerName], {
+          stdio: 'ignore',
+          detached: true,
+        }).unref();
+        // eslint-disable-next-line no-catch-all/no-catch-all -- spawn can throw EAGAIN/ENOENT; best-effort cleanup
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const stage2 = await Promise.race([
+      waitForExit().then(() => 'exited' as const),
+      timeout(10_000),
+    ]);
+    if (stage2 === 'timeout') {
+      logger.error(
+        { groupJid, containerName },
+        'Container still alive after SIGTERM + docker stop; giving up — runForGroup finally will eventually fire on Docker daemon cleanup',
+      );
     }
   }
 
