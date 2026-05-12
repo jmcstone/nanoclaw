@@ -2,11 +2,13 @@
  * parseTextStyles — convert Claude's Markdown output to channel-native formatting.
  *
  * Claude outputs standard Markdown. Each channel has its own text style syntax:
- *   - Signal:             passthrough (SignalChannel handles rich text styles natively
- *                         via the signal-cli JSON-RPC textStyle param — see parseSignalStyles)
- *   - WhatsApp / Telegram: *bold*, _italic_, no headings, plain links
- *   - Slack:              *bold*, _italic_, <url|text> links
- *   - Discord:            passthrough (already Markdown)
+ *   - Signal:    passthrough (SignalChannel handles rich text styles natively
+ *                via the signal-cli JSON-RPC textStyle param — see parseSignalStyles)
+ *   - WhatsApp:  *bold*, _italic_, no headings, plain links
+ *   - Slack:     *bold*, _italic_, <url|text> links
+ *   - Telegram:  HTML — <b>, <i>, <s>, <code>, <pre>, <a>; GFM tables → <pre>;
+ *                paired with parse_mode: 'HTML' in src/channels/telegram.ts.
+ *   - Discord:   passthrough (already Markdown)
  *
  * Code blocks (fenced and inline) are NEVER transformed by marker substitution.
  */
@@ -25,6 +27,10 @@ export function parseTextStyles(text: string, channel: ChannelType): string {
   // Discord and Signal are passthrough — no marker substitution.
   // Discord is already Markdown; Signal uses parseSignalStyles() for rich text.
   if (channel === 'discord' || channel === 'signal') return text;
+
+  // Telegram uses HTML parse_mode — needs its own pipeline because every
+  // segment (code, tables, body text) gets HTML-escaped and wrapped in tags.
+  if (channel === 'telegram') return transformTelegramHtml(text);
 
   // Split into protected (code) and unprotected regions, transform only the latter.
   const segments = splitProtectedRegions(text);
@@ -334,4 +340,173 @@ function transformSegment(text: string, channel: ChannelType): string {
   t = t.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '');
 
   return t;
+}
+
+// ---------------------------------------------------------------------------
+// Telegram HTML pipeline
+// ---------------------------------------------------------------------------
+
+/**
+ * Tokenize-then-transform pipeline for Telegram's HTML parse_mode.
+ *
+ * Phases (order matters — each protects the next from regex collisions):
+ *   1. Extract fenced code  ```lang\n...\n```  →  <pre>[<code class="language-x">]...</code></pre>
+ *   2. Extract inline code  `x`                →  <code>x</code>
+ *   3. Extract GFM tables   | a | b |\n|---|...|  →  <pre>padded ASCII grid</pre>
+ *   4. HTML-escape what remains (plain prose + token markers — markers survive escaping)
+ *   5. Apply markdown → HTML transforms: italic, bold, strike, headings, links, HR
+ *   6. Restore tokens (already-rendered HTML) in place
+ *
+ * Token markers use Unicode private-use codepoint U+E000 — guaranteed absent
+ * from real input and not disturbed by any phase-5 regex.
+ */
+function transformTelegramHtml(text: string): string {
+  const tokens: string[] = [];
+  const mint = (html: string): string => {
+    const id = tokens.length;
+    tokens.push(html);
+    return `${id}`;
+  };
+
+  let s = text;
+
+  // Phase 1: fenced code blocks (greedy, multi-line).
+  s = s.replace(
+    /```([A-Za-z0-9_+-]*)\n?([\s\S]*?)```/g,
+    (_, lang: string, body: string) => {
+      const cleaned = body.replace(/\n$/, '');
+      const inner = htmlEscape(cleaned);
+      const html = lang
+        ? `<pre><code class="language-${lang}">${inner}</code></pre>`
+        : `<pre>${inner}</pre>`;
+      return mint(html);
+    },
+  );
+
+  // Phase 2: inline code.
+  s = s.replace(/`([^`\n]+)`/g, (_, body: string) =>
+    mint(`<code>${htmlEscape(body)}</code>`),
+  );
+
+  // Phase 3: GFM pipe-tables. A table is: a row | a | b |, a separator
+  // | --- | --- | with hyphens (optionally colon-aligned), then ≥1 body rows.
+  s = renderGfmTables(s, mint);
+
+  // Phase 4: HTML-escape everything that remains (token markers survive — U+E000
+  // and digits aren't HTML-special).
+  s = htmlEscape(s);
+
+  // Phase 5: markdown → HTML transforms on the now-escaped prose.
+  // Italic before bold (single * inside ** would be mis-matched otherwise).
+  s = s.replace(
+    /(?<!\*)\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?!\*)/g,
+    '<i>$1</i>',
+  );
+  s = s.replace(/\*\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*\*/g, '<b>$1</b>');
+  // Underscore italic: only at word boundaries to avoid eating snake_case.
+  s = s.replace(/(^|[^\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)/g, '$1<i>$2</i>');
+  s = s.replace(/~~(?=\S)([^~\n]+?)(?<=\S)~~/g, '<s>$1</s>');
+  // ATX headings → bold (Telegram has no heading tag).
+  s = s.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
+  // Links: [text](url) → <a href="url">text</a>. url is already HTML-escaped
+  // from phase 4; that's correct (& becomes &amp; in the href, which renders
+  // back to & when the user taps the link).
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+  // Horizontal rules.
+  s = s.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '');
+
+  // Phase 6: restore tokens.
+  s = s.replace(/(\d+)/g, (_, id: string) => tokens[Number(id)]);
+
+  return s;
+}
+
+/** Escape the three HTML special chars Telegram requires inside any tag. */
+function htmlEscape(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+const TABLE_ROW_RE = /^\s*\|.+\|\s*$/;
+const TABLE_SEP_RE = /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/;
+
+/**
+ * Scan line-by-line for GFM tables. Each table block (header + separator +
+ * ≥1 body rows) is replaced by a single token whose stored value is an
+ * already-rendered <pre>...</pre> with space-padded columns.
+ *
+ * Cell contents have their markdown stripped (Telegram's <pre> parser
+ * doesn't permit nested inline tags except <code>, so we render cells as
+ * plain text) and are HTML-escaped before insertion.
+ */
+function renderGfmTables(text: string, mint: (html: string) => string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (
+      TABLE_ROW_RE.test(lines[i]) &&
+      i + 1 < lines.length &&
+      TABLE_SEP_RE.test(lines[i + 1])
+    ) {
+      const block: string[] = [lines[i], lines[i + 1]];
+      let j = i + 2;
+      while (j < lines.length && TABLE_ROW_RE.test(lines[j])) {
+        block.push(lines[j]);
+        j++;
+      }
+      out.push(mint(renderTableAsPre(block)));
+      i = j;
+    } else {
+      out.push(lines[i]);
+      i++;
+    }
+  }
+  return out.join('\n');
+}
+
+/** Parse a GFM table block into a padded ASCII grid wrapped in <pre>. */
+function renderTableAsPre(blockLines: string[]): string {
+  const parseRow = (line: string): string[] =>
+    line
+      .trim()
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((c) => stripInlineMarkdown(c.trim()));
+
+  const header = parseRow(blockLines[0]);
+  const body = blockLines.slice(2).map(parseRow);
+  const allRows = [header, ...body];
+
+  // Normalize column count to widest row (some rows may have trailing empties).
+  const cols = Math.max(...allRows.map((r) => r.length));
+  for (const row of allRows) {
+    while (row.length < cols) row.push('');
+  }
+
+  const widths: number[] = new Array(cols).fill(0);
+  for (const row of allRows) {
+    for (let c = 0; c < cols; c++) {
+      if (row[c].length > widths[c]) widths[c] = row[c].length;
+    }
+  }
+
+  const pad = (s: string, w: number): string =>
+    s + ' '.repeat(Math.max(0, w - s.length));
+  const renderRow = (row: string[]): string =>
+    row.map((c, idx) => pad(c, widths[idx])).join(' | ');
+  const separator = widths.map((w) => '-'.repeat(w)).join('-+-');
+
+  const rows = [renderRow(header), separator, ...body.map(renderRow)];
+  return `<pre>${rows.map(htmlEscape).join('\n')}</pre>`;
+}
+
+/** Strip inline markdown markers so cell contents render as plain text. */
+function stripInlineMarkdown(s: string): string {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '$1')
+    .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
 }

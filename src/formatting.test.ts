@@ -313,9 +313,9 @@ describe('parseTextStyles — bold', () => {
     expect(parseTextStyles('**hello**', 'whatsapp')).toBe('*hello*');
   });
 
-  it('converts **bold** to *bold* on telegram', () => {
+  it('converts **bold** to <b>bold</b> on telegram', () => {
     expect(parseTextStyles('say **this** now', 'telegram')).toBe(
-      'say *this* now',
+      'say <b>this</b> now',
     );
   });
 
@@ -335,8 +335,8 @@ describe('parseTextStyles — italic', () => {
     );
   });
 
-  it('converts *italic* to _italic_ on telegram', () => {
-    expect(parseTextStyles('*italic*', 'telegram')).toBe('_italic_');
+  it('converts *italic* to <i>italic</i> on telegram', () => {
+    expect(parseTextStyles('*italic*', 'telegram')).toBe('<i>italic</i>');
   });
 
   it('bold-before-italic: **bold** *italic* → *bold* _italic_', () => {
@@ -352,11 +352,13 @@ describe('parseTextStyles — headings', () => {
   });
 
   it('converts ## heading on telegram', () => {
-    expect(parseTextStyles('## Hello World', 'telegram')).toBe('*Hello World*');
+    expect(parseTextStyles('## Hello World', 'telegram')).toBe(
+      '<b>Hello World</b>',
+    );
   });
 
   it('converts ### heading on telegram', () => {
-    expect(parseTextStyles('### Section', 'telegram')).toBe('*Section*');
+    expect(parseTextStyles('### Section', 'telegram')).toBe('<b>Section</b>');
   });
 
   it('only converts headings at line start', () => {
@@ -372,9 +374,9 @@ describe('parseTextStyles — links', () => {
     );
   });
 
-  it('converts [text](url) to text (url) on telegram', () => {
+  it('converts [text](url) to <a href> on telegram', () => {
     expect(parseTextStyles('[Link](https://example.com)', 'telegram')).toBe(
-      'Link (https://example.com)',
+      '<a href="https://example.com">Link</a>',
     );
   });
 
@@ -405,9 +407,15 @@ describe('parseTextStyles — code block protection', () => {
     expect(parseTextStyles(input, 'whatsapp')).toBe(input);
   });
 
-  it('does not transform *italic* inside inline code', () => {
+  it('does not transform *italic* inside inline code (whatsapp passthrough)', () => {
     const input = 'use `*star*` literally';
-    expect(parseTextStyles(input, 'telegram')).toBe(input);
+    expect(parseTextStyles(input, 'whatsapp')).toBe(input);
+  });
+
+  it('preserves inline-code content verbatim on telegram (wrapped in <code>)', () => {
+    expect(parseTextStyles('use `*star*` literally', 'telegram')).toBe(
+      'use <code>*star*</code> literally',
+    );
   });
 
   it('transforms text outside code blocks but not inside', () => {
@@ -420,7 +428,81 @@ describe('parseTextStyles — code block protection', () => {
   it('transforms text outside fenced block but not inside', () => {
     const input = '**bold**\n```\n**raw**\n```\n*italic*';
     expect(parseTextStyles(input, 'telegram')).toBe(
-      '*bold*\n```\n**raw**\n```\n_italic_',
+      '<b>bold</b>\n<pre>**raw**</pre>\n<i>italic</i>',
+    );
+  });
+});
+
+describe('parseTextStyles — telegram HTML', () => {
+  it('HTML-escapes <, >, & in plain prose', () => {
+    expect(parseTextStyles('1 < 2 && 3 > 0', 'telegram')).toBe(
+      '1 &lt; 2 &amp;&amp; 3 &gt; 0',
+    );
+  });
+
+  it('renders fenced code as <pre>, escaping HTML special chars inside', () => {
+    expect(parseTextStyles('```\nif (a < b) { x; }\n```', 'telegram')).toBe(
+      '<pre>if (a &lt; b) { x; }</pre>',
+    );
+  });
+
+  it('preserves a language hint on fenced code as <pre><code class="language-x">', () => {
+    expect(parseTextStyles('```python\nx = 1\n```', 'telegram')).toBe(
+      '<pre><code class="language-python">x = 1</code></pre>',
+    );
+  });
+
+  it('renders inline code as <code>, escaping inside', () => {
+    expect(parseTextStyles('use `<div>` literally', 'telegram')).toBe(
+      'use <code>&lt;div&gt;</code> literally',
+    );
+  });
+
+  it('converts ~~strike~~ to <s> on telegram', () => {
+    expect(parseTextStyles('~~gone~~', 'telegram')).toBe('<s>gone</s>');
+  });
+
+  it('does not parse _x_ inside snake_case', () => {
+    expect(parseTextStyles('telegram_main and foo_bar_baz', 'telegram')).toBe(
+      'telegram_main and foo_bar_baz',
+    );
+  });
+
+  it('converts _italic_ at word boundary', () => {
+    expect(parseTextStyles('an _emphasized_ word', 'telegram')).toBe(
+      'an <i>emphasized</i> word',
+    );
+  });
+
+  it('renders a GFM table as a padded <pre> grid', () => {
+    const md = [
+      '| Name | Age |',
+      '|------|-----|',
+      '| Ada  | 36  |',
+      '| Bob  | 7   |',
+    ].join('\n');
+    expect(parseTextStyles(md, 'telegram')).toBe(
+      '<pre>Name | Age\n-----+----\nAda  | 36 \nBob  | 7  </pre>',
+    );
+  });
+
+  it('escapes HTML inside table cells and strips inline markdown', () => {
+    const md = [
+      '| Tag    | Note    |',
+      '|--------|---------|',
+      '| <div>  | **bold** |',
+    ].join('\n');
+    // Column widths: max(|Tag|, |<div>|)=5, max(|Note|, |bold|)=4.
+    // Padding is applied before HTML-escaping, so &lt;div&gt; looks "wider"
+    // but renders to 5 monospace chars in Telegram.
+    expect(parseTextStyles(md, 'telegram')).toBe(
+      '<pre>Tag   | Note\n------+-----\n&lt;div&gt; | bold</pre>',
+    );
+  });
+
+  it('escapes & in link URL (Telegram requires &amp; in href)', () => {
+    expect(parseTextStyles('[q](https://x.test/?a=1&b=2)', 'telegram')).toBe(
+      '<a href="https://x.test/?a=1&amp;b=2">q</a>',
     );
   });
 });
@@ -542,7 +624,7 @@ describe('formatOutbound — channel-aware', () => {
   it('strips internal tags then applies channel formatting', () => {
     expect(
       formatOutbound('<internal>thinking</internal>**done**', 'telegram'),
-    ).toBe('*done*');
+    ).toBe('<b>done</b>');
   });
 
   it('signal channel is passthrough — raw markdown preserved for parseSignalStyles', () => {

@@ -21,9 +21,9 @@ export interface TelegramChannelOpts {
 }
 
 /**
- * Send a message with Telegram Markdown parse mode, falling back to plain text.
- * Claude's output naturally matches Telegram's Markdown v1 format:
- *   *bold*, _italic_, `code`, ```code blocks```, [links](url)
+ * Send a message with Telegram HTML parse mode, falling back to plain text.
+ * Outbound text is converted to HTML by parseTextStyles() in router.ts —
+ * <b>, <i>, <s>, <code>, <pre>, <a>, plus <pre> blocks for GFM tables.
  */
 async function sendTelegramMessage(
   api: { sendMessage: Api['sendMessage'] },
@@ -34,12 +34,12 @@ async function sendTelegramMessage(
   try {
     await api.sendMessage(chatId, text, {
       ...options,
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
     });
     // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (parse-mode, network, rate-limit); fall back to plain text
   } catch (err) {
-    // Fallback: send as plain text if Markdown parsing fails
-    logger.debug({ err }, 'Markdown send failed, falling back to plain text');
+    // Fallback: send as plain text if HTML parsing fails
+    logger.debug({ err }, 'HTML send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
   }
 }
@@ -288,8 +288,9 @@ export class TelegramChannel implements Channel {
    */
   private attachHandlers(bot: Bot, usernameLc: string, token: string): void {
     // Command to get chat ID (always responds — needed for new-bot discovery).
-    // Bot username goes inside backticks so underscores in usernames like
-    // `madison_avp_outreach_bot` don't get parsed as Markdown italic markers.
+    // Bot username and chat ID go inside <code> so underscores in usernames like
+    // `madison_avp_outreach_bot` render literally; chatName is HTML-escaped so
+    // user-controlled chat titles can't inject tags.
     bot.command('chatid', (ctx) => {
       const chatId = ctx.chat.id;
       const chatType = ctx.chat.type;
@@ -297,10 +298,14 @@ export class TelegramChannel implements Channel {
         chatType === 'private'
           ? ctx.from?.first_name || 'Private'
           : (ctx.chat as any).title || 'Unknown';
+      const escapedName = chatName
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 
       ctx.reply(
-        `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}\nBot: \`@${ctx.me?.username ?? '?'}\``,
-        { parse_mode: 'Markdown' },
+        `Chat ID: <code>tg:${chatId}</code>\nName: ${escapedName}\nType: ${chatType}\nBot: <code>@${ctx.me?.username ?? '?'}</code>`,
+        { parse_mode: 'HTML' },
       );
     });
 
