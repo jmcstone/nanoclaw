@@ -6,6 +6,7 @@ import { Api, Bot } from 'grammy';
 import { ASSISTANT_NAME, DOWNLOADS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+import { parseTextStyles } from '../text-styles.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -146,15 +147,21 @@ export async function sendPoolMessage(
   const api = poolApis[idx];
   try {
     const numericId = chatId.replace(/^tg:/, '');
+    // Pool messages bypass router.formatOutbound (ipc.ts routes them here
+    // directly with raw text), so apply the same channel-aware Markdown→HTML
+    // conversion that the non-pool path gets. Without this, sendTelegramMessage
+    // ships raw markdown under parse_mode: 'HTML' and Telegram renders the
+    // markers as literal text.
+    const formatted = parseTextStyles(text, 'telegram');
     const MAX_LENGTH = 4096;
-    if (text.length <= MAX_LENGTH) {
-      await sendTelegramMessage(api, numericId, text);
+    if (formatted.length <= MAX_LENGTH) {
+      await sendTelegramMessage(api, numericId, formatted);
     } else {
-      for (let i = 0; i < text.length; i += MAX_LENGTH) {
+      for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
         await sendTelegramMessage(
           api,
           numericId,
-          text.slice(i, i + MAX_LENGTH),
+          formatted.slice(i, i + MAX_LENGTH),
         );
       }
     }
