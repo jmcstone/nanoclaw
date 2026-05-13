@@ -330,8 +330,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           typeof result.result === 'string'
             ? result.result
             : JSON.stringify(result.result);
-        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        // formatOutbound strips <internal>...</internal> and applies the
+        // channel's native text-style conversion (markdown → HTML for telegram,
+        // marker substitution for whatsapp/slack). Without this, raw markdown
+        // ships under parse_mode: 'HTML' and renders as literal asterisks.
+        const text = formatOutbound(raw, channel.name as ChannelType);
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
           await channel.sendMessage(chatJid, text);
