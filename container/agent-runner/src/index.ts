@@ -701,6 +701,11 @@ async function runQuery(
     `agentmail MCP: ${hasAgentMail ? `enabled (inbox=${process.env.AGENTMAIL_INBOX_ID})` : 'disabled'}`,
   );
 
+  // Brave Search MCP — host-side .env gates it via container-runner; if the
+  // env var made it into the container, the user wants web search enabled.
+  const hasBraveSearch = !!process.env.BRAVE_API_KEY;
+  log(`brave-search MCP: ${hasBraveSearch ? 'enabled' : 'disabled'}`);
+
   const mcpServers: Record<string, any> = {
     nanoclaw: {
       command: 'node',
@@ -777,6 +782,15 @@ async function runQuery(
       },
     };
   }
+  if (hasBraveSearch) {
+    mcpServers['brave-search'] = {
+      command: 'npx',
+      args: ['-y', '@brave/brave-search-mcp-server'],
+      env: {
+        BRAVE_API_KEY: process.env.BRAVE_API_KEY!,
+      },
+    };
+  }
 
   const trawlCfg = containerInput.trawl;
   const hasTrawl = trawlCfg?.enabled === true;
@@ -814,6 +828,7 @@ async function runQuery(
     ...(hasInbox ? ['mcp__messages__*'] : []),
     ...(hasTasks ? ['mcp__tasks__*'] : []),
     ...(hasAgentMail ? ['mcp__agentmail__*'] : []),
+    ...(hasBraveSearch ? ['mcp__brave-search__*'] : []),
     ...trawlAllowed,
   ];
 

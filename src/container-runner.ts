@@ -21,6 +21,7 @@ import {
   OBSIDIAN_TASKS_DIR,
   OLLAMA_ADMIN_TOOLS,
   resolveAgentMailApiKey,
+  resolveBraveApiKey,
   resolveGroupAgentMailInbox,
   resolveGroupLitellmKey,
   resolveGroupModel,
@@ -280,6 +281,7 @@ function buildContainerArgs(
   litellmApiKey?: string,
   agentmailApiKey?: string,
   agentmailInboxId?: string,
+  braveApiKey?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -313,6 +315,12 @@ function buildContainerArgs(
   if (agentmailApiKey && agentmailInboxId) {
     args.push('-e', `AGENTMAIL_API_KEY=${agentmailApiKey}`);
     args.push('-e', `AGENTMAIL_INBOX_ID=${agentmailInboxId}`);
+  }
+
+  // Brave Search — shared across all groups. Presence of the env var alone
+  // is what makes the agent-runner register the brave-search MCP server.
+  if (braveApiKey) {
+    args.push('-e', `BRAVE_API_KEY=${braveApiKey}`);
   }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
@@ -386,6 +394,7 @@ export async function runContainerAgent(
   const agentmailApiKey = agentmailInboxId
     ? resolveAgentMailApiKey()
     : undefined;
+  const braveApiKey = resolveBraveApiKey();
   const containerArgs = buildContainerArgs(
     mounts,
     containerName,
@@ -393,6 +402,7 @@ export async function runContainerAgent(
     litellmApiKey,
     agentmailApiKey,
     agentmailInboxId,
+    braveApiKey,
   );
 
   logger.debug(

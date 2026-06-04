@@ -262,6 +262,15 @@ export function resolveAgentMailApiKey(): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+// Brave Search API key — shared across all groups (web search is global).
+// Read directly from .env, not process.env, to keep secrets off the host
+// process environment. Injected per-container so the agent-runner registers
+// the brave-search MCP server when the env var is present.
+export function resolveBraveApiKey(): string | undefined {
+  const value = readEnvFile(['BRAVE_API_KEY']).BRAVE_API_KEY;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 export function resolveGroupAgentMailInbox(folder: string): string | undefined {
   const envName = `AGENTMAIL_INBOX_${folder.replace(/-/g, '_').toUpperCase()}`;
   const value = readEnvFile([envName])[envName];
