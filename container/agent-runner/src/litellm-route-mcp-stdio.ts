@@ -20,6 +20,7 @@ import { z } from 'zod';
 
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 
 const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || 'http://host.docker.internal:4000';
 const LITELLM_API_KEY = process.env.LITELLM_API_KEY || '';
@@ -206,6 +207,147 @@ server.tool(
           {
             type: 'text' as const,
             text: `Failed to call LiteLLM: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'litellm_generate_image',
+  'Generate an image from a text prompt via the LiteLLM gateway (routes to OpenRouter image models like "gemini-3.1-flash-image" aka nano-banana). Writes the image to a file path you choose and returns the path + final dimensions. Generic — use for website art, briefing-room heroes, illustrations, anything. The model returns roughly 16:9; pass width AND height to crop/resize to an exact size. output_path must live inside a writable mount: /workspace/group, /workspace/downloads, /workspace/extra/shared, or a subfolder of those.',
+  {
+    prompt: z
+      .string()
+      .describe(
+        'Full image description. Be specific about subject, style, lighting, composition. For a consistent set (e.g. briefing-room cards), reuse a fixed style prefix across every call and vary only the subject.',
+      ),
+    output_path: z
+      .string()
+      .describe(
+        'Absolute container path to write to, e.g. /workspace/extra/shared/AVP/briefings/data-centers.jpg. Parent dirs are created automatically. The extension sets the format: .jpg/.jpeg = JPEG, .png = PNG, .webp = WebP.',
+      ),
+    model: z
+      .string()
+      .optional()
+      .describe('LiteLLM image model name. Default "gemini-3.1-flash-image".'),
+    width: z
+      .number()
+      .optional()
+      .describe('Resize target width in px. Must be paired with height.'),
+    height: z
+      .number()
+      .optional()
+      .describe('Resize target height in px. Must be paired with width.'),
+    fit: z
+      .enum(['cover', 'contain', 'inside', 'fill'])
+      .optional()
+      .describe(
+        'Resize strategy when width+height are given. "cover" (default) crops to fill the box exactly; "contain" letterboxes; "inside" fits within without cropping; "fill" stretches.',
+      ),
+  },
+  async (args) => {
+    const model = args.model || 'gemini-3.1-flash-image';
+
+    if ((args.width && !args.height) || (args.height && !args.width)) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'width and height must be provided together (or neither, to keep the model\'s native size).',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    log(`>>> Generating image with ${model} -> ${args.output_path}`);
+    writeStatus('generating', `Image: ${model}`);
+
+    try {
+      const startedAt = Date.now();
+      const res = await litellmFetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: args.prompt }],
+          modalities: ['image', 'text'],
+        }),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        return {
+          content: [
+            { type: 'text' as const, text: `LiteLLM error (${res.status}): ${errorText}` },
+          ],
+          isError: true,
+        };
+      }
+
+      const data = (await res.json()) as {
+        choices?: Array<{
+          message?: {
+            content?: string;
+            images?: Array<{ image_url?: { url?: string } }>;
+          };
+        }>;
+      };
+
+      const msg = data.choices?.[0]?.message;
+      const url = msg?.images?.[0]?.image_url?.url;
+      if (!url) {
+        const text = msg?.content ? ` Model said: ${msg.content.slice(0, 300)}` : '';
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `No image in response from ${model}. The model may not support image output, or refused the prompt.${text}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      let raw: Buffer;
+      if (url.startsWith('data:')) {
+        raw = Buffer.from(url.split(',', 2)[1], 'base64');
+      } else {
+        const imgRes = await fetch(url);
+        raw = Buffer.from(await imgRes.arrayBuffer());
+      }
+
+      // Always pipe through sharp so the output format matches the file
+      // extension (model returns JPEG) and any requested resize is applied.
+      let pipeline = sharp(raw);
+      if (args.width && args.height) {
+        pipeline = pipeline.resize(args.width, args.height, { fit: args.fit || 'cover' });
+      }
+      const ext = path.extname(args.output_path).toLowerCase();
+      if (ext === '.png') pipeline = pipeline.png();
+      else if (ext === '.webp') pipeline = pipeline.webp();
+      else pipeline = pipeline.jpeg({ quality: 90 });
+      const out = await pipeline.toBuffer();
+
+      fs.mkdirSync(path.dirname(args.output_path), { recursive: true });
+      fs.writeFileSync(args.output_path, out);
+
+      const meta = await sharp(out).metadata();
+      const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+      const summary = `Wrote ${args.output_path} (${meta.width}×${meta.height}, ${(out.length / 1024).toFixed(0)}KB, ${elapsedSec}s, model=${model})`;
+      log(`<<< ${summary}`);
+      writeStatus('done', summary);
+
+      return { content: [{ type: 'text' as const, text: summary }] };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Failed to generate image: ${err instanceof Error ? err.message : String(err)}`,
           },
         ],
         isError: true,
