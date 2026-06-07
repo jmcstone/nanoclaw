@@ -271,6 +271,25 @@ export function resolveBraveApiKey(): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+export function resolveTeslaTrackerApiKey(): string | undefined {
+  const value = readEnvFile(['TESLA_TRACKER_API_KEY']).TESLA_TRACKER_API_KEY;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveTeslaTrackerUrl(): string {
+  const value = readEnvFile(['TESLA_TRACKER_URL']).TESLA_TRACKER_URL;
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : 'http://qcm-de:10101';
+}
+
+export function resolveAmbientWeatherUrl(): string {
+  const value = readEnvFile(['AMBIENT_WEATHER_URL']).AMBIENT_WEATHER_URL;
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : 'http://qcm-de:10111';
+}
+
 export function resolveGroupAgentMailInbox(folder: string): string | undefined {
   const envName = `AGENTMAIL_INBOX_${folder.replace(/-/g, '_').toUpperCase()}`;
   const value = readEnvFile([envName])[envName];

@@ -22,6 +22,9 @@ import {
   OLLAMA_ADMIN_TOOLS,
   resolveAgentMailApiKey,
   resolveBraveApiKey,
+  resolveTeslaTrackerApiKey,
+  resolveTeslaTrackerUrl,
+  resolveAmbientWeatherUrl,
   resolveGroupAgentMailInbox,
   resolveGroupLitellmKey,
   resolveGroupModel,
@@ -80,6 +83,22 @@ interface VolumeMount {
   containerPath: string;
   readonly: boolean;
 }
+
+// TeslaMate is Jeff's personal car (read + vehicle commands). Restrict the
+// key and skill to the main and inbox Madisons; work groups (trading, AVP)
+// don't get car control. Mirrors TASKS_ELIGIBLE_GROUPS in mcp-tool-discovery.
+const TESLA_ELIGIBLE_GROUPS = new Set(['telegram_main', 'telegram_inbox']);
+
+// Ambient Weather (personal weather station) — read-only, harmless, but kept
+// to the same personal-Madison scope as Tesla for consistency.
+const WEATHER_ELIGIBLE_GROUPS = new Set(['telegram_main', 'telegram_inbox']);
+
+// Skills gated to a subset of groups, with their eligibility set. Any group not
+// in the set gets a stale copy removed on spawn.
+const GATED_SKILLS: Record<string, Set<string>> = {
+  teslamate: TESLA_ELIGIBLE_GROUPS,
+  'ambient-weather': WEATHER_ELIGIBLE_GROUPS,
+};
 
 function buildVolumeMounts(
   group: RegisteredGroup,
@@ -179,6 +198,13 @@ function buildVolumeMounts(
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
+      // Gated skills (personal car/weather) limited to specific groups; remove
+      // any stale copy from groups that aren't eligible.
+      const eligible = GATED_SKILLS[skillDir];
+      if (eligible && !eligible.has(group.folder)) {
+        fs.rmSync(dstDir, { recursive: true, force: true });
+        continue;
+      }
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
@@ -282,6 +308,9 @@ function buildContainerArgs(
   agentmailApiKey?: string,
   agentmailInboxId?: string,
   braveApiKey?: string,
+  teslaTrackerApiKey?: string,
+  teslaTrackerUrl?: string,
+  ambientWeatherUrl?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -321,6 +350,21 @@ function buildContainerArgs(
   // is what makes the agent-runner register the brave-search MCP server.
   if (braveApiKey) {
     args.push('-e', `BRAVE_API_KEY=${braveApiKey}`);
+  }
+
+  // TeslaMate tracker — base URL + command API key, used by the teslamate
+  // skill. Reachable directly over the tailnet (qcm-de) via MagicDNS; reads
+  // need no key. URL lives in .env so a host/port move is a single change.
+  if (teslaTrackerUrl) {
+    args.push('-e', `TESLA_TRACKER_URL=${teslaTrackerUrl}`);
+  }
+  if (teslaTrackerApiKey) {
+    args.push('-e', `TESLA_TRACKER_API_KEY=${teslaTrackerApiKey}`);
+  }
+
+  // Ambient Weather station — read-only base URL, no key. Same .env pattern.
+  if (ambientWeatherUrl) {
+    args.push('-e', `AMBIENT_WEATHER_URL=${ambientWeatherUrl}`);
   }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
@@ -395,6 +439,14 @@ export async function runContainerAgent(
     ? resolveAgentMailApiKey()
     : undefined;
   const braveApiKey = resolveBraveApiKey();
+  const teslaEligible = TESLA_ELIGIBLE_GROUPS.has(group.folder);
+  const teslaTrackerApiKey = teslaEligible
+    ? resolveTeslaTrackerApiKey()
+    : undefined;
+  const teslaTrackerUrl = teslaEligible ? resolveTeslaTrackerUrl() : undefined;
+  const ambientWeatherUrl = WEATHER_ELIGIBLE_GROUPS.has(group.folder)
+    ? resolveAmbientWeatherUrl()
+    : undefined;
   const containerArgs = buildContainerArgs(
     mounts,
     containerName,
@@ -403,6 +455,9 @@ export async function runContainerAgent(
     agentmailApiKey,
     agentmailInboxId,
     braveApiKey,
+    teslaTrackerApiKey,
+    teslaTrackerUrl,
+    ambientWeatherUrl,
   );
 
   logger.debug(
