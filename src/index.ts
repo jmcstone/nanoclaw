@@ -62,6 +62,7 @@ import {
 } from './mcp-tool-discovery.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { EMAIL_TARGET_FOLDER } from './inbox-routing.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { ChannelType } from './text-styles.js';
@@ -309,11 +310,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Fire-and-forget instant ack so the user knows we received their message.
   // Long agent runs (briefings, research) can otherwise look like silence —
   // typing indicators expire after ~5s on Telegram and don't exist on email.
-  channel
-    .sendMessage(chatJid, pickAckPhrase())
-    .catch((err) =>
-      logger.warn({ chatJid, err }, 'Failed to send input-ack message'),
-    );
+  // The inbox group opts out entirely: it does email triage where Jeff finds
+  // content-free acks ("On it 🎀") noisy, and its prompt already forbids them
+  // (groups/telegram_inbox/CLAUDE.md "push vs pull doctrine").
+  if (group.folder !== EMAIL_TARGET_FOLDER) {
+    channel
+      .sendMessage(chatJid, pickAckPhrase())
+      .catch((err) =>
+        logger.warn({ chatJid, err }, 'Failed to send input-ack message'),
+      );
+  }
 
   let hadError = false;
   let outputSentToUser = false;
