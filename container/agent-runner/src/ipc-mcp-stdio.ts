@@ -68,6 +68,52 @@ server.tool(
 );
 
 server.tool(
+  'send_attachment',
+  `Send a file (image, document, PDF, etc.) to the user or group via the current channel. Use this to deliver generated images, charts, reports, or any file you've created or downloaded. A text reply CANNOT carry a file — whenever you're asked to "send" an image or document, you MUST call this tool with the file's path.
+
+The file must already exist inside one of your writable workspace folders — this includes /workspace/group, /workspace/downloads, and any /workspace/extra/* mount (e.g. /workspace/extra/obsidian, /workspace/extra/shared, /workspace/extra/wiki). Images (.jpg/.jpeg/.png/.gif/.webp) are sent as inline photos; everything else is sent as a document. Optionally include a caption.`,
+  {
+    path: z
+      .string()
+      .describe(
+        'Absolute container path to the file, e.g. "/workspace/extra/obsidian/_attachments/chart.png". Must be inside a writable /workspace folder (/workspace/group, /workspace/downloads, or any /workspace/extra/* mount).',
+      ),
+    caption: z
+      .string()
+      .optional()
+      .describe('Optional caption text shown with the attachment.'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.path)) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `File not found: ${args.path}. Create or download the file first, then send it.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data: Record<string, string | undefined> = {
+      type: 'attachment',
+      chatJid,
+      filePath: args.path,
+      caption: args.caption || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: 'Attachment sent.' }],
+    };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

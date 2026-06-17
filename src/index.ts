@@ -921,6 +921,14 @@ async function main(): Promise<void> {
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
+    sendFile: (jid, hostPath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!channel.sendFile) {
+        throw new Error(`Channel ${channel.name} does not support attachments`);
+      }
+      return channel.sendFile(jid, hostPath, caption);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {

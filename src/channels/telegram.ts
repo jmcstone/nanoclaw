@@ -1,7 +1,7 @@
 import fs from 'fs';
 import https from 'https';
 import path from 'path';
-import { Api, Bot } from 'grammy';
+import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, DOWNLOADS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -58,6 +58,10 @@ async function downloadTelegramFile(
   const buffer = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(destPath, buffer);
 }
+
+// Extensions sent as inline Telegram photos; everything else goes as a
+// document (preserves the original file, no recompression).
+const PHOTO_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 
 // Bot pool for agent teams: send-only Api instances (no polling)
 const poolApis: Api[] = [];
@@ -614,6 +618,73 @@ export class TelegramChannel implements Channel {
       // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (network, rate-limit, auth) on send
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  /**
+   * Send a local file as a Telegram attachment. Images (by extension) go as
+   * inline photos; everything else as a document. An optional caption is
+   * rendered with the same Markdown→HTML conversion as text messages, with a
+   * plain-text fallback if HTML parsing fails. Telegram caps captions at 1024
+   * characters, so longer captions are truncated.
+   */
+  async sendFile(
+    jid: string,
+    hostPath: string,
+    caption?: string,
+  ): Promise<void> {
+    const bot = this.botForChat(jid);
+    if (!bot) {
+      logger.warn(
+        {
+          jid,
+          assigned: this.assignedBotUsername(jid),
+          available: Array.from(this.bots.keys()),
+        },
+        'No Telegram bot available for chat attachment',
+      );
+      return;
+    }
+
+    const numericId = jid.replace(/^tg:/, '');
+    const ext = path.extname(hostPath).toLowerCase();
+    const isPhoto = PHOTO_EXTENSIONS.has(ext);
+    const rawCaption = caption?.slice(0, 1024);
+
+    const send = (useHtml: boolean) => {
+      const file = new InputFile(hostPath);
+      const options = rawCaption
+        ? {
+            caption: useHtml
+              ? parseTextStyles(rawCaption, 'telegram')
+              : rawCaption,
+            ...(useHtml ? { parse_mode: 'HTML' as const } : {}),
+          }
+        : {};
+      return isPhoto
+        ? bot.api.sendPhoto(numericId, file, options)
+        : bot.api.sendDocument(numericId, file, options);
+    };
+
+    try {
+      await send(true);
+      logger.info({ jid, hostPath, isPhoto }, 'Telegram attachment sent');
+      // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (parse-mode, network, rate-limit); retry caption without HTML
+    } catch (err) {
+      logger.debug({ err }, 'HTML caption send failed, retrying as plain text');
+      try {
+        await send(false);
+        logger.info(
+          { jid, hostPath, isPhoto },
+          'Telegram attachment sent (plain caption)',
+        );
+        // eslint-disable-next-line no-catch-all/no-catch-all -- Telegram API throws diverse errors (network, rate-limit, auth, file size) on send
+      } catch (err2) {
+        logger.error(
+          { jid, hostPath, err: err2 },
+          'Failed to send Telegram attachment',
+        );
+      }
     }
   }
 

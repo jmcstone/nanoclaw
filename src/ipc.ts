@@ -10,7 +10,10 @@ import {
   TIMEZONE,
 } from './config.js';
 import { sendPoolMessage } from './channels/telegram.js';
-import { AvailableGroup } from './container-runner.js';
+import {
+  AvailableGroup,
+  resolveContainerAttachmentPath,
+} from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
@@ -18,6 +21,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendFile: (jid: string, hostPath: string, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -116,6 +120,53 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (
+                data.type === 'attachment' &&
+                data.chatJid &&
+                data.filePath
+              ) {
+                // Same authorization as messages: main can send anywhere, a
+                // group can only send to its own registered chat.
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  // The file lives in the SOURCE group's mounts; resolve its
+                  // container path against that group's actual writable mounts.
+                  const sourceGroupObj = Object.values(registeredGroups).find(
+                    (g) => g.folder === sourceGroup,
+                  );
+                  const hostPath = sourceGroupObj
+                    ? resolveContainerAttachmentPath(
+                        sourceGroupObj,
+                        isMain,
+                        data.filePath,
+                      )
+                    : null;
+                  if (!hostPath) {
+                    logger.warn(
+                      { filePath: data.filePath, sourceGroup },
+                      'IPC attachment path outside allowed mounts, blocked',
+                    );
+                  } else if (!fs.existsSync(hostPath)) {
+                    logger.warn(
+                      { hostPath, sourceGroup },
+                      'IPC attachment file not found on host',
+                    );
+                  } else {
+                    await deps.sendFile(data.chatJid, hostPath, data.caption);
+                    logger.info(
+                      { chatJid: data.chatJid, sourceGroup, hostPath },
+                      'IPC attachment sent',
+                    );
+                  }
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC attachment attempt blocked',
                   );
                 }
               }

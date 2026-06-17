@@ -300,6 +300,69 @@ function buildVolumeMounts(
   return mounts;
 }
 
+/**
+ * Translate an agent-supplied container path (e.g.
+ * "/workspace/extra/obsidian/chart.png") to its host path, restricted to the
+ * group's WRITABLE mounts — the locations an agent legitimately produces files
+ * in. Returns null if the path falls outside those mounts, which blocks `../`
+ * traversal and reads of read-only or secret mounts.
+ *
+ * Mirrors the writable mounts created in buildVolumeMounts(), including
+ * per-group additionalMounts, so it stays correct as a group's mount config
+ * changes (single source of truth for what an agent can attach).
+ */
+export function resolveContainerAttachmentPath(
+  group: RegisteredGroup,
+  isMain: boolean,
+  containerPath: string,
+): string | null {
+  const writable: Array<{ containerPath: string; hostPath: string }> = [
+    {
+      containerPath: '/workspace/group',
+      hostPath: resolveGroupFolderPath(group.folder),
+    },
+    {
+      containerPath: '/workspace/downloads',
+      hostPath: path.join(DOWNLOADS_DIR, group.folder),
+    },
+  ];
+  if (fs.existsSync(OBSIDIAN_SHARED_DIR)) {
+    writable.push({
+      containerPath: '/workspace/extra/shared',
+      hostPath: OBSIDIAN_SHARED_DIR,
+    });
+  }
+  if (group.containerConfig?.additionalMounts) {
+    const validated = validateAdditionalMounts(
+      group.containerConfig.additionalMounts,
+      group.name,
+      isMain,
+    );
+    for (const m of validated) {
+      if (!m.readonly) {
+        writable.push({ containerPath: m.containerPath, hostPath: m.hostPath });
+      }
+    }
+  }
+
+  const normalized = path.posix.normalize(containerPath);
+  for (const mount of writable) {
+    if (
+      normalized !== mount.containerPath &&
+      !normalized.startsWith(`${mount.containerPath}/`)
+    ) {
+      continue;
+    }
+    const rel = path.posix.relative(mount.containerPath, normalized);
+    const hostPath = path.resolve(mount.hostPath, rel);
+    // Defense in depth: the resolved path must stay within the mount root.
+    const escape = path.relative(mount.hostPath, hostPath);
+    if (escape.startsWith('..') || path.isAbsolute(escape)) return null;
+    return hostPath;
+  }
+  return null;
+}
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
