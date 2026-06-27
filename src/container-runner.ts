@@ -11,10 +11,12 @@ import { OneCLI } from '@onecli-sh/sdk';
 
 import {
   CONTAINER_CPU_LIMIT,
+  CONTAINER_DNS,
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
   CONTAINER_INSTALL_LABEL,
   CONTAINER_MEMORY_LIMIT,
+  CONTAINER_SKILL_ENV,
   DATA_DIR,
   GROUPS_DIR,
   ONECLI_API_KEY,
@@ -448,17 +450,15 @@ async function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   // Skill-facing service env (tailnet REST APIs used by container skills, e.g.
-  // teslamate / ambient-weather). Forwarded from the orchestrator env when set;
-  // the skills read these as $VARS in their curl calls. Tailnet host resolution
-  // needs CONTAINER_DNS (below).
-  for (const key of ['TESLA_TRACKER_URL', 'TESLA_TRACKER_API_KEY', 'AMBIENT_WEATHER_URL']) {
-    const value = process.env[key];
-    if (value) args.push('-e', `${key}=${value}`);
+  // teslamate / ambient-weather). Sourced from .env via config — NOT process.env,
+  // which v2 deliberately keeps secret-free; the skills read these as $VARS.
+  for (const [key, value] of Object.entries(CONTAINER_SKILL_ENV)) {
+    args.push('-e', `${key}=${value}`);
   }
 
   // Tailnet DNS resolver (MagicDNS) so containers can resolve *.ts.net service
   // hosts (teslamate / ambient-weather). Opt-in via CONTAINER_DNS.
-  if (process.env.CONTAINER_DNS) args.push('--dns', process.env.CONTAINER_DNS);
+  if (CONTAINER_DNS) args.push('--dns', CONTAINER_DNS);
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {

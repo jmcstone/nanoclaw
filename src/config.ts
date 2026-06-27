@@ -6,7 +6,17 @@ import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from 
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER', 'ONECLI_URL', 'ONECLI_API_KEY', 'TZ']);
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'ONECLI_URL',
+  'ONECLI_API_KEY',
+  'TZ',
+  'TESLA_TRACKER_URL',
+  'TESLA_TRACKER_API_KEY',
+  'AMBIENT_WEATHER_URL',
+  'CONTAINER_DNS',
+]);
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
 export const ASSISTANT_HAS_OWN_NUMBER =
@@ -35,6 +45,18 @@ export const CONTAINER_TIMEOUT = parseInt(process.env.CONTAINER_TIMEOUT || '1800
 export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(process.env.CONTAINER_MAX_OUTPUT_SIZE || '10485760', 10); // 10MB default
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
 export const ONECLI_API_KEY = process.env.ONECLI_API_KEY || envConfig.ONECLI_API_KEY;
+
+// Tailnet DNS resolver (MagicDNS) for agent containers; opt-in via CONTAINER_DNS.
+export const CONTAINER_DNS = process.env.CONTAINER_DNS || envConfig.CONTAINER_DNS;
+// Skill-facing service env forwarded into agent containers (tailnet REST APIs
+// used by container skills, e.g. teslamate / ambient-weather). Read from .env
+// via config — NOT process.env, which v2 deliberately keeps secret-free. Only
+// keys with a value are included.
+export const CONTAINER_SKILL_ENV: Record<string, string> = {};
+for (const k of ['TESLA_TRACKER_URL', 'TESLA_TRACKER_API_KEY', 'AMBIENT_WEATHER_URL']) {
+  const v = process.env[k] || envConfig[k];
+  if (v) CONTAINER_SKILL_ENV[k] = v;
+}
 export const MAX_MESSAGES_PER_PROMPT = Math.max(1, parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10);
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5);
