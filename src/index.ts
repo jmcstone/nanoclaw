@@ -15,6 +15,7 @@ import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
+import { startMailroomSubscriber, stopMailroomSubscriber } from './mailroom-subscriber.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
@@ -168,6 +169,10 @@ async function main(): Promise<void> {
   startHostSweep();
   log.info('Host sweep started');
 
+  // 6b. Start the mailroom subscriber (host-side ingest of the external
+  // mailroom service's classified-email events).
+  startMailroomSubscriber();
+
   // 7. Start the `ncl` CLI socket server (data/ncl.sock).
   await startCliServer();
 
@@ -186,6 +191,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
+  stopMailroomSubscriber();
   await stopCliServer();
   try {
     await teardownChannelAdapters();
