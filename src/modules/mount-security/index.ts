@@ -260,16 +260,13 @@ export function validateMount(mount: AdditionalMount): MountValidationResult {
     };
   }
 
-  // Check against blocked patterns
-  const blockedMatch = matchesBlockedPattern(realPath, allowlist.blockedPatterns);
-  if (blockedMatch !== null) {
-    return {
-      allowed: false,
-      reason: `Path matches blocked pattern "${blockedMatch}": "${realPath}"`,
-    };
-  }
-
-  // Check if under an allowed root
+  // Find the allowed root that covers this path FIRST. Blocked patterns are a
+  // safety net against agents being tricked into mounting sensitive paths via
+  // container_config — but if the host operator explicitly listed THIS EXACT
+  // path in allowedRoots, they've consciously opted into a sensitive location
+  // (e.g. `~/.ssh/gitlab` for git push from a dev container), so the explicit
+  // listing wins over the default block. A broader parent allowedRoot does NOT
+  // grant the bypass — only an exact match.
   const allowedRoot = findAllowedRoot(realPath, allowlist.allowedRoots);
   if (allowedRoot === null) {
     return {
@@ -278,6 +275,17 @@ export function validateMount(mount: AdditionalMount): MountValidationResult {
         .map((r) => expandPath(r.path))
         .join(', ')}`,
     };
+  }
+
+  const isExactAllowedRootMatch = getRealPath(expandPath(allowedRoot.path)) === realPath;
+  if (!isExactAllowedRootMatch) {
+    const blockedMatch = matchesBlockedPattern(realPath, allowlist.blockedPatterns);
+    if (blockedMatch !== null) {
+      return {
+        allowed: false,
+        reason: `Path matches blocked pattern "${blockedMatch}": "${realPath}"`,
+      };
+    }
   }
 
   // Determine effective readonly status.

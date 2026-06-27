@@ -447,6 +447,19 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Skill-facing service env (tailnet REST APIs used by container skills, e.g.
+  // teslamate / ambient-weather). Forwarded from the orchestrator env when set;
+  // the skills read these as $VARS in their curl calls. Tailnet host resolution
+  // needs CONTAINER_DNS (below).
+  for (const key of ['TESLA_TRACKER_URL', 'TESLA_TRACKER_API_KEY', 'AMBIENT_WEATHER_URL']) {
+    const value = process.env[key];
+    if (value) args.push('-e', `${key}=${value}`);
+  }
+
+  // Tailnet DNS resolver (MagicDNS) so containers can resolve *.ts.net service
+  // hosts (teslamate / ambient-weather). Opt-in via CONTAINER_DNS.
+  if (process.env.CONTAINER_DNS) args.push('--dns', process.env.CONTAINER_DNS);
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
