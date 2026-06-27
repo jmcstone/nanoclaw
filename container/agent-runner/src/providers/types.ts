@@ -103,11 +103,11 @@ export interface QueryInput {
   };
 }
 
-export interface McpServerConfig {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-}
+// A configured MCP server: either a stdio server (command/args/env) or a
+// remote streamable-HTTP / SSE server (url). Passed verbatim to the Agent SDK.
+export type McpServerConfig =
+  | { type?: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; instructions?: string }
+  | { type: 'http' | 'sse'; url: string; headers?: Record<string, string>; instructions?: string };
 
 export interface AgentQuery {
   /** Push a follow-up message into the active query. */
