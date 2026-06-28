@@ -52,7 +52,13 @@ import path from 'node:path';
 import os from 'node:os';
 import Database from 'better-sqlite3';
 
-import { openRecallDb, ensureRecallSchema } from '../src/recall/schema.js';
+import {
+  openRecallDb,
+  ensureRecallSchema,
+  SQL_FTS_DELETE,
+  SQL_FTS_INSERT,
+  SQL_STATE_UPSERT,
+} from '../src/recall/schema.js';
 import { recallDbPathForGroup } from '../src/madison-extensions.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -151,19 +157,10 @@ function main(): void {
       continue;
     }
 
-    // Prepared statements for this group's DB.
-    const deleteFts = recallDb.prepare<[string]>(
-      'DELETE FROM session_fts WHERE msg_id = ?',
-    );
-    const insertFts = recallDb.prepare<
-      [string, string, string, string, string, string]
-    >(
-      'INSERT INTO session_fts (msg_id, session_id, agent_group, ts, role, content) VALUES (?, ?, ?, ?, ?, ?)',
-    );
-    const upsertState = recallDb.prepare<[string, string]>(
-      'INSERT INTO session_fts_state (source, last_indexed_ts) VALUES (?, ?) ' +
-        'ON CONFLICT(source) DO UPDATE SET last_indexed_ts = excluded.last_indexed_ts',
-    );
+    // Prepared statements for this group's DB — SQL from schema.ts (single source of truth).
+    const deleteFts = recallDb.prepare<[string]>(SQL_FTS_DELETE);
+    const insertFts = recallDb.prepare<[string, string, string, string, string, string]>(SQL_FTS_INSERT);
+    const upsertState = recallDb.prepare<[string, string]>(SQL_STATE_UPSERT);
 
     let inserted = 0;
     let maxTs = '';

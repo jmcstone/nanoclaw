@@ -24,18 +24,18 @@ surface is ~7 files, all surgical.
 | `src/session-indexer.ts` | Host periodic session indexer (~60 s tick); writes per-group recall DBs; rowid-cursor watermark; delete-before-insert idempotency. |
 | `src/litellm-host-client.ts` | Host-side LiteLLM client (`:4000`). Retained for Phase-2 distiller (D10′); **not on the recall path**. |
 | `scripts/backfill-session-fts.ts` | One-shot backfill of v1 archive (`store/messages.db`) into per-group recall DBs. |
-| `container/agent-runner/src/recall-mcp-stdio.ts` | In-container Bun stdio MCP (Option B recall). Opens per-group DB RO, runs FTS5 search, summarizes via `172.31.0.1:4000` (Haiku alias). |
+| `container/agent-runner/src/recall-mcp-stdio.ts` | In-container Bun stdio MCP (Option B recall). Opens per-group DB at `/recall/recall.db` (via /tmp copy — FTS5 automerge workaround), runs FTS5 search, summarizes via Anthropic API / OneCLI HTTPS_PROXY (`claude-haiku-4-5`). |
 
 ## B. Upstream-file edits (re-apply these; everything else is in our files)
 | Upstream file | Edit (intent) | Re-apply |
 |---------------|---------------|----------|
 | `src/channels/telegram.ts` | **Multi-instance bots.** Extract `buildTelegramAdapter(token, instance?)`; register default `TELEGRAM_BOT_TOKEN` as instance `telegram` + loop over `TELEGRAM_BOT_TOKEN__<INSTANCE>` registering each (skip reserved `telegram`). Set `instance` on the wrapped adapter. | Re-apply the factory extraction + the registration loop. |
 | `src/modules/mount-security/index.ts` | **Exact-root bypass.** Reorder `validateMount`: find allowed root FIRST, then run blocked-pattern check ONLY if not an exact realpath match (so a verbatim allowlist entry like `~/.ssh/gitlab` overrides the `.ssh` default-block). | Re-apply the reorder (see the comment block + the test). |
-| `src/container-runner.ts` | Forward `CONTAINER_SKILL_ENV` as `-e` + add `--dns CONTAINER_DNS`; import both from `./madison-extensions.js` (NOT config). Also: mount per-group recall DB read-only at `/workspace/extra/recall/recall.db`; `existsSync`-gated (groups without a DB get no mount) (`3f0b3cb`). | Re-add the env loop + `--dns` line + the `existsSync`-gated recall mount in `buildVolumeMounts()`, + the madison-extensions import. |
+| `src/container-runner.ts` | Forward `CONTAINER_SKILL_ENV` as `-e` + add `--dns CONTAINER_DNS`; import both from `./madison-extensions.js` (NOT config). Also: mount per-group recall DB read-only at `/recall/recall.db`; `existsSync`-gated (groups without a DB get no mount) (`3f0b3cb`). | Re-add the env loop + `--dns` line + the `existsSync`-gated recall mount in `buildMounts()`, + the madison-extensions import. |
 | `src/env.ts` | Add `readEnvKeysWithPrefix` (+ shared `parseAllEnvEntries` helper). | Re-add the two functions. |
 | `src/index.ts` | Start/stop the AgentMail subscriber next to the mailroom one (3 lines, fire-and-forget). Also: start/stop the host session indexer (recall, `57a6762`). | Re-add import + `void startAgentMailSubscriber()` + `stopAgentMailSubscriber()` + `void startSessionIndexer()` + `stopSessionIndexer()`. |
 | `container/agent-runner/src/providers/claude.ts` | Spread `MADISON_DISALLOWED_TOOLS` into `SDK_DISALLOWED_TOOLS` (1 import + 1 spread line). | Re-add the import + the `...MADISON_DISALLOWED_TOOLS` entry. |
-| `container/agent-runner/src/index.ts` | Sentinel-gated recall stdio MCP registration: when `/workspace/extra/recall/recall.db` mount is present, register `recall-mcp-stdio.ts` as a stdio MCP tool (`97ea70f`). | Re-add the `existsSync('/workspace/extra/recall/recall.db')` guard + stdio MCP registration block (see commit `97ea70f` for exact lines). |
+| `container/agent-runner/src/index.ts` | Sentinel-gated recall stdio MCP registration: when `/recall/recall.db` mount is present, register `recall-mcp-stdio.ts` as a stdio MCP tool (`97ea70f`). | Re-add the `existsSync('/recall/recall.db')` guard + stdio MCP registration block (see commit `97ea70f` for exact lines). |
 
 `src/config.ts` is intentionally **back to ~upstream** (additions moved to `madison-extensions.ts`).
 

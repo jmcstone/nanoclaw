@@ -91,7 +91,10 @@ async function main(): Promise<void> {
 
   // Recall MCP: opt-in when the per-group recall DB is bind-mounted.
   // Absent groups (no recall DB mounted) simply skip registration — no error.
-  if (fs.existsSync('/workspace/extra/recall/recall.db')) {
+  // The DB is mounted at /recall/recall.db (outside /workspace/extra/) so the
+  // additional-directory scanner above does not expose the SQLite binary to
+  // Claude's workspace tools.
+  if (fs.existsSync('/recall/recall.db')) {
     mcpServers['recall'] = {
       command: 'bun',
       args: ['run', path.join(__dirname, 'recall-mcp-stdio.ts')],
@@ -99,7 +102,7 @@ async function main(): Promise<void> {
         Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
       ),
     };
-    log('Recall MCP registered (recall DB present at /workspace/extra/recall/recall.db)');
+    log('Recall MCP registered (recall DB present at /recall/recall.db)');
   }
 
   const provider = createProvider(providerName, {

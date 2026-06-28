@@ -6,9 +6,10 @@
  * Max-plan subscription through the OneCLI credential proxy.
  *
  * Isolation model: each container receives ONLY its own group's recall DB,
- * bind-mounted read-only at /workspace/extra/recall/recall.db by
- * container-runner.ts. No tokens, no scope parameter — isolation is by
- * construction (the container physically cannot access another group's file).
+ * bind-mounted read-only at /recall/recall.db by container-runner.ts
+ * (outside /workspace/extra/ — see RECALL_DB_PATH comment below).
+ * No tokens, no scope parameter — isolation is by construction (the container
+ * physically cannot access another group's file).
  *
  * Reachability: the OneCLI proxy injects HTTPS_PROXY + CA certs into the
  * container environment so any HTTPS call to api.anthropic.com gets the
@@ -23,7 +24,14 @@ import { z } from 'zod';
 import { Database } from 'bun:sqlite';
 import fs from 'fs';
 
-const RECALL_DB_PATH = '/workspace/extra/recall/recall.db';
+/**
+ * Path where container-runner.ts bind-mounts the per-group recall DB (read-only).
+ * Lives at /recall/ rather than /workspace/extra/recall/ so the agent-runner's
+ * /workspace/extra/* additional-directory scanner does not pick up the SQLite
+ * binary and add it to Claude's workspace — recall is accessed only via this
+ * MCP tool, not as a raw file.
+ */
+const RECALL_DB_PATH = '/recall/recall.db';
 
 /**
  * Summarize via Claude Haiku on the Max-plan subscription.
@@ -33,6 +41,19 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const SUMMARIZE_MODEL = 'claude-haiku-4-5';
 
 const DEFAULT_LIMIT = 12;
+/** Max tokens for the Haiku summary response. */
+const SUMMARY_MAX_TOKENS = 400;
+/**
+ * Max tokens per excerpt produced by FTS5 snippet().
+ * This is the 6th argument to snippet(table, col_idx, start, end, ellipsis, tokens).
+ */
+const SNIPPET_TOKEN_COUNT = 24;
+/**
+ * Fetch timeout for the Anthropic summarization call.
+ * Prevents the tool call from hanging indefinitely when the OneCLI proxy is
+ * unreachable — the caller will gracefully degrade to raw excerpts instead.
+ */
+const SUMMARIZE_TIMEOUT_MS = 20_000;
 
 /**
  * FTS5 query: retrieve top-k excerpts by BM25 relevance rank.
@@ -43,7 +64,7 @@ const DEFAULT_LIMIT = 12;
  */
 const RECALL_SQL = [
   'SELECT msg_id, ts, role,',
-  "  snippet(session_fts, 5, '«', '»', '…', 24) AS snip,",
+  `  snippet(session_fts, 5, '«', '»', '…', ${SNIPPET_TOKEN_COUNT}) AS snip,`,
   '  bm25(session_fts) AS rank',
   'FROM session_fts',
   'WHERE session_fts MATCH ?',
@@ -58,29 +79,40 @@ function log(msg: string): void {
 }
 
 async function summarizeViaAnthropic(query: string, excerpts: string): Promise<string> {
-  const res = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      // No authorization header — the OneCLI HTTPS_PROXY injects the
-      // Max-plan credential at the proxy layer.
-    },
-    body: JSON.stringify({
-      model: SUMMARIZE_MODEL,
-      max_tokens: 400,
-      system:
-        'You are a recall assistant. Summarize the following past-conversation excerpts ' +
-        'in ≤120 words, directly answering the user\'s query. Cite relevant dates from ' +
-        'the excerpts.',
-      messages: [
-        {
-          role: 'user',
-          content: `Query: "${query}"\n\nExcerpts:\n${excerpts}`,
-        },
-      ],
-    }),
-  });
+  // AbortController enforces SUMMARIZE_TIMEOUT_MS: if the OneCLI proxy is
+  // unreachable the tool call degrades to raw excerpts rather than hanging.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SUMMARIZE_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        // No authorization header — the OneCLI HTTPS_PROXY injects the
+        // Max-plan credential at the proxy layer.
+      },
+      body: JSON.stringify({
+        model: SUMMARIZE_MODEL,
+        max_tokens: SUMMARY_MAX_TOKENS,
+        system:
+          'You are a recall assistant. Summarize the following past-conversation excerpts ' +
+          "in ≤120 words, directly answering the user's query. Cite relevant dates from " +
+          'the excerpts.',
+        messages: [
+          {
+            role: 'user',
+            content: `Query: "${query}"\n\nExcerpts:\n${excerpts}`,
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!res.ok) {
     const text = await res.text();
@@ -242,4 +274,6 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-log(`Recall MCP server ready (db: ${RECALL_DB_PATH}, summarizer: ${SUMMARIZE_MODEL} via OneCLI proxy)`);
+log(
+  `Recall MCP server ready (db: ${RECALL_DB_PATH}, summarizer: ${SUMMARIZE_MODEL} via OneCLI proxy, timeout: ${SUMMARIZE_TIMEOUT_MS}ms)`,
+);

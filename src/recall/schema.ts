@@ -10,12 +10,31 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+/**
+ * Busy-timeout for the recall DB writer (indexer / backfill).
+ * Higher than the source-DB timeout because the writer holds write locks
+ * and should retry longer before giving up.
+ */
+export const RECALL_DB_BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * Prepared-statement SQL strings for the FTS5 write path.
+ * Exported from schema.ts (the single source of truth for the FTS5 schema)
+ * so the indexer and backfill always stay in sync with the column order.
+ */
+export const SQL_FTS_DELETE = 'DELETE FROM session_fts WHERE msg_id = ?';
+export const SQL_FTS_INSERT =
+  'INSERT INTO session_fts (msg_id, session_id, agent_group, ts, role, content) VALUES (?, ?, ?, ?, ?, ?)';
+export const SQL_STATE_UPSERT =
+  'INSERT INTO session_fts_state (source, last_indexed_ts) VALUES (?, ?)' +
+  ' ON CONFLICT(source) DO UPDATE SET last_indexed_ts = excluded.last_indexed_ts';
+
 /** Open (or create) the recall DB at the given path. Sets WAL and busy_timeout. */
 export function openRecallDb(dbPath: string): Database.Database {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
+  db.pragma(`busy_timeout = ${RECALL_DB_BUSY_TIMEOUT_MS}`);
   return db;
 }
 

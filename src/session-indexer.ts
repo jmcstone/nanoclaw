@@ -27,7 +27,13 @@ import fs from 'fs';
 import path from 'path';
 
 import { recallDbPathForGroup } from './madison-extensions.js';
-import { openRecallDb, ensureRecallSchema } from './recall/schema.js';
+import {
+  openRecallDb,
+  ensureRecallSchema,
+  SQL_FTS_DELETE,
+  SQL_FTS_INSERT,
+  SQL_STATE_UPSERT,
+} from './recall/schema.js';
 import { sessionsBaseDir, inboundDbPath, outboundDbPath } from './session-manager.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { log } from './log.js';
@@ -35,6 +41,12 @@ import { log } from './log.js';
 const INTERVAL_MS = 30_000;
 /** Maximum rows fetched per source per batch iteration. */
 const BATCH_SIZE = 500;
+/**
+ * Busy-timeout for opening source session DBs read-only.
+ * Shorter than RECALL_DB_BUSY_TIMEOUT_MS — source DBs are read-only here and
+ * we prefer a fast bail-and-skip over accumulating waiting threads.
+ */
+const SOURCE_DB_BUSY_TIMEOUT_MS = 3000;
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -189,8 +201,11 @@ function indexSource(recallDb: Database.Database, opts: IndexSourceOpts): void {
   let sourceDb: Database.Database | null = null;
   try {
     sourceDb = new Database(dbPath, { readonly: true });
-    sourceDb.pragma('busy_timeout = 3000');
+    sourceDb.pragma(`busy_timeout = ${SOURCE_DB_BUSY_TIMEOUT_MS}`);
   } catch (err) {
+    // Guard: if new Database() succeeded but pragma() threw, sourceDb is
+    // non-null — close it before returning to avoid a handle leak.
+    sourceDb?.close();
     log.debug('Session indexer: could not open session DB read-only', { dbPath, err });
     return;
   }
@@ -207,14 +222,9 @@ function indexSource(recallDb: Database.Database, opts: IndexSourceOpts): void {
       `SELECT rowid, id, timestamp, content FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ${BATCH_SIZE}`,
     );
 
-    const deleteFromFts = recallDb.prepare('DELETE FROM session_fts WHERE msg_id = ?');
-    const insertIntoFts = recallDb.prepare(
-      'INSERT INTO session_fts (msg_id, session_id, agent_group, ts, role, content) VALUES (?, ?, ?, ?, ?, ?)',
-    );
-    const upsertWatermark = recallDb.prepare(
-      `INSERT INTO session_fts_state (source, last_indexed_ts) VALUES (?, ?)
-       ON CONFLICT(source) DO UPDATE SET last_indexed_ts = excluded.last_indexed_ts`,
-    );
+    const deleteFromFts = recallDb.prepare(SQL_FTS_DELETE);
+    const insertIntoFts = recallDb.prepare(SQL_FTS_INSERT);
+    const upsertWatermark = recallDb.prepare(SQL_STATE_UPSERT);
 
     /**
      * Process one batch atomically: DELETE+INSERT each row and advance the

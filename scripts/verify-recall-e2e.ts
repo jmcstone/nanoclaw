@@ -14,7 +14,6 @@
 import Database from 'better-sqlite3';
 import { execFileSync, spawn } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
@@ -22,7 +21,9 @@ import { fileURLToPath } from 'url';
 // ─── Paths ─────────────────────────────────────────────────────────────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const RECALL_DB_DIR = path.join(os.homedir(), 'containers/data/NanoClaw/v2/recall');
+// Import canonical RECALL_DB_DIR from madison-extensions so .env overrides
+// are respected (matches what the production indexer + container-runner use).
+const { RECALL_DB_DIR } = await import('../src/madison-extensions.js');
 const INBOX_DB = path.join(RECALL_DB_DIR, 'telegram_inbox.db');
 const AGENT_RUNNER_SRC = path.join(PROJECT_ROOT, 'container/agent-runner/src');
 const V2_DB = path.join(PROJECT_ROOT, 'data/v2.db');
@@ -33,20 +34,10 @@ const { createHash } = await import('crypto');
 const INSTALL_SLUG = createHash('sha1').update(PROJECT_ROOT).digest('hex').slice(0, 8);
 const CONTAINER_IMAGE = `nanoclaw-agent-v2-${INSTALL_SLUG}:latest`;
 
-// LiteLLM virtual key for telegram_inbox — read from v1 .env so it isn't
-// hardcoded in the script. Used to replicate what container-runner.ts injects.
-const V1_ENV_PATH = path.join(os.homedir(), 'containers/nanoclaw/.env');
-function readEnvKey(file: string, key: string): string {
-  try {
-    const content = fs.readFileSync(file, 'utf8');
-    for (const line of content.split('\n')) {
-      const m = line.match(/^([A-Z0-9_]+)=(.+)$/);
-      if (m && m[1] === key) return m[2].replace(/^["']|["']$/g, '');
-    }
-  } catch {}
-  return '';
-}
-const LITELLM_API_KEY = readEnvKey(V1_ENV_PATH, 'LITELLM_API_KEY_TELEGRAM_INBOX');
+// Note: summarization auth uses HTTPS_PROXY injected by OneCLI at container spawn
+// time. This verify script does a direct docker run without OneCLI, so it cannot
+// inject HTTPS_PROXY and Part C validates the FTS5 data path + graceful degradation
+// only — not the end-to-end Anthropic summarization path.
 
 // ─── Outcome tracking ──────────────────────────────────────────────────────
 let failCount = 0;
@@ -215,18 +206,21 @@ async function partC(): Promise<void> {
   }
 
   // Replicate the exact mounts from container-runner.ts (buildMounts):
-  //   recallDbPath → /workspace/extra/recall/recall.db  (readonly)
+  //   recallDbPath → /recall/recall.db  (readonly, NOT /workspace/extra/recall/)
   //   agent-runner/src  → /app/src  (readonly)
   // Override entrypoint to bash (same pattern as production) and run the
   // recall stdio server directly instead of index.ts.
+  //
+  // Note: HTTPS_PROXY (OneCLI credential) is NOT injected here — this script
+  // does a direct docker run without OneCLI. Summarization will degrade
+  // gracefully; Part C tests FTS5 data path + citation building, not the
+  // Anthropic summarization path end-to-end.
   const dockerArgs = [
     'run', '--rm', '-i',
     '--dns', '100.100.100.100',
     '--entrypoint', 'bash',
-    '-v', `${INBOX_DB}:/workspace/extra/recall/recall.db:ro`,
+    '-v', `${INBOX_DB}:/recall/recall.db:ro`,
     '-v', `${AGENT_RUNNER_SRC}:/app/src:ro`,
-    ...(LITELLM_API_KEY ? ['-e', `LITELLM_API_KEY=${LITELLM_API_KEY}`] : []),
-    '-e', 'LITELLM_BASE_URL=http://172.31.0.1:4000',
     CONTAINER_IMAGE,
     '-c', 'exec bun run /app/src/recall-mcp-stdio.ts',
   ];
@@ -306,8 +300,9 @@ async function partC(): Promise<void> {
   if (hasSummary && hasCitations) {
     pass(`tools/call: summary present (${summary.length} chars), ${citations.length} citation(s) ≥ 1 — data path PASS`);
 
-    const litellmWorked = !summary.startsWith('[Summarization unavailable');
-    info(`LiteLLM status: ${litellmWorked ? 'WORKING (real AI summary)' : 'DEGRADED (model error, raw excerpts returned)'}`);
+    // Summarization via OneCLI proxy is not exercised by this script (no HTTPS_PROXY).
+    const summarizationWorked = !summary.startsWith('[Summarization unavailable');
+    info(`Anthropic summarization: ${summarizationWorked ? 'WORKING (live Haiku summary)' : 'DEGRADED — OneCLI proxy not available in test env (expected)'}`);
 
     info(`\n  Summary (first 400 chars):`);
     info(`  ${summary.slice(0, 400)}${summary.length > 400 ? '...' : ''}`);
@@ -330,7 +325,7 @@ function partD(): void {
 
   info('Design: container-runner.ts mounts one file per spawn:');
   info('  hostPath  : <RECALL_DB_DIR>/<folder>.db   (per-group, chosen at spawn time)');
-  info('  container : /workspace/extra/recall/recall.db  (fixed path, read-only)');
+  info('  container : /recall/recall.db  (fixed path, read-only, outside /workspace/extra/)');
   info('  No directory mount of RECALL_DB_DIR exists — containers cannot list or');
   info('  open sibling group DBs. recall-mcp-stdio.ts only reads the fixed path.');
   info('  No agent_group parameter in the recall_sessions tool API.');
@@ -338,13 +333,14 @@ function partD(): void {
   // Structural assertion: verify the mount pattern in container-runner.ts
   const runnerSrc = fs.readFileSync(path.join(PROJECT_ROOT, 'src/container-runner.ts'), 'utf8');
   const mountsRecallFile =
-    runnerSrc.includes("containerPath: '/workspace/extra/recall/recall.db'") &&
+    runnerSrc.includes("containerPath: '/recall/recall.db'") &&
     runnerSrc.includes('recallDbPathForGroup(agentGroup.folder)');
-  const noRecallDirMount = !runnerSrc.match(/containerPath:\s*['"]\/workspace\/extra\/recall['"]/);
+  // Confirm the directory itself (/recall) is not mounted — only the file.
+  const noRecallDirMount = !runnerSrc.match(/containerPath:\s*['"]\/recall['"]/);
 
   if (mountsRecallFile && noRecallDirMount) {
     pass(
-      'container-runner.ts mounts per-group DB file (not the directory) at the fixed container path — ' +
+      'container-runner.ts mounts per-group DB file (not the directory) at /recall/recall.db — ' +
         'isolation by construction confirmed',
     );
   } else {
@@ -357,7 +353,7 @@ function partD(): void {
     path.join(PROJECT_ROOT, 'container/agent-runner/src/recall-mcp-stdio.ts'),
     'utf8',
   );
-  const usesConstantPath = mcpSrc.includes("const RECALL_DB_PATH = '/workspace/extra/recall/recall.db'");
+  const usesConstantPath = mcpSrc.includes("const RECALL_DB_PATH = '/recall/recall.db'");
   const noAgentGroupParam = !mcpSrc.includes('agent_group') || !mcpSrc.match(/agent_group.*param|param.*agent_group/i);
 
   if (usesConstantPath && noAgentGroupParam) {
@@ -376,7 +372,7 @@ log('# Recall end-to-end verification\n');
 log(`PROJECT_ROOT   : ${PROJECT_ROOT}`);
 log(`RECALL_DB_DIR  : ${RECALL_DB_DIR}`);
 log(`CONTAINER_IMAGE: ${CONTAINER_IMAGE}`);
-log(`LITELLM_KEY    : ${LITELLM_API_KEY ? LITELLM_API_KEY.slice(0, 8) + '...' : '(not found)'}`);
+log(`SUMMARIZE AUTH : OneCLI HTTPS_PROXY (not injected in this test — summarization will degrade gracefully)`);
 
 await partA().catch((err: unknown) => {
   fail(`Part A threw: ${err instanceof Error ? err.message : String(err)}`);

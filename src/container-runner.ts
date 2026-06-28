@@ -354,9 +354,13 @@ export function buildMounts(
   // it but the agent cannot modify it. Only mounted when the DB exists (new
   // groups start with no recall history). Option B: each group gets its own
   // DB mounted at the fixed container path the recall stdio MCP expects.
+  //
+  // Mount target is /recall/recall.db (NOT /workspace/extra/recall/recall.db)
+  // to prevent the agent-runner's /workspace/extra/* additional-directory
+  // scanner from picking up the SQLite binary as a Claude workspace directory.
   const recallDbPath = recallDbPathForGroup(agentGroup.folder);
   if (fs.existsSync(recallDbPath)) {
-    mounts.push({ hostPath: recallDbPath, containerPath: '/workspace/extra/recall/recall.db', readonly: true });
+    mounts.push({ hostPath: recallDbPath, containerPath: '/recall/recall.db', readonly: true });
   }
 
   // Additional mounts from container config

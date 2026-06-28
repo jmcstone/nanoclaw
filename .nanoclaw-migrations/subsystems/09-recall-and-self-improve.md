@@ -35,17 +35,20 @@ Key properties of Option B:
 - **No new host port.** `recall-mcp-stdio.ts` runs inside the agent container as a stdio MCP process.
   No `docker publish`, no iptables rule, no sidecar container.
 - **Isolation by construction (D9′).** The recall DB is sharded one-file-per-group. Each container
-  receives only its own group's `<folder>.db` bind-mounted **read-only** at
-  `/workspace/extra/recall/recall.db`. A container physically cannot read another group's data.
+  receives only its own group's `<folder>.db` bind-mounted **read-only** at `/recall/recall.db`
+  (outside `/workspace/extra/` to avoid the agent-runner's additional-directory scanner exposing the
+  raw SQLite binary as a workspace directory). A container physically cannot read another group's data.
   The forgeable-token concern from D9 is dissolved.
-- **Summarize in-container.** The MCP handler calls LiteLLM at `172.31.0.1:4000` (a docker-published
-  port — works). The host-side LiteLLM client (`src/litellm-host-client.ts`, D10′) is retained for
-  the Phase-2 distiller but is **not on the recall path**.
+- **Summarize in-container via Anthropic API.** The MCP handler calls
+  `https://api.anthropic.com/v1/messages` with `claude-haiku-4-5`. No `x-api-key` header is set —
+  the OneCLI HTTPS_PROXY (injected by `onecli.applyContainerConfig()` in container-runner.ts) injects
+  the Max-plan credential at the proxy layer. The host-side LiteLLM client (`src/litellm-host-client.ts`,
+  D10′) is retained for the Phase-2 distiller but is **not on the recall path**.
 - **No image rebuild.** `container/agent-runner/src/recall-mcp-stdio.ts` lives in the host-mounted
   agent-runner source tree; no container image rebuild is needed.
 - **Opt-in via sentinel.** The agent-runner registers the recall MCP only when the mount is present
-  (`existsSync('/workspace/extra/recall/recall.db')`), following the a-mem/context-mode sentinel
-  pattern. Groups without a recall DB get no tool.
+  (`existsSync('/recall/recall.db')`), following the a-mem/context-mode sentinel pattern. Groups
+  without a recall DB get no tool.
 
 ---
 
@@ -157,14 +160,14 @@ in-container store written by the orchestrator at spawn time.
 | `src/session-indexer.ts` | Host periodic tick (~60 s); walks `v2-sessions/<group>/<session>/`; writes per-group DBs; rowid-cursor watermark; delete-before-insert idempotency (`a6b415f` → refactored `8baf440`). |
 | `src/litellm-host-client.ts` | Host-side LiteLLM client (`:4000`). **Retained for Phase-2 distiller; NOT on the recall path** (D10′, `35302e9`). |
 | `scripts/backfill-session-fts.ts` | One-shot backfill of v1 archive (`store/messages.db`) into per-group DBs (`d4daf40` → `8baf440`). V1 is inbound-only — no `assistant` rows produced. |
-| `container/agent-runner/src/recall-mcp-stdio.ts` | In-container Bun stdio MCP. Opens `/workspace/extra/recall/recall.db` RO. FTS5 MATCH → top-k → Haiku summary via `172.31.0.1:4000`. Returns `{summary, citations}` (`2b0d4d6`). |
+| `container/agent-runner/src/recall-mcp-stdio.ts` | In-container Bun stdio MCP. Opens `/recall/recall.db` (via /tmp copy — FTS5 automerge workaround). FTS5 MATCH → top-k → Haiku summary via Anthropic API / OneCLI HTTPS_PROXY. Returns `{summary, citations}` (`2b0d4d6` → refactored `f0651f0`). |
 
 ### Upstream-file hooks (3 hooks, each 1–5 lines)
 
 | Upstream file | Hook | Commit |
 |---------------|------|--------|
 | `src/index.ts` | Start/stop the host session indexer alongside `startHostSweep()` | `57a6762` |
-| `src/container-runner.ts` | Mount per-group recall DB read-only at `/workspace/extra/recall/recall.db`; `existsSync`-gated (groups without a DB get no mount) | `3f0b3cb` |
+| `src/container-runner.ts` | Mount per-group recall DB read-only at `/recall/recall.db`; `existsSync`-gated (groups without a DB get no mount) | `3f0b3cb` |
 | `container/agent-runner/src/index.ts` | Sentinel-gated recall stdio MCP registration (skipped when mount absent) | `97ea70f` |
 
 ---
@@ -175,7 +178,7 @@ in-container store written by the orchestrator at spawn time.
   `madison-extensions.ts` alongside `recallDbPathForGroup(folder)` = `<dir>/<folder>.db`.
   Supersedes the original single-file `RECALL_DB_PATH` (D2′, `747ada4` → `3df39d5`).
 - **Per-group DB** (`<folder>.db`): written by the host session indexer; mounted read-only into
-  the matching container at `/workspace/extra/recall/recall.db`.
+  the matching container at `/recall/recall.db` (outside `/workspace/extra/` — see architecture note above).
 - **mount-allowlist entry**: `~/containers/data/NanoClaw/v2/recall` (read-only). No new host port;
   no image rebuild required.
 - **Schema**: `session_fts(msg_id UNINDEXED, session_id UNINDEXED, agent_group, ts UNINDEXED, role,
@@ -189,7 +192,7 @@ in-container store written by the orchestrator at spawn time.
 |------|--------|
 | V1 archive is inbound-only | `store/messages.db` has only `messages` rows (user direction). The backfill produces no `assistant` rows for v1 sessions — recall coverage for pre-v2 conversations is keyword-limited to user-side content. |
 | Folder resolution fallback | Agent groups whose folder cannot be resolved via `getAgentGroup()` get a DB named `ag-<id>.db` rather than `<folder>.db`. The container mount will not match unless the same fallback is applied consistently in both the indexer and `container-runner.ts`. |
-| LiteLLM model alias | The in-container summarizer calls LiteLLM with the alias `haiku`. This alias must exist in the LiteLLM gateway config; if absent the summarize step errors and the tool falls back to raw citations. |
+| OneCLI proxy unavailable | Summarization calls `api.anthropic.com` via HTTPS_PROXY injected by OneCLI. If OneCLI fails to inject HTTPS_PROXY (e.g. gateway unreachable at spawn), fetch is aborted after 20 s and the tool falls back to raw citations. |
 | Recall quality: keyword-only | Search uses porter unicode61 FTS5 — good for exact terms, poor for synonyms. Query expansion (D13) and recency blending are deferred. Add `sqlite-vec` only after verifying it loads under the `better-sqlite3-multiple-ciphers` fork. |
 
 ---
@@ -264,7 +267,7 @@ LITELLM_KEY    : sk-w994u...
 ALL PARTS PASSED
 ```
 
-**LiteLLM note:** The throwaway docker run uses the telegram_inbox virtual key, which is scoped to Claude/Anthropic models via the LiteLLM gateway. The `haiku` alias in `recall-mcp-stdio.ts` refers to a LiteLLM route that doesn't exist for this key — returns HTTP 400. In a real container spawn, the agent's LiteLLM key should include a `haiku` alias (or the alias should be updated to match the actual registered model name). The data path (FTS5 search → citations) is confirmed working; summarization degrades cleanly to raw excerpts when the LiteLLM call fails.
+**Verification output note (historical):** The embedded output above is from the LiteLLM era (pre-commit `f0651f0`). After `f0651f0` the recall path switched to `api.anthropic.com/v1/messages` (model `claude-haiku-4-5`) with the OneCLI HTTPS_PROXY injecting the Max-plan credential. The verify script does a direct `docker run` without OneCLI, so summarization degrades gracefully — this is expected and noted in the script. The FTS5 data path and citation output are confirmed working.
 
 ---
 
