@@ -15,6 +15,7 @@ import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
+import { startAgentMailSubscriber, stopAgentMailSubscriber } from './agentmail-subscriber.js';
 import { startMailroomSubscriber, stopMailroomSubscriber } from './mailroom-subscriber.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
@@ -173,6 +174,11 @@ async function main(): Promise<void> {
   // mailroom service's classified-email events).
   startMailroomSubscriber();
 
+  // 6c. Start the AgentMail subscriber (host-side ingest of inbound AgentMail
+  // email; mirrors the mailroom subscriber). Fire-and-forget: it connects a
+  // WebSocket and handles its own failures, so it never blocks boot.
+  void startAgentMailSubscriber();
+
   // 7. Start the `ncl` CLI socket server (data/ncl.sock).
   await startCliServer();
 
@@ -192,6 +198,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDeliveryPolls();
   stopHostSweep();
   stopMailroomSubscriber();
+  stopAgentMailSubscriber();
   await stopCliServer();
   try {
     await teardownChannelAdapters();

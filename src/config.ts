@@ -1,7 +1,7 @@
 import os from 'os';
 import path from 'path';
 
-import { readEnvFile } from './env.js';
+import { readEnvFile, readEnvKeysWithPrefix } from './env.js';
 import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from './install-slug.js';
 import { isValidTimezone } from './timezone.js';
 
@@ -56,6 +56,35 @@ export const CONTAINER_SKILL_ENV: Record<string, string> = {};
 for (const k of ['TESLA_TRACKER_URL', 'TESLA_TRACKER_API_KEY', 'AMBIENT_WEATHER_URL']) {
   const v = process.env[k] || envConfig[k];
   if (v) CONTAINER_SKILL_ENV[k] = v;
+}
+
+// AgentMail — inbound email for the AVP pilot. API key shared across inboxes;
+// each group declares its inbox via AGENTMAIL_INBOX_<FOLDER>. Read from .env
+// (not process.env) like the other skill credentials. Inbound is handled by the
+// host-side agentmail-subscriber; outbound by the in-container agentmail MCP.
+export function resolveAgentMailApiKey(): string | undefined {
+  const value = readEnvFile(['AGENTMAIL_API_KEY']).AGENTMAIL_API_KEY;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveGroupAgentMailInbox(folder: string): string | undefined {
+  const envName = `AGENTMAIL_INBOX_${folder.replace(/-/g, '_').toUpperCase()}`;
+  const value = readEnvFile([envName])[envName];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/** Discover every group folder with an AgentMail inbox configured: folder→inboxId. */
+export function discoverAgentMailInboxes(): Record<string, string> {
+  const prefix = 'AGENTMAIL_INBOX_';
+  const all = readEnvKeysWithPrefix(prefix);
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(all)) {
+    if (key === 'AGENTMAIL_INBOX_API_KEY') continue;
+    const folderUpper = key.slice(prefix.length);
+    if (!folderUpper) continue;
+    result[folderUpper.toLowerCase()] = value;
+  }
+  return result;
 }
 export const MAX_MESSAGES_PER_PROMPT = Math.max(1, parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10);
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
