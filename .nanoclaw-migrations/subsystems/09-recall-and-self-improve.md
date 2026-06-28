@@ -1,14 +1,51 @@
 # Subsystem 9 — FTS5 Session Recall + Hermes Self-Improvement
 
-**Risk: MEDIUM.** Net-new files only (schema, indexer, MCP server, LiteLLM host client, distiller,
-proposals). Upstream-file hooks are exactly three short additions (D2/§5 pattern). The recall MCP
-delivery mechanism requires a container-published port (see Spike outcome below) rather than
-in-process serving — confirmed by the gwbridge spike before any code was committed.
+**Status: SHIPPED (Phase 1 — recall, Option B).** Live as of 2026-06-28 on branch `madison-v2`.
+
+**Risk: MEDIUM.** Net-new files only (schema, indexer, in-container stdio MCP, LiteLLM host client).
+Upstream-file hooks are exactly three short additions (D2/§5 pattern). Isolation is by construction:
+each container gets only its own group's DB read-only; no token auth required.
 
 **Design authority:** `.nanoclaw-migrations/MEMORY-RECALL-DESIGN.md` (Phase 1 = recall, steps 0–5;
 Phase 2 = self-improvement, steps 6–10).
 
-**Locked decisions:** `lode/plans/active/2026-06-session-recall/findings.md` (D1–D13).
+**Locked decisions:** `lode/plans/active/2026-06-session-recall/findings.md` (D1–D13; D2′/D8′/D9′/D10′
+supersede/amend several originals after the gwbridge spike chose Option B).
+
+---
+
+## Intent
+
+Give Madison L2 episodic memory: the agent can search past conversations for context. Session messages
+are indexed into per-group FTS5 SQLite databases on the host by a periodic tick (the "session indexer").
+Each container gets its own group's DB bind-mounted read-only; an in-container stdio MCP tool
+(`recall_sessions`) performs an FTS5 keyword search and returns a Haiku-summarized digest
+(`{summary, citations}`).
+
+---
+
+## Architecture (Option B — in-container stdio + per-group DBs)
+
+The gwbridge spike (`41c7b11`) proved the host-process HTTP MCP model (D8) is unreachable from
+containers — Docker's iptables rules only allow container→host traffic for docker-published ports.
+Option B was chosen: deliver recall as an **in-container stdio MCP** instead of an HTTP endpoint.
+
+Key properties of Option B:
+
+- **No new host port.** `recall-mcp-stdio.ts` runs inside the agent container as a stdio MCP process.
+  No `docker publish`, no iptables rule, no sidecar container.
+- **Isolation by construction (D9′).** The recall DB is sharded one-file-per-group. Each container
+  receives only its own group's `<folder>.db` bind-mounted **read-only** at
+  `/workspace/extra/recall/recall.db`. A container physically cannot read another group's data.
+  The forgeable-token concern from D9 is dissolved.
+- **Summarize in-container.** The MCP handler calls LiteLLM at `172.31.0.1:4000` (a docker-published
+  port — works). The host-side LiteLLM client (`src/litellm-host-client.ts`, D10′) is retained for
+  the Phase-2 distiller but is **not on the recall path**.
+- **No image rebuild.** `container/agent-runner/src/recall-mcp-stdio.ts` lives in the host-mounted
+  agent-runner source tree; no container image rebuild is needed.
+- **Opt-in via sentinel.** The agent-runner registers the recall MCP only when the mount is present
+  (`existsSync('/workspace/extra/recall/recall.db')`), following the a-mem/context-mode sentinel
+  pattern. Groups without a recall DB get no tool.
 
 ---
 
@@ -110,26 +147,66 @@ in-container store written by the orchestrator at spawn time.
 
 ---
 
-## Net-new files (to be created — Phase 1)
+## Files (shipped)
 
-| File | Piece |
-|------|-------|
-| `src/recall/schema.ts` | `session_fts` + watermark on dedicated DB at `RECALL_DB_PATH` |
-| `src/session-indexer.ts` | Periodic host-side indexer (idempotent on msg_id, ~30–60s tick) |
-| `src/recall/mcp.ts` | HTTP MCP server — runs INSIDE the sidecar container (see spike outcome) |
-| `src/litellm-host-client.ts` | Host-side LiteLLM `:4000` client (net-new per D10) |
-| `scripts/backfill-session-fts.ts` | One-shot v1 backfill from `store/messages.db` |
-| `scripts/add-recall-mcp.ts` | Idempotent per-group recall MCP wiring |
+### New files (never conflict on upgrade)
 
-## Upstream-file hooks (minimal, 1–3 lines each)
+| File | Purpose |
+|------|---------|
+| `src/recall/schema.ts` | `session_fts` FTS5 table + `session_fts_state` watermark; opened per-group at a caller-supplied path (`ef97f5a`). |
+| `src/session-indexer.ts` | Host periodic tick (~60 s); walks `v2-sessions/<group>/<session>/`; writes per-group DBs; rowid-cursor watermark; delete-before-insert idempotency (`a6b415f` → refactored `8baf440`). |
+| `src/litellm-host-client.ts` | Host-side LiteLLM client (`:4000`). **Retained for Phase-2 distiller; NOT on the recall path** (D10′, `35302e9`). |
+| `scripts/backfill-session-fts.ts` | One-shot backfill of v1 archive (`store/messages.db`) into per-group DBs (`d4daf40` → `8baf440`). V1 is inbound-only — no `assistant` rows produced. |
+| `container/agent-runner/src/recall-mcp-stdio.ts` | In-container Bun stdio MCP. Opens `/workspace/extra/recall/recall.db` RO. FTS5 MATCH → top-k → Haiku summary via `172.31.0.1:4000`. Returns `{summary, citations}` (`2b0d4d6`). |
 
-| Upstream file | Hook |
-|---------------|------|
-| `src/index.ts` | Start indexer + launch recall-mcp sidecar next to startHostSweep() |
-| `src/container-runner.ts` | At spawn: mint recall token → bake into mcp_servers URL |
-| `src/claude-md-compose.ts` | Honor skill `trial` flag at fragment-include site (Phase 2) |
+### Upstream-file hooks (3 hooks, each 1–5 lines)
+
+| Upstream file | Hook | Commit |
+|---------------|------|--------|
+| `src/index.ts` | Start/stop the host session indexer alongside `startHostSweep()` | `57a6762` |
+| `src/container-runner.ts` | Mount per-group recall DB read-only at `/workspace/extra/recall/recall.db`; `existsSync`-gated (groups without a DB get no mount) | `3f0b3cb` |
+| `container/agent-runner/src/index.ts` | Sentinel-gated recall stdio MCP registration (skipped when mount absent) | `97ea70f` |
 
 ---
 
-*Phase 2 (self-improvement: distiller, helpfulness_events, skill_manage, nightly promote, PR gate)
-is not in scope here — details in MEMORY-RECALL-DESIGN.md §3.*
+## Storage model
+
+- **`RECALL_DB_DIR`** (default `~/containers/data/NanoClaw/v2/recall/`): exported from
+  `madison-extensions.ts` alongside `recallDbPathForGroup(folder)` = `<dir>/<folder>.db`.
+  Supersedes the original single-file `RECALL_DB_PATH` (D2′, `747ada4` → `3df39d5`).
+- **Per-group DB** (`<folder>.db`): written by the host session indexer; mounted read-only into
+  the matching container at `/workspace/extra/recall/recall.db`.
+- **mount-allowlist entry**: `~/containers/data/NanoClaw/v2/recall` (read-only). No new host port;
+  no image rebuild required.
+- **Schema**: `session_fts(msg_id UNINDEXED, session_id UNINDEXED, agent_group, ts UNINDEXED, role,
+  content, tokenize='porter unicode61')` + `session_fts_state(source PK, last_indexed_ts)`.
+
+---
+
+## Risk / quirks
+
+| Item | Detail |
+|------|--------|
+| V1 archive is inbound-only | `store/messages.db` has only `messages` rows (user direction). The backfill produces no `assistant` rows for v1 sessions — recall coverage for pre-v2 conversations is keyword-limited to user-side content. |
+| Folder resolution fallback | Agent groups whose folder cannot be resolved via `getAgentGroup()` get a DB named `ag-<id>.db` rather than `<folder>.db`. The container mount will not match unless the same fallback is applied consistently in both the indexer and `container-runner.ts`. |
+| LiteLLM model alias | The in-container summarizer calls LiteLLM with the alias `haiku`. This alias must exist in the LiteLLM gateway config; if absent the summarize step errors and the tool falls back to raw citations. |
+| Recall quality: keyword-only | Search uses porter unicode61 FTS5 — good for exact terms, poor for synonyms. Query expansion (D13) and recency blending are deferred. Add `sqlite-vec` only after verifying it loads under the `better-sqlite3-multiple-ciphers` fork. |
+
+---
+
+## Phase 2 deferred (self-improvement)
+
+The following were explicitly deferred from Phase 1 (details in `MEMORY-RECALL-DESIGN.md` §3):
+
+- **Distiller** — host-side process that compresses session transcripts into durable summaries and
+  writes back into `session_fts`. `src/litellm-host-client.ts` (D10′) is already in place for this.
+- **`helpfulness_events` ledger + L1 lifecycle re-rank** — tracks per-session quality signals for
+  skill promotion.
+- **Stable keys + rejection tombstone** — prevents re-promoting a skill that was explicitly rejected.
+- **`skill_manage` + `trial` flag** in `claude-md-compose` — wires the promote/demote lifecycle into
+  Claude.md fragment includes.
+- **Nightly promote pass** — scheduled job that reviews L1 signals and promotes trial skills to
+  permanent.
+- **PR gate** — blocks skill promotion until a GitHub PR exists.
+- **Recall quality B** — index distiller summaries into `session_fts` (depends on distiller existing).
+- **`scope='all'` union query** — cross-group recall (dropped for Phase 1 per D9′).
