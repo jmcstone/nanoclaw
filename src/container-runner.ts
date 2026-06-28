@@ -31,6 +31,7 @@ import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { initGroupFilesystem } from './group-init.js';
+import { cancelScheduledDistill, scheduleDistill } from './modules/self-improve/distiller.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './modules/mount-security/index.js';
@@ -88,6 +89,7 @@ export function isContainerRunning(sessionId: string): boolean {
  * can branch on the boolean.
  */
 export function wakeContainer(session: Session): Promise<boolean> {
+  cancelScheduledDistill(session.id);
   if (activeContainers.has(session.id)) {
     log.debug('Container already running', { sessionId: session.id });
     return Promise.resolve(true);
@@ -201,6 +203,12 @@ async function spawnContainer(session: Session): Promise<void> {
       log.warn('Container exited non-zero', { sessionId: session.id, code, containerName, stderrTail });
     } else {
       log.info('Container exited', { sessionId: session.id, code, containerName });
+    }
+    // Schedule distiller on clean exit (code 0) or signal-killed exit (code null —
+    // normal idle-shutdown path per comment above). Do NOT schedule on crashes
+    // (code !== 0 && code !== null), even if they happen to have empty stderr.
+    if (code === 0 || code === null) {
+      void scheduleDistill(session, agentGroup.folder);
     }
   });
 
