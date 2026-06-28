@@ -27,13 +27,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { recallDbPathForGroup } from './madison-extensions.js';
-import {
-  openRecallDb,
-  ensureRecallSchema,
-  SQL_FTS_DELETE,
-  SQL_FTS_INSERT,
-  SQL_STATE_UPSERT,
-} from './recall/schema.js';
+import { openRecallDb, ensureRecallSchema, SQL_FTS_DELETE, SQL_FTS_INSERT, SQL_STATE_UPSERT } from './recall/schema.js';
 import { sessionsBaseDir, inboundDbPath, outboundDbPath } from './session-manager.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { log } from './log.js';
