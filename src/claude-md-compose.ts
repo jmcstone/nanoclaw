@@ -68,10 +68,20 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
     for (const skillName of fs.readdirSync(skillsHostDir)) {
       const hostFragment = path.join(skillsHostDir, skillName, 'instructions.md');
       if (fs.existsSync(hostFragment)) {
-        desired.set(`skill-${skillName}.md`, {
-          type: 'symlink',
-          content: `${SHARED_SKILLS_CONTAINER_BASE}/${skillName}/instructions.md`,
-        });
+        const fragContent = fs.readFileSync(hostFragment, 'utf8');
+        if (fragContent.startsWith('<!-- trial: true -->')) {
+          // Trial skills land provisional — switch to inline so we can prepend
+          // a warning header (symlinks can't carry extra content).
+          desired.set(`skill-${skillName}.md`, {
+            type: 'inline',
+            content: `# ⚠️ TRIAL SKILL — recently self-authored; exercise and confirm before relying on it.\n${fragContent}`,
+          });
+        } else {
+          desired.set(`skill-${skillName}.md`, {
+            type: 'symlink',
+            content: `${SHARED_SKILLS_CONTAINER_BASE}/${skillName}/instructions.md`,
+          });
+        }
       }
     }
   }
