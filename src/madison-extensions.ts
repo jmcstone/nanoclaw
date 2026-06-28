@@ -16,6 +16,7 @@ const ext = readEnvFile([
   'CONTAINER_DNS',
   'RECALL_DB_DIR',
   'LITELLM_HOST_API_KEY',
+  'SELF_IMPROVE_DIR',
 ]);
 
 // Tailnet DNS resolver (MagicDNS) for agent containers; opt-in via CONTAINER_DNS.
@@ -69,3 +70,22 @@ export function recallDbPathForGroup(folder: string): string {
 // LiteLLM host API key — used by the Phase 2 host-side distiller.
 // May be undefined until provisioned; consumed by litellm-host-client.ts.
 export const LITELLM_HOST_API_KEY: string | undefined = process.env.LITELLM_HOST_API_KEY || ext.LITELLM_HOST_API_KEY;
+
+// Self-improvement data directory — distiller state, proposals, tombstone, and
+// helpfulness_events live here (host-side, on the btrfs-snapshotted data volume).
+// Mirrors RECALL_DB_DIR precedence: process.env first, then .env, then default.
+const _selfImproveDirRaw =
+  process.env.SELF_IMPROVE_DIR || ext.SELF_IMPROVE_DIR || path.join(os.homedir(), 'containers/data/NanoClaw/v2/self-improve/');
+export const SELF_IMPROVE_DIR = path.resolve(
+  _selfImproveDirRaw.startsWith('~/') ? path.join(os.homedir(), _selfImproveDirRaw.slice(2)) : _selfImproveDirRaw,
+);
+
+/** Return the self-improve SQLite DB path (host-side, shared across groups). */
+export function selfImproveDbPath(): string {
+  return path.join(SELF_IMPROVE_DIR, 'self-improve.db');
+}
+
+/** Return the proposals directory for a specific agent group folder. */
+export function proposalsDir(folder: string): string {
+  return path.join(SELF_IMPROVE_DIR, 'proposals', folder);
+}
