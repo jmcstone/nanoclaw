@@ -5,9 +5,19 @@
  * `git merge upstream`. All values are read from .env via env.ts, never loaded
  * into process.env, keeping secrets out of the process environment.
  */
+import os from 'os';
+import path from 'path';
 import { readEnvFile, readEnvKeysWithPrefix } from './env.js';
 
-const ext = readEnvFile(['TESLA_TRACKER_URL', 'TESLA_TRACKER_API_KEY', 'AMBIENT_WEATHER_URL', 'CONTAINER_DNS']);
+const ext = readEnvFile([
+  'TESLA_TRACKER_URL',
+  'TESLA_TRACKER_API_KEY',
+  'AMBIENT_WEATHER_URL',
+  'CONTAINER_DNS',
+  'RECALL_DB_PATH',
+  'RECALL_MCP_PORT',
+  'LITELLM_HOST_API_KEY',
+]);
 
 // Tailnet DNS resolver (MagicDNS) for agent containers; opt-in via CONTAINER_DNS.
 // process.env first (deploy override), then .env — same precedence as config.ts.
@@ -42,3 +52,21 @@ export function discoverAgentMailInboxes(): Record<string, string> {
   }
   return result;
 }
+
+// Session-recall FTS5 index — separate DB file, snapshotted on btrfs alongside
+// all v2 durable state. process.env first (deploy override), then .env, then default.
+const _recallDbRaw =
+  process.env.RECALL_DB_PATH ||
+  ext.RECALL_DB_PATH ||
+  path.join(os.homedir(), 'containers/data/NanoClaw/v2/recall/session-recall.db');
+export const RECALL_DB_PATH = path.resolve(
+  _recallDbRaw.startsWith('~/') ? path.join(os.homedir(), _recallDbRaw.slice(2)) : _recallDbRaw,
+);
+
+// HTTP MCP port the recall server binds to on the gwbridge (172.31.0.1).
+// Must not collide with inbox-mcp (:18080), tasks-mcp (:18088), or LiteLLM (:4000).
+export const RECALL_MCP_PORT = Number(process.env.RECALL_MCP_PORT || ext.RECALL_MCP_PORT) || 18090;
+
+// LiteLLM host API key — used by the in-orchestrator recall summariser and distiller.
+// May be undefined until provisioned; consumed by litellm-host-client.ts (Phase 1, Step 4a).
+export const LITELLM_HOST_API_KEY: string | undefined = process.env.LITELLM_HOST_API_KEY || ext.LITELLM_HOST_API_KEY;
