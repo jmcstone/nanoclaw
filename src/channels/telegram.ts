@@ -5,7 +5,7 @@
  */
 import { createTelegramAdapter } from '@chat-adapter/telegram';
 
-import { readEnvFile } from '../env.js';
+import { readEnvFile, readEnvKeysWithPrefix } from '../env.js';
 import { log } from '../log.js';
 import { createMessagingGroup, getMessagingGroupByPlatform, updateMessagingGroup } from '../db/messaging-groups.js';
 import { grantRole, hasAnyOwner } from '../modules/permissions/db/user-roles.js';
@@ -246,65 +246,81 @@ function createPairingInterceptor(
   };
 }
 
+function buildTelegramAdapter(token: string, instance?: string): ChannelAdapter {
+  const telegramAdapter = createTelegramAdapter({
+    botToken: token,
+    mode: 'polling',
+  });
+  const bridge = createChatSdkBridge({
+    adapter: telegramAdapter,
+    concurrency: 'concurrent',
+    extractReplyContext,
+    supportsThreads: false,
+    transformOutboundText: sanitizeTelegramLegacyMarkdown,
+    maxTextLength: 4000,
+  });
+
+  const botUsernamePromise = fetchBotUsername(token);
+
+  const wrapped: ChannelAdapter = {
+    ...bridge,
+    // A named instance (a dedicated bot) routes independently of the default.
+    ...(instance ? { instance } : {}),
+    resolveChannelName: async (platformId: string) => {
+      const chatId = platformId.split(':').slice(1).join(':');
+      if (!chatId) return null;
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId }),
+        });
+        const data = (await res.json()) as { ok?: boolean; result?: { title?: string } };
+        return data.ok ? (data.result?.title ?? null) : null;
+      } catch {
+        return null;
+      }
+    },
+    async deliver(platformId, threadId, message) {
+      const content = (message.content ?? {}) as Record<string, unknown>;
+      const hasFiles = Array.isArray(message.files) && message.files.length > 0;
+      const isCard =
+        message.kind === 'ask_question' || message.kind === 'send_card' || 'options' in content || 'title' in content;
+      const text = (content.text as string) || (content.markdown as string) || '';
+      // Plain agent text → our HTML path (GFM tables + truncation-tolerant,
+      // avoids the adapter's fragile MarkdownV2). Cards, file attachments, and
+      // empty/structured payloads fall through to the Chat SDK bridge.
+      if (!isCard && !hasFiles && text) {
+        return sendTelegramHtml(token, platformId, text);
+      }
+      return bridge.deliver(platformId, threadId, message);
+    },
+    async setup(hostConfig: ChannelSetup) {
+      const intercepted: ChannelSetup = {
+        ...hostConfig,
+        onInbound: createPairingInterceptor(botUsernamePromise, hostConfig.onInbound, token),
+      };
+      return withRetry(() => bridge.setup(intercepted), 'bridge.setup');
+    },
+  };
+  return wrapped;
+}
+
+// Default bot → the 'telegram' instance (messaging groups with instance='telegram').
 registerChannelAdapter('telegram', {
   factory: () => {
     const env = readEnvFile(['TELEGRAM_BOT_TOKEN']);
     if (!env.TELEGRAM_BOT_TOKEN) return null;
-    const token = env.TELEGRAM_BOT_TOKEN;
-    const telegramAdapter = createTelegramAdapter({
-      botToken: token,
-      mode: 'polling',
-    });
-    const bridge = createChatSdkBridge({
-      adapter: telegramAdapter,
-      concurrency: 'concurrent',
-      extractReplyContext,
-      supportsThreads: false,
-      transformOutboundText: sanitizeTelegramLegacyMarkdown,
-      maxTextLength: 4000,
-    });
-
-    const botUsernamePromise = fetchBotUsername(token);
-
-    const wrapped: ChannelAdapter = {
-      ...bridge,
-      resolveChannelName: async (platformId: string) => {
-        const chatId = platformId.split(':').slice(1).join(':');
-        if (!chatId) return null;
-        try {
-          const res = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId }),
-          });
-          const data = (await res.json()) as { ok?: boolean; result?: { title?: string } };
-          return data.ok ? (data.result?.title ?? null) : null;
-        } catch {
-          return null;
-        }
-      },
-      async deliver(platformId, threadId, message) {
-        const content = (message.content ?? {}) as Record<string, unknown>;
-        const hasFiles = Array.isArray(message.files) && message.files.length > 0;
-        const isCard =
-          message.kind === 'ask_question' || message.kind === 'send_card' || 'options' in content || 'title' in content;
-        const text = (content.text as string) || (content.markdown as string) || '';
-        // Plain agent text → our HTML path (GFM tables + truncation-tolerant,
-        // avoids the adapter's fragile MarkdownV2). Cards, file attachments, and
-        // empty/structured payloads fall through to the Chat SDK bridge.
-        if (!isCard && !hasFiles && text) {
-          return sendTelegramHtml(token, platformId, text);
-        }
-        return bridge.deliver(platformId, threadId, message);
-      },
-      async setup(hostConfig: ChannelSetup) {
-        const intercepted: ChannelSetup = {
-          ...hostConfig,
-          onInbound: createPairingInterceptor(botUsernamePromise, hostConfig.onInbound, token),
-        };
-        return withRetry(() => bridge.setup(intercepted), 'bridge.setup');
-      },
-    };
-    return wrapped;
+    return buildTelegramAdapter(env.TELEGRAM_BOT_TOKEN);
   },
 });
+
+// Additional named telegram bots: TELEGRAM_BOT_TOKEN__<INSTANCE>=<token> in .env.
+// Each registers as its own instance so a dedicated bot (e.g. for a shared /
+// outreach group with external members) routes independently of the default bot.
+// instance = <INSTANCE> lowercased; wire the messaging group to that instance.
+for (const [key, token] of Object.entries(readEnvKeysWithPrefix('TELEGRAM_BOT_TOKEN__'))) {
+  const instance = key.slice('TELEGRAM_BOT_TOKEN__'.length).toLowerCase();
+  if (!instance || !token) continue;
+  registerChannelAdapter(instance, { factory: () => buildTelegramAdapter(token, instance) });
+}
