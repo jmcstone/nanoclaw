@@ -56,9 +56,7 @@ export function discoverAgentMailInboxes(): Record<string, string> {
 // snapshotted on btrfs alongside all v2 durable state.
 // process.env first (deploy override), then .env, then default.
 const _recallDbDirRaw =
-  process.env.RECALL_DB_DIR ||
-  ext.RECALL_DB_DIR ||
-  path.join(os.homedir(), 'containers/data/NanoClaw/v2/recall/');
+  process.env.RECALL_DB_DIR || ext.RECALL_DB_DIR || path.join(os.homedir(), 'containers/data/NanoClaw/v2/recall/');
 export const RECALL_DB_DIR = path.resolve(
   _recallDbDirRaw.startsWith('~/') ? path.join(os.homedir(), _recallDbDirRaw.slice(2)) : _recallDbDirRaw,
 );

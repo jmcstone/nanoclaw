@@ -20,7 +20,7 @@ const HOST_LITELLM_BASE_URL = 'http://localhost:4000';
 // override), then the .env file — same precedence as other madison-extensions.ts exports.
 const _envVars = readEnvFile(['LITELLM_HOST_API_KEY']);
 const _defaultApiKey: string | undefined =
-  (process.env.LITELLM_HOST_API_KEY || _envVars.LITELLM_HOST_API_KEY) || undefined;
+  process.env.LITELLM_HOST_API_KEY || _envVars.LITELLM_HOST_API_KEY || undefined;
 
 /**
  * Call the LiteLLM gateway from the host process and return the assistant reply string.
