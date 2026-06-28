@@ -194,6 +194,80 @@ in-container store written by the orchestrator at spawn time.
 
 ---
 
+## Verification
+
+Ran `scripts/verify-recall-e2e.ts` on 2026-06-28 (Wave 5 — branch `madison-v2`). Image: `nanoclaw-agent-v2-97ed9aac:latest`.
+
+**Bug found and fixed during verification:** Bun's FTS5 implementation writes to internal shadow tables even during read-only MATCH queries (segment automerge). With the DB bind-mounted `:ro`, every FTS5 query failed with "attempt to write a readonly database". Fix: `recall-mcp-stdio.ts` now copies the DB to `/tmp/recall-<pid>.db` before opening it; the original read-only mount is never modified. The copy is removed in the finally block. Type-checked and included in this commit.
+
+```
+# Recall end-to-end verification
+
+PROJECT_ROOT   : /home/jeff/containers/nanoclaw-v2-worktree
+RECALL_DB_DIR  : /home/jeff/containers/data/NanoClaw/v2/recall
+CONTAINER_IMAGE: nanoclaw-agent-v2-97ed9aac:latest
+LITELLM_KEY    : sk-w994u...
+
+## Part A — Indexer idempotency (AC-3)
+         Total session_fts rows before tick: 5299
+           ag-1782572339366-eq14vu.db: 18
+           ag-1782580690895-jzvrda.db: 9
+           telegram_avp.db: 1248
+           telegram_avp_outreach.db: 180
+           telegram_inbox.db: 3451
+           telegram_main.db: 384
+           telegram_trading.db: 9
+         Total session_fts rows after tick: 5299
+  PASS  Indexer is idempotent: 5299 → 5299 rows (delta 0)
+
+## Part B — Backfill idempotency (AC-4)
+         Backfill output:
+           v1 backfill complete.
+           Per-group results:
+             telegram_main: already backfilled (last_indexed_ts=2026-06-22T23:25:20.000Z) — skipped
+             telegram_avp: already backfilled (last_indexed_ts=2026-06-22T20:39:17.000Z) — skipped
+             telegram_inbox: already backfilled (last_indexed_ts=2026-06-27T21:09:40.000Z) — skipped
+             telegram_trading: already backfilled (last_indexed_ts=2026-04-18T23:46:40.000Z) — skipped
+             telegram_avp_outreach: already backfilled (last_indexed_ts=2026-06-15T21:44:04.000Z) — skipped
+           Skipped (unmapped chat_jid): 0 (all chat_jids mapped)
+  PASS  Backfill is idempotent: all groups already backfilled, 0 new rows inserted
+
+## Part C — Real in-container recall (AC-10)
+         Image: nanoclaw-agent-v2-97ed9aac:latest
+         Inbox DB: /home/jeff/containers/data/NanoClaw/v2/recall/telegram_inbox.db
+         Agent runner src: /home/jeff/containers/nanoclaw-v2-worktree/container/agent-runner/src
+         Server log:
+           [RECALL] Recall MCP server ready (db: /workspace/extra/recall/recall.db, gateway: http://172.31.0.1:4000)
+           [RECALL] Searching recall DB for: "email" (limit=12)
+           [RECALL] Found 12 matching excerpts
+           [RECALL] Summarization failed (LiteLLM error (400): model=haiku not found) — degrading to unsummarized excerpts
+           [RECALL] Recall complete: 12 citations, 2912 char summary
+  PASS  tools/list: recall_sessions tool present
+  PASS  tools/call: summary present (2912 chars), 12 citation(s) ≥ 1 — data path PASS
+         LiteLLM status: DEGRADED (model error, raw excerpts returned)
+         Summary (first 400 chars):
+           [Summarization unavailable: LiteLLM error (400): model=haiku not found]
+           Raw excerpts:
+           [1] (2026-03-31T18:20:07.000Z, email) …Automatic call recording turned on…
+           [2] (2026-05-26T00:20:04.000Z, email) [Gmail «email» from donotreply@candid.org]…
+           [3] (2026-04-12T15:53:43.000Z, email) …Use mcp__gmail__search_«emails»…
+         First 3 citations:
+             [2026-03-31T18:20:07.000Z] (email) …Automatic call recording turned on…
+             [2026-05-26T00:20:04.000Z] (email) [Gmail «email» from donotreply@candid.org]…
+             [2026-04-12T15:53:43.000Z] (email) …Use mcp__gmail__search_«emails»…
+
+## Part D — Isolation by construction (AC-9')
+  PASS  container-runner.ts mounts per-group DB file (not the directory) at the fixed container path — isolation by construction confirmed
+  PASS  recall-mcp-stdio.ts reads only the fixed RECALL_DB_PATH — no agent_group parameter
+
+─────────────────────────────────────────────────────
+ALL PARTS PASSED
+```
+
+**LiteLLM note:** The throwaway docker run uses the telegram_inbox virtual key, which is scoped to Claude/Anthropic models via the LiteLLM gateway. The `haiku` alias in `recall-mcp-stdio.ts` refers to a LiteLLM route that doesn't exist for this key — returns HTTP 400. In a real container spawn, the agent's LiteLLM key should include a `haiku` alias (or the alias should be updated to match the actual registered model name). The data path (FTS5 search → citations) is confirmed working; summarization degrades cleanly to raw excerpts when the LiteLLM call fails.
+
+---
+
 ## Phase 2 deferred (self-improvement)
 
 The following were explicitly deferred from Phase 1 (details in `MEMORY-RECALL-DESIGN.md` §3):

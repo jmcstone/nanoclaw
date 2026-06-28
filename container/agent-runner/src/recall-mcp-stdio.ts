@@ -138,10 +138,19 @@ server.tool(
       };
     }
 
+    // FTS5 automerge: SQLite's FTS5 implementation writes to internal shadow
+    // tables even during read-only MATCH queries (segment merge). Because the
+    // DB is bind-mounted :ro by container-runner.ts, we copy it to /tmp and
+    // open the writable copy — the original is never modified.
     let db: Database;
+    const tmpDbPath = `/tmp/recall-${process.pid}.db`;
+    let tmpCreated = false;
     try {
-      db = new Database(RECALL_DB_PATH, { readonly: true });
+      fs.copyFileSync(RECALL_DB_PATH, tmpDbPath);
+      tmpCreated = true;
+      db = new Database(tmpDbPath);
     } catch (err) {
+      if (tmpCreated) { try { fs.unlinkSync(tmpDbPath); } catch {} }
       const msg = err instanceof Error ? err.message : String(err);
       log(`Failed to open recall DB: ${msg}`);
       return {
@@ -175,6 +184,7 @@ server.tool(
       };
     } finally {
       db.close();
+      try { fs.unlinkSync(tmpDbPath); } catch {}
     }
 
     log(`Found ${rows.length} matching excerpts`);
