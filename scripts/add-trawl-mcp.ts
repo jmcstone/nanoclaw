@@ -10,19 +10,23 @@ import { initDb } from '../src/db/connection.js';
 import { getAgentGroupByFolder } from '../src/db/agent-groups.js';
 import { getContainerConfig, updateContainerConfigJson } from '../src/db/container-configs.js';
 
-const FOLDER = 'telegram_avp';
+const FOLDERS = ['telegram_main', 'telegram_inbox', 'telegram_avp', 'telegram_trading'];
 const TRAWL_URL = 'https://trawl.crested-gecko.ts.net/mcp';
 
 function main(): void {
   initDb('data/v2.db');
-  const ag = getAgentGroupByFolder(FOLDER);
-  if (!ag) throw new Error(`no agent group for ${FOLDER}`);
-
-  const cc = getContainerConfig(ag.id);
-  const servers = JSON.parse(cc?.mcp_servers ?? '{}') as Record<string, unknown>;
-  servers.trawl = { type: 'http', url: TRAWL_URL };
-  updateContainerConfigJson(ag.id, 'mcp_servers', servers);
-  console.log(`trawl → ${FOLDER} (servers: ${Object.keys(servers).join(', ')})`);
+  for (const folder of FOLDERS) {
+    const ag = getAgentGroupByFolder(folder);
+    if (!ag) {
+      console.log(`SKIP ${folder}: no agent group`);
+      continue;
+    }
+    const cc = getContainerConfig(ag.id);
+    const servers = JSON.parse(cc?.mcp_servers ?? '{}') as Record<string, unknown>;
+    servers.trawl = { type: 'http', url: TRAWL_URL };
+    updateContainerConfigJson(ag.id, 'mcp_servers', servers);
+    console.log(`trawl → ${folder} (servers: ${Object.keys(servers).join(', ')})`);
+  }
   console.log('done');
 }
 
