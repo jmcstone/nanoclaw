@@ -431,6 +431,50 @@ eviction (SI-6).
 
 ## Phase 2 Verification
 
-_Stub — reserved for the E2E verification executor (`scripts/verify-self-improve-e2e.ts`)._
+**Script:** `scripts/verify-self-improve-e2e.ts`
+**Run:** `npx tsx scripts/verify-self-improve-e2e.ts`
+**Date verified:** 2026-06-28 on branch `madison-v2`
 
-Results to be filled in once the verification pass runs on branch `madison-v2`.
+### Parts A–D (run now — no LLM, no container, no live orchestrator)
+
+**All 14 checks PASSED.**
+
+| Part | What it tests | Result |
+|------|--------------|--------|
+| **A — Schema idempotency** | `openSelfImproveDb` + `ensureSelfImproveSchema` called twice; all 3 tables (`distiller_watermark`, `proposal_keys`, `helpfulness_events`) present after both calls | PASS |
+| **B — Tombstone / dedup** | `upsertProposalKey` + `incrementSessionCount ×2` → `getSessionCount === 2`; `recordTombstone` → `checkTombstone === true`; non-tombstoned and absent keys return false; absent key session_count is 0 | PASS |
+| **C — L1 re-rank** | CLAUDE.local.md with unkeyed preamble + pinned block + high-score (`corroborated ×2`) + low-score (`corrected ×1`) fact blocks; token budget 60 → cats resident, dogs demoted; unkeyed + pin always survive; `fact-evict` journal line written with correct format | PASS |
+| **D — Journal + commit (dry)** | `appendJournal('fact-add', …)` writes a correctly-formatted line; `commitJournalAndSkills` exported as a function but not invoked (would stage test lines) | PASS |
+
+```
+  PASS  ensureSelfImproveSchema is idempotent (2 calls, no error)
+  PASS  Table 'distiller_watermark' exists
+  PASS  Table 'proposal_keys' exists
+  PASS  Table 'helpfulness_events' exists
+  PASS  incrementSessionCount ×2 → getSessionCount === 2
+  PASS  upsertProposalKey does not reset session_count (still 2)
+  PASS  checkTombstone === true for tombstoned key
+  PASS  checkTombstone === false for non-tombstoned key
+  PASS  checkTombstone === false for absent key
+  PASS  getSessionCount === 0 for absent key
+  PASS  Unkeyed preamble preserved in rewritten CLAUDE.local.md
+  PASS  Pinned block (pinned-identity) survived L1 re-rank
+  PASS  High-score block (fact-about-cats, 2× corroborated) is resident
+  PASS  Low-score block (fact-about-dogs, 1× corrected) was demoted + removed from L1
+  PASS  fact-evict journal line written (1 eviction(s))
+  PASS  Journal line format matches: - <ts> · fact-evict · `key` · <content> · <scope>
+  PASS  appendJournal added 1 line (2 → 3 non-empty lines)
+  PASS  Journal line format correct: - <ISO ts> · fact-add · `key` · <content> · <scope>
+  PASS  commitJournalAndSkills exported as a function (not invoked — would commit test lines)
+ALL RUN-NOW PARTS PASSED (A–D)
+```
+
+No bugs found in the modules exercised by Parts A–D.
+
+### Part E — LIVE check (PENDING activation + `LITELLM_HOST_API_KEY`)
+
+Not run. Documented in the script (`partEDocumented()`) and requires:
+1. `LITELLM_HOST_API_KEY` added to `nanoclaw-v2-worktree/.env` (see SI-12 resolution).
+2. Service restarted with Wave 5 modules wired in (`scheduleDistill` + `startNightlyPromote`).
+
+Full procedure: see `scripts/verify-self-improve-e2e.ts` Part E output section.
