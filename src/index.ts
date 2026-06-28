@@ -18,6 +18,7 @@ import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { startSessionIndexer, stopSessionIndexer } from './session-indexer.js';
 import { startAgentMailSubscriber, stopAgentMailSubscriber } from './agentmail-subscriber.js';
 import { startMailroomSubscriber, stopMailroomSubscriber } from './mailroom-subscriber.js';
+import { startNightlyPromote, stopNightlyPromote } from './modules/self-improve/promote.js'; // UPSTREAM-HOOK
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
@@ -170,6 +171,7 @@ async function main(): Promise<void> {
   // 6. Start host sweep
   startHostSweep();
   startSessionIndexer();
+  startNightlyPromote(); // UPSTREAM-HOOK
   log.info('Host sweep started');
 
   // 6b. Start the mailroom subscriber (host-side ingest of the external
@@ -200,6 +202,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDeliveryPolls();
   stopHostSweep();
   stopSessionIndexer();
+  stopNightlyPromote(); // UPSTREAM-HOOK
   stopMailroomSubscriber();
   stopAgentMailSubscriber();
   await stopCliServer();
