@@ -271,6 +271,28 @@ ALL PARTS PASSED
 
 ---
 
+## Phase 2 — distiller model spike (2026-06-28)
+
+**Script:** `scripts/spike-distiller-model.ts`
+
+**SPIKE PASS: `gemini-3-flash-preview`**; backup: `gemini-3.1-flash-image`
+
+**Registered LiteLLM aliases (5):** `deepseek-v3.2`, `grok-4.1-fast`, `grok-code-fast-1`,
+`gemini-3-flash-preview`, `gemini-3.1-flash-image`.
+
+**Winner:** `gemini-3-flash-preview` — confirmed reachable via `callHostLiteLLM` (replied
+`"OK"`). `grok-4.1-fast` / `grok-code-fast-1` returned 404 from OpenRouter (registered but
+currently unreachable). `gemini-3.1-flash-image` also PASS (text works; primarily image model).
+
+**Key situation:** `LITELLM_HOST_API_KEY` is **not in `.env`** — the distiller needs a dedicated
+host-side key. Issue one in the LiteLLM admin UI and add `LITELLM_HOST_API_KEY=<key>` to
+`nanoclaw-v2-worktree/.env` before Wave 3. (Spike used `LITELLM_API_KEY_TELEGRAM_MAIN` from
+the sibling nanoclaw project as a test proxy for the same gateway.)
+
+**`DISTILLER_MODEL` constant:** `'gemini-3-flash-preview'`
+
+---
+
 ## Phase 2 deferred (self-improvement)
 
 The following were explicitly deferred from Phase 1 (details in `MEMORY-RECALL-DESIGN.md` §3):
