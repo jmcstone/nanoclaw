@@ -1,17 +1,22 @@
 /**
  * Session indexer — periodic FTS5 indexing of inbound + outbound session DBs.
  *
- * Runs every 30 s and fires once immediately on start. For each session found
- * under sessionsBaseDir(), advances per-source monotonic rowid cursors and
- * writes new rows into the recall FTS5 index at RECALL_DB_PATH.
+ * Runs every 30 s and fires once immediately on start. For each agent group
+ * found under sessionsBaseDir(), opens that group's own recall DB (per-group
+ * sharding — Option B), advances per-source monotonic rowid cursors, and
+ * writes new rows into the group's FTS5 index.
  *
  * Design decisions implemented here:
- *   D5 — host-side periodic tick; inbound messages_in → role user/email,
- *         outbound messages_out → role assistant; getAgentGroup() maps ids to
- *         folder names for scoping.
- *   D6 — idempotent on msg_id: DELETE FROM session_fts WHERE msg_id=? before
- *         each INSERT, so re-indexing the same row never duplicates. Combined
- *         with a monotonic rowid cursor so boundaries are never re-processed.
+ *   D5  — host-side periodic tick; inbound messages_in → role user/email,
+ *          outbound messages_out → role assistant; getAgentGroup() maps ids to
+ *          folder names for scoping.
+ *   D6  — idempotent on msg_id: DELETE FROM session_fts WHERE msg_id=? before
+ *          each INSERT, so re-indexing the same row never duplicates. Combined
+ *          with a monotonic rowid cursor so boundaries are never re-processed.
+ *   D2′ — per-group recall DB sharding (Option B): each agent_group writes to
+ *          its own <RECALL_DB_DIR>/<folder>.db, opened and closed per tick.
+ *          The agent_group column in session_fts is now redundant (each DB is
+ *          single-group) but kept harmless — folder name is still written.
  *
  * The indexer is a reader of session DBs — it never writes inbound.db or
  * outbound.db. It opens them read-only and holds the connection only for the
@@ -21,7 +26,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-import { RECALL_DB_PATH } from './madison-extensions.js';
+import { recallDbPathForGroup } from './madison-extensions.js';
 import { openRecallDb, ensureRecallSchema } from './recall/schema.js';
 import { sessionsBaseDir, inboundDbPath, outboundDbPath } from './session-manager.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -55,15 +60,10 @@ export function stopSessionIndexer(): void {
 // ---------------------------------------------------------------------------
 
 function runIndexerTick(): void {
-  let recallDb: Database.Database | null = null;
   try {
-    recallDb = openRecallDb(RECALL_DB_PATH);
-    ensureRecallSchema(recallDb);
-    indexAllSessions(recallDb);
+    indexAllSessions();
   } catch (err) {
     log.error('Session indexer tick failed', { err });
-  } finally {
-    recallDb?.close();
   }
 }
 
@@ -71,7 +71,7 @@ function runIndexerTick(): void {
 // Session walk
 // ---------------------------------------------------------------------------
 
-function indexAllSessions(recallDb: Database.Database): void {
+function indexAllSessions(): void {
   const baseDir = sessionsBaseDir();
 
   let agentGroupEntries: string[];
@@ -101,25 +101,37 @@ function indexAllSessions(recallDb: Database.Database): void {
       continue;
     }
 
-    // Resolve the human-readable folder name for FTS scoping.
+    // Resolve the human-readable folder name for per-group DB sharding.
     const agentFolder = getAgentGroup(agentGroupId)?.folder ?? agentGroupId;
 
-    for (const sessionId of sessionEntries) {
-      const sessionPath = path.join(agentGroupPath, sessionId);
+    // Open this group's own recall DB for the duration of the tick iteration.
+    // openRecallDb creates the parent dir (RECALL_DB_DIR) if absent.
+    let recallDb: Database.Database | null = null;
+    try {
+      recallDb = openRecallDb(recallDbPathForGroup(agentFolder));
+      ensureRecallSchema(recallDb);
 
-      // Skip non-directories inside the agent group dir.
-      try {
-        if (!fs.lstatSync(sessionPath).isDirectory()) continue;
-      } catch {
-        continue;
-      }
+      for (const sessionId of sessionEntries) {
+        const sessionPath = path.join(agentGroupPath, sessionId);
 
-      try {
-        indexSession(recallDb, agentGroupId, sessionId, agentFolder);
-      } catch (err) {
-        // A single locked or corrupt session DB must not abort the whole tick.
-        log.warn('Session indexer: skipping session due to error', { agentGroupId, sessionId, err });
+        // Skip non-directories inside the agent group dir.
+        try {
+          if (!fs.lstatSync(sessionPath).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+
+        try {
+          indexSession(recallDb, agentGroupId, sessionId, agentFolder);
+        } catch (err) {
+          // A single locked or corrupt session DB must not abort the whole tick.
+          log.warn('Session indexer: skipping session due to error', { agentGroupId, sessionId, err });
+        }
       }
+    } catch (err) {
+      log.error('Session indexer: error processing agent group', { agentGroupId, agentFolder, err });
+    } finally {
+      recallDb?.close();
     }
   }
 }
@@ -128,12 +140,7 @@ function indexAllSessions(recallDb: Database.Database): void {
 // Per-session indexing
 // ---------------------------------------------------------------------------
 
-function indexSession(
-  recallDb: Database.Database,
-  agentGroupId: string,
-  sessionId: string,
-  agentFolder: string,
-): void {
+function indexSession(recallDb: Database.Database, agentGroupId: string, sessionId: string, agentFolder: string): void {
   const inbound = inboundDbPath(agentGroupId, sessionId);
   if (fs.existsSync(inbound)) {
     indexSource(recallDb, {

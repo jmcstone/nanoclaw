@@ -1,11 +1,16 @@
 /**
  * One-shot v1 backfill — index ~/containers/data/NanoClaw/store/messages.db
- * into the session_fts FTS5 recall index.
+ * into per-group session_fts FTS5 recall DBs (Option B).
+ *
+ * Each chat_jid's rows go into its group's own DB at
+ * recallDbPathForGroup(folder). One DB per agent_group folder is opened,
+ * written, and closed independently.
  *
  * Run: npx tsx scripts/backfill-session-fts.ts
  *
- * Idempotent: checks session_fts_state WHERE source='v1-backfill' and exits
- * immediately if the backfill has already completed.
+ * Idempotent (per-group): each group's DB is checked independently for the
+ * 'v1-backfill' source in session_fts_state. A group already backfilled is
+ * skipped; a new group still runs.
  *
  * ─── Real v1 schema (verified 2026-06-28 via PRAGMA table_info) ──────────
  *   messages(
@@ -48,7 +53,7 @@ import os from 'node:os';
 import Database from 'better-sqlite3';
 
 import { openRecallDb, ensureRecallSchema } from '../src/recall/schema.js';
-import { RECALL_DB_PATH } from '../src/madison-extensions.js';
+import { recallDbPathForGroup } from '../src/madison-extensions.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -95,100 +100,121 @@ function deriveRole(sender: string): 'user' | 'email' {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 function main(): void {
-  // Open recall DB and ensure schema exists.
-  const recallDb = openRecallDb(RECALL_DB_PATH);
-  ensureRecallSchema(recallDb);
-
-  // Idempotency check: if the backfill source is already recorded, bail out.
-  const existing = recallDb
-    .prepare<[string], { source: string; last_indexed_ts: string }>(
-      'SELECT source, last_indexed_ts FROM session_fts_state WHERE source = ?',
-    )
-    .get(BACKFILL_SOURCE);
-
-  if (existing) {
-    console.log(
-      `v1 backfill already done (last_indexed_ts=${existing.last_indexed_ts}).`,
-    );
-    recallDb.close();
-    process.exit(0);
-  }
-
-  // Open v1 archive read-only.
+  // Open v1 archive read-only and fetch all rows upfront.
   const v1Db = new Database(V1_DB_PATH, { readonly: true });
-
-  // Prepared statements for the recall DB.
-  const deleteFts = recallDb.prepare<[string]>(
-    'DELETE FROM session_fts WHERE msg_id = ?',
-  );
-  const insertFts = recallDb.prepare<
-    [string, string, string, string, string, string]
-  >(
-    'INSERT INTO session_fts (msg_id, session_id, agent_group, ts, role, content) VALUES (?, ?, ?, ?, ?, ?)',
-  );
-  const upsertState = recallDb.prepare<[string, string]>(
-    'INSERT INTO session_fts_state (source, last_indexed_ts) VALUES (?, ?) ' +
-      'ON CONFLICT(source) DO UPDATE SET last_indexed_ts = excluded.last_indexed_ts',
-  );
-
-  // Fetch all v1 messages ordered by timestamp.
   const allRows = v1Db
     .prepare<[], V1Message>(
       'SELECT id, chat_jid, sender, content, timestamp FROM messages ORDER BY timestamp ASC',
     )
     .all();
-
   v1Db.close();
 
-  let inserted = 0;
-  let maxTs = '';
+  // Partition rows by folder (per CHAT_JID_MAP).
+  const rowsByFolder = new Map<string, V1Message[]>();
   const skippedByJid: Record<string, number> = {};
 
-  // Wrap all inserts in a transaction for atomicity and performance.
-  const runBackfill = recallDb.transaction(() => {
-    for (const row of allRows) {
-      const agentGroup = CHAT_JID_MAP[row.chat_jid];
+  for (const row of allRows) {
+    const folder = CHAT_JID_MAP[row.chat_jid];
+    if (!folder) {
+      skippedByJid[row.chat_jid] = (skippedByJid[row.chat_jid] ?? 0) + 1;
+      continue;
+    }
+    const existing = rowsByFolder.get(folder);
+    if (existing) {
+      existing.push(row);
+    } else {
+      rowsByFolder.set(folder, [row]);
+    }
+  }
 
-      if (!agentGroup) {
-        // Unknown chat_jid — skip with a warning tally.
-        skippedByJid[row.chat_jid] = (skippedByJid[row.chat_jid] ?? 0) + 1;
-        continue;
+  // Per-group summary accumulators.
+  const insertedByFolder: Record<string, number> = {};
+  const alreadyDoneByFolder: Record<string, string> = {};
+
+  // Process each group independently — open, check, write, close.
+  for (const [folder, rows] of rowsByFolder) {
+    const dbPath = recallDbPathForGroup(folder);
+    const recallDb = openRecallDb(dbPath);
+    ensureRecallSchema(recallDb);
+
+    // Per-group idempotency: if this group's DB already has the backfill
+    // marker, skip it without touching any data.
+    const existing = recallDb
+      .prepare<[string], { source: string; last_indexed_ts: string }>(
+        'SELECT source, last_indexed_ts FROM session_fts_state WHERE source = ?',
+      )
+      .get(BACKFILL_SOURCE);
+
+    if (existing) {
+      alreadyDoneByFolder[folder] = existing.last_indexed_ts;
+      recallDb.close();
+      continue;
+    }
+
+    // Prepared statements for this group's DB.
+    const deleteFts = recallDb.prepare<[string]>(
+      'DELETE FROM session_fts WHERE msg_id = ?',
+    );
+    const insertFts = recallDb.prepare<
+      [string, string, string, string, string, string]
+    >(
+      'INSERT INTO session_fts (msg_id, session_id, agent_group, ts, role, content) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const upsertState = recallDb.prepare<[string, string]>(
+      'INSERT INTO session_fts_state (source, last_indexed_ts) VALUES (?, ?) ' +
+        'ON CONFLICT(source) DO UPDATE SET last_indexed_ts = excluded.last_indexed_ts',
+    );
+
+    let inserted = 0;
+    let maxTs = '';
+
+    // Wrap all inserts in a transaction for atomicity and performance.
+    const runBackfill = recallDb.transaction(() => {
+      for (const row of rows) {
+        const role = deriveRole(row.sender);
+        const content = row.content ?? '';
+
+        // Idempotent: remove any existing index entry for this msg_id first.
+        deleteFts.run(row.id);
+        insertFts.run(row.id, 'v1', folder, row.timestamp, role, content);
+
+        inserted++;
+        if (row.timestamp > maxTs) maxTs = row.timestamp;
       }
 
-      const role = deriveRole(row.sender);
-      const content = row.content ?? '';
+      // Record the backfill watermark in this group's DB.
+      if (inserted > 0) {
+        upsertState.run(BACKFILL_SOURCE, maxTs);
+      }
+    });
 
-      // Idempotent: remove any existing index entry for this msg_id first.
-      deleteFts.run(row.id);
-      insertFts.run(row.id, 'v1', agentGroup, row.timestamp, role, content);
+    runBackfill();
+    recallDb.close();
 
-      inserted++;
-      if (row.timestamp > maxTs) maxTs = row.timestamp;
-    }
-
-    // Record the backfill watermark only if we actually indexed something.
-    if (inserted > 0) {
-      upsertState.run(BACKFILL_SOURCE, maxTs);
-    }
-  });
-
-  runBackfill();
-
-  recallDb.close();
+    insertedByFolder[folder] = inserted;
+  }
 
   // ─── Summary ────────────────────────────────────────────────────────────
-  console.log(`v1 backfill complete.`);
-  console.log(`  rows inserted : ${inserted}`);
-  console.log(`  max timestamp : ${maxTs || '(none)'}`);
+  console.log('v1 backfill complete.\n');
+  console.log('Per-group results:');
+
+  for (const [folder, count] of Object.entries(insertedByFolder)) {
+    console.log(`  ${folder}: ${count} rows inserted`);
+  }
+  for (const [folder, ts] of Object.entries(alreadyDoneByFolder)) {
+    console.log(
+      `  ${folder}: already backfilled (last_indexed_ts=${ts}) — skipped`,
+    );
+  }
 
   const skippedJids = Object.keys(skippedByJid);
   if (skippedJids.length > 0) {
-    console.log(`  skipped (unmapped chat_jid):`);
+    console.log('\nSkipped (unmapped chat_jid):');
     for (const jid of skippedJids) {
-      console.log(`    ${jid}: ${skippedByJid[jid]} rows`);
+      console.log(`  ${jid}: ${skippedByJid[jid]} rows`);
     }
   } else {
-    console.log(`  skipped      : 0 (all chat_jids mapped)`);
+    console.log('\nSkipped (unmapped chat_jid): 0 (all chat_jids mapped)');
   }
 }
 
