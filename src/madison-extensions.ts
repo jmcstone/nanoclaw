@@ -14,8 +14,7 @@ const ext = readEnvFile([
   'TESLA_TRACKER_API_KEY',
   'AMBIENT_WEATHER_URL',
   'CONTAINER_DNS',
-  'RECALL_DB_PATH',
-  'RECALL_MCP_PORT',
+  'RECALL_DB_DIR',
   'LITELLM_HOST_API_KEY',
 ]);
 
@@ -53,20 +52,22 @@ export function discoverAgentMailInboxes(): Record<string, string> {
   return result;
 }
 
-// Session-recall FTS5 index — separate DB file, snapshotted on btrfs alongside
-// all v2 durable state. process.env first (deploy override), then .env, then default.
-const _recallDbRaw =
-  process.env.RECALL_DB_PATH ||
-  ext.RECALL_DB_PATH ||
-  path.join(os.homedir(), 'containers/data/NanoClaw/v2/recall/session-recall.db');
-export const RECALL_DB_PATH = path.resolve(
-  _recallDbRaw.startsWith('~/') ? path.join(os.homedir(), _recallDbRaw.slice(2)) : _recallDbRaw,
+// Session-recall FTS5 index directory — per-group DBs sharded by agent folder,
+// snapshotted on btrfs alongside all v2 durable state.
+// process.env first (deploy override), then .env, then default.
+const _recallDbDirRaw =
+  process.env.RECALL_DB_DIR ||
+  ext.RECALL_DB_DIR ||
+  path.join(os.homedir(), 'containers/data/NanoClaw/v2/recall/');
+export const RECALL_DB_DIR = path.resolve(
+  _recallDbDirRaw.startsWith('~/') ? path.join(os.homedir(), _recallDbDirRaw.slice(2)) : _recallDbDirRaw,
 );
 
-// HTTP MCP port the recall server binds to on the gwbridge (172.31.0.1).
-// Must not collide with inbox-mcp (:18080), tasks-mcp (:18088), or LiteLLM (:4000).
-export const RECALL_MCP_PORT = Number(process.env.RECALL_MCP_PORT || ext.RECALL_MCP_PORT) || 18090;
+/** Return the recall DB path for a specific agent group folder. */
+export function recallDbPathForGroup(folder: string): string {
+  return path.join(RECALL_DB_DIR, folder + '.db');
+}
 
-// LiteLLM host API key — used by the in-orchestrator recall summariser and distiller.
-// May be undefined until provisioned; consumed by litellm-host-client.ts (Phase 1, Step 4a).
+// LiteLLM host API key — used by the Phase 2 host-side distiller.
+// May be undefined until provisioned; consumed by litellm-host-client.ts.
 export const LITELLM_HOST_API_KEY: string | undefined = process.env.LITELLM_HOST_API_KEY || ext.LITELLM_HOST_API_KEY;
