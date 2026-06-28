@@ -89,6 +89,17 @@ async function main(): Promise<void> {
     log(`Additional MCP server: ${name} (${target})`);
   }
 
+  // Recall MCP: opt-in when the per-group recall DB is bind-mounted.
+  // Absent groups (no recall DB mounted) simply skip registration — no error.
+  if (fs.existsSync('/workspace/extra/recall/recall.db')) {
+    mcpServers['recall'] = {
+      command: 'bun',
+      args: ['run', path.join(__dirname, 'recall-mcp-stdio.ts')],
+      env: {},
+    };
+    log('Recall MCP registered (recall DB present at /workspace/extra/recall/recall.db)');
+  }
+
   const provider = createProvider(providerName, {
     assistantName: config.assistantName || undefined,
     mcpServers,
