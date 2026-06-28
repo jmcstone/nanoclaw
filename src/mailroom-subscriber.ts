@@ -105,9 +105,7 @@ function mapEventKind(event: ClassifiedEvent['event']): InboxEventKind {
 
 function buildContent(event: ClassifiedEvent, kind: InboxEventKind): string {
   const sourceLabel = event.source === 'gmail' ? 'Gmail' : 'Proton';
-  const senderDisplay = event.sender.name
-    ? `${event.sender.name} <${event.sender.email}>`
-    : event.sender.email;
+  const senderDisplay = event.sender.name ? `${event.sender.name} <${event.sender.email}>` : event.sender.email;
   const priorityTag = kind === 'urgent' ? 'URGENT ' : '';
   const lines = [
     `[${priorityTag}${sourceLabel} email from ${senderDisplay}]`,

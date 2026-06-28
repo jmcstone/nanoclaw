@@ -332,9 +332,7 @@ function transformTelegramHtml(text: string): string {
   s = s.replace(/```([A-Za-z0-9_+-]*)\n?([\s\S]*?)```/g, (_, lang: string, body: string) => {
     const cleaned = body.replace(/\n$/, '');
     const inner = htmlEscape(cleaned);
-    const html = lang
-      ? `<pre><code class="language-${lang}">${inner}</code></pre>`
-      : `<pre>${inner}</pre>`;
+    const html = lang ? `<pre><code class="language-${lang}">${inner}</code></pre>` : `<pre>${inner}</pre>`;
     return mint(html);
   });
 

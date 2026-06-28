@@ -23,12 +23,7 @@ import { log } from './log.js';
 // the right-hand side of the @ (case-insensitive). allowAny is an explicit
 // escape hatch for testing — set true to bypass matching entirely.
 
-export const AGENTMAIL_ALLOWLIST_PATH = path.join(
-  os.homedir(),
-  '.config',
-  'nanoclaw',
-  'agentmail-allowlist.json',
-);
+export const AGENTMAIL_ALLOWLIST_PATH = path.join(os.homedir(), '.config', 'nanoclaw', 'agentmail-allowlist.json');
 
 export interface AgentMailFolderEntry {
   allowedSenders?: string[];
@@ -109,11 +104,7 @@ export function loadAgentMailAllowlist(pathOverride?: string): AgentMailAllowlis
  *   - exact match in allowedSenders (case-insensitive) → true
  *   - domain match in allowedDomains (case-insensitive) → true
  */
-export function isAgentMailSenderAllowed(
-  folder: string,
-  senderEmail: string,
-  allowlist: AgentMailAllowlist,
-): boolean {
+export function isAgentMailSenderAllowed(folder: string, senderEmail: string, allowlist: AgentMailAllowlist): boolean {
   const entry = allowlist[folder];
   if (!entry) return false;
   if (entry.allowAny === true) return true;
