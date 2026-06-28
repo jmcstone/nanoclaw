@@ -95,7 +95,9 @@ async function main(): Promise<void> {
     mcpServers['recall'] = {
       command: 'bun',
       args: ['run', path.join(__dirname, 'recall-mcp-stdio.ts')],
-      env: {},
+      env: Object.fromEntries(
+        Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
+      ),
     };
     log('Recall MCP registered (recall DB present at /workspace/extra/recall/recall.db)');
   }

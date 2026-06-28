@@ -2,18 +2,19 @@
  * Recall MCP Server for NanoClaw (Option B)
  *
  * In-container stdio MCP that exposes recall_sessions() — FTS5 search over
- * the per-group session recall DB, summarized via LiteLLM.
+ * the per-group session recall DB, summarized via Claude Haiku on the
+ * Max-plan subscription through the OneCLI credential proxy.
  *
  * Isolation model: each container receives ONLY its own group's recall DB,
  * bind-mounted read-only at /workspace/extra/recall/recall.db by
  * container-runner.ts. No tokens, no scope parameter — isolation is by
  * construction (the container physically cannot access another group's file).
  *
- * Reachability: LiteLLM is reached at http://172.31.0.1:4000 (the gwbridge
- * IP where the host-published :4000 is reachable from v2 containers).
- * LITELLM_BASE_URL / LITELLM_API_KEY are injected by container-runner.ts
- * alongside the existing per-group virtual key (same env vars the
- * litellm-route MCP uses).
+ * Reachability: the OneCLI proxy injects HTTPS_PROXY + CA certs into the
+ * container environment so any HTTPS call to api.anthropic.com gets the
+ * Max-plan credential injected at the proxy — no explicit API key needed.
+ * The recall MCP child inherits process.env (including HTTPS_PROXY) via
+ * env: { ...process.env } in the MCP registration in index.ts.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -23,14 +24,13 @@ import { Database } from 'bun:sqlite';
 import fs from 'fs';
 
 const RECALL_DB_PATH = '/workspace/extra/recall/recall.db';
-const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || 'http://172.31.0.1:4000';
-const LITELLM_API_KEY = process.env.LITELLM_API_KEY || '';
+
 /**
- * LiteLLM model alias for cheap summarization.
- * "haiku" is the alias registered in the LiteLLM gateway config
- * (documented in design doc MEMORY-RECALL-DESIGN.md §2 and litellm-host-client.ts).
+ * Summarize via Claude Haiku on the Max-plan subscription.
+ * The OneCLI proxy (HTTPS_PROXY) injects the credential — no API key set here.
  */
-const SUMMARIZE_MODEL = 'haiku';
+const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const SUMMARIZE_MODEL = 'claude-haiku-4-5';
 
 const DEFAULT_LIMIT = 12;
 
@@ -57,42 +57,44 @@ function log(msg: string): void {
   console.error(`[RECALL] ${msg}`);
 }
 
-async function summarizeViaLiteLLM(query: string, excerpts: string): Promise<string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (LITELLM_API_KEY) {
-    headers['Authorization'] = `Bearer ${LITELLM_API_KEY}`;
-  }
-
-  const prompt =
-    `Summarize the following conversation excerpts in ≤120 words, directly answering the ` +
-    `query: "${query}". Cite relevant dates.\n\n${excerpts}`;
-
-  const res = await fetch(`${LITELLM_BASE_URL}/v1/chat/completions`, {
+async function summarizeViaAnthropic(query: string, excerpts: string): Promise<string> {
+  const res = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
-    headers,
+    headers: {
+      'content-type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      // No authorization header — the OneCLI HTTPS_PROXY injects the
+      // Max-plan credential at the proxy layer.
+    },
     body: JSON.stringify({
       model: SUMMARIZE_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      stream: false,
-      max_tokens: 200,
+      max_tokens: 400,
+      system:
+        'You are a recall assistant. Summarize the following past-conversation excerpts ' +
+        'in ≤120 words, directly answering the user\'s query. Cite relevant dates from ' +
+        'the excerpts.',
+      messages: [
+        {
+          role: 'user',
+          content: `Query: "${query}"\n\nExcerpts:\n${excerpts}`,
+        },
+      ],
     }),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`LiteLLM error (${res.status}): ${text.slice(0, 200)}`);
+    throw new Error(`Anthropic API error (${res.status}): ${text.slice(0, 200)}`);
   }
 
   const data = (await res.json()) as {
-    choices: Array<{ message: { content: string } }>;
+    content: Array<{ type: string; text: string }>;
   };
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') {
-    throw new Error('LiteLLM response missing choices[0].message.content');
+  const text = data.content?.[0]?.text;
+  if (typeof text !== 'string') {
+    throw new Error('Anthropic response missing content[0].text');
   }
-  return content;
+  return text;
 }
 
 const server = new McpServer({
@@ -211,7 +213,7 @@ server.tool(
 
     let summary: string;
     try {
-      summary = await summarizeViaLiteLLM(args.query, excerpts);
+      summary = await summarizeViaAnthropic(args.query, excerpts);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`Summarization failed (${msg}) — degrading to unsummarized excerpts`);
@@ -240,4 +242,4 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-log(`Recall MCP server ready (db: ${RECALL_DB_PATH}, gateway: ${LITELLM_BASE_URL})`);
+log(`Recall MCP server ready (db: ${RECALL_DB_PATH}, summarizer: ${SUMMARIZE_MODEL} via OneCLI proxy)`);
