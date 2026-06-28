@@ -109,3 +109,19 @@ export const SELF_IMPROVE_GROUPS: Set<string> = new Set(
 export function isSelfImproveEnabled(folder: string): boolean {
   return SELF_IMPROVE_GROUPS.has(folder);
 }
+
+/**
+ * Resolve a per-group LiteLLM API key for spend attribution.
+ *
+ * The env var name is `LITELLM_API_KEY_<FOLDER_UPPER>` (e.g. folder
+ * `telegram_main` → `LITELLM_API_KEY_TELEGRAM_MAIN`). process.env is checked
+ * first (deploy override), then the .env file. Returns `undefined` when no
+ * per-group key is configured — callers fall back to `LITELLM_HOST_API_KEY`.
+ */
+export function resolveGroupLitellmKey(folder: string): string | undefined {
+  const name = `LITELLM_API_KEY_${folder.toUpperCase()}`;
+  const fromEnv = process.env[name];
+  if (fromEnv) return fromEnv;
+  const fromFile = readEnvFile([name])[name];
+  return fromFile || undefined;
+}

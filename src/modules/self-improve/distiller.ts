@@ -36,6 +36,7 @@ import {
   isSelfImproveEnabled,
   proposalsDir,
   recallDbPathForGroup,
+  resolveGroupLitellmKey,
   selfImproveDbPath,
 } from '../../madison-extensions.js';
 import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
@@ -276,10 +277,15 @@ async function runDistillPass(session: Session, folder: string): Promise<void> {
         (recallContext ? `Already known (do NOT re-propose):\n${recallContext}\n\n` : '') +
         `Conversation transcript:\n${transcript}`;
 
-      modelResponse = await callHostLiteLLM(DISTILLER_MODEL, [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ]);
+      // Per-group key for spend attribution; undefined → callHostLiteLLM falls back to LITELLM_HOST_API_KEY.
+      modelResponse = await callHostLiteLLM(
+        DISTILLER_MODEL,
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+        { apiKey: resolveGroupLitellmKey(folder) },
+      );
     } catch (err) {
       log.error('distiller: step 5 — LiteLLM call', { sessionId: session.id, err });
     }
