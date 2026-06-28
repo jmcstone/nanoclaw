@@ -5,6 +5,7 @@ import path from 'path';
 import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
+import { MADISON_DISALLOWED_TOOLS } from '../madison-tool-policy.js';
 import { registerProvider } from './provider-registry.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
@@ -33,19 +34,8 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitPlanMode',
   'EnterWorktree',
   'ExitWorktree',
-  // Trawl tool denylist — groups process untrusted web/email, so a prompt-
-  // injected agent must not reach Trawl's external write/act tools. Denied:
-  // the full-agent delegate (it has access to every tool → would bypass this
-  // list), the arbitrary pipeline runner, external form submission, and Zoho
-  // CRM writes. Reads/search/research + local DataStore writes stay allowed.
-  // Disallow wins over the `mcp__trawl__*` allow pattern.
-  'mcp__trawl__trawl_delegate',
-  'mcp__trawl__trawl_pipeline_run',
-  'mcp__trawl__submit_form',
-  'mcp__trawl__zoho_insert_records',
-  'mcp__trawl__zoho_update_records',
-  'mcp__trawl__zoho_upsert_records',
-  'mcp__trawl__zoho_setup_module',
+  // Madison fork: extra denylist (Trawl external write/act tools) — see module.
+  ...MADISON_DISALLOWED_TOOLS,
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived

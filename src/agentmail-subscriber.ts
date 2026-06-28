@@ -15,12 +15,8 @@
  */
 import { AgentMailClient } from 'agentmail';
 
-import {
-  AgentMailAllowlist,
-  isAgentMailSenderAllowed,
-  loadAgentMailAllowlist,
-} from './agentmail-allowlist.js';
-import { discoverAgentMailInboxes, resolveAgentMailApiKey } from './config.js';
+import { AgentMailAllowlist, isAgentMailSenderAllowed, loadAgentMailAllowlist } from './agentmail-allowlist.js';
+import { discoverAgentMailInboxes, resolveAgentMailApiKey } from './madison-extensions.js';
 import { getAgentGroupByFolder } from './db/agent-groups.js';
 import { wakeContainer } from './container-runner.js';
 import { log } from './log.js';
@@ -90,21 +86,29 @@ export function classifyAgentMailMessage(msg: unknown): ClassifyDecision {
   };
 }
 
-// Strip an RFC 5322 display-name wrapper so the store sees a bare email.
+// Strip an RFC 5322 display-name wrapper so the store sees a bare email. Use the
+// LAST <...> so a crafted `Name <spoof <real@x>` can't hide the real address.
 export function parseEmailAddress(raw: string): string {
-  const match = raw.match(/<([^>]+)>/);
-  return match ? match[1].trim() : raw.trim();
+  const all = [...raw.matchAll(/<([^>]+)>/g)];
+  return all.length ? all[all.length - 1][1].trim() : raw.trim();
+}
+
+// Inbound email is untrusted. Cap each field before it enters the agent's
+// context so a compromised/allowlisted sender can't deliver an oversized
+// prompt-injection payload through the subject/preview/from.
+const MAX_FROM_CHARS = 200;
+const MAX_SUBJECT_CHARS = 200;
+const MAX_PREVIEW_CHARS = 500;
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}… [truncated]` : s;
 }
 
 function buildContent(event: InboundEventLike): string {
-  const senderDisplay = event.message.from;
-  const senderEmail = parseEmailAddress(senderDisplay);
-  const subject = event.message.subject ?? '(no subject)';
-  const lines = [
-    `[AgentMail email from ${senderDisplay} → ${event.message.inboxId}]`,
-    `Subject: ${subject}`,
-  ];
-  if (event.message.preview) lines.push(`Preview: ${event.message.preview}`);
+  const senderDisplay = clip(event.message.from, MAX_FROM_CHARS);
+  const senderEmail = parseEmailAddress(event.message.from); // parse from RAW, not clipped
+  const subject = clip(event.message.subject ?? '(no subject)', MAX_SUBJECT_CHARS);
+  const lines = [`[AgentMail email from ${senderDisplay} → ${event.message.inboxId}]`, `Subject: ${subject}`];
+  if (event.message.preview) lines.push(`Preview: ${clip(event.message.preview, MAX_PREVIEW_CHARS)}`);
   lines.push(
     '',
     'Use mcp__agentmail__get_message / mcp__agentmail__list_messages to read more,',
@@ -202,12 +206,22 @@ export async function startAgentMailSubscriber(): Promise<void> {
 
   socket.on('message', (m: unknown) => handleFrame(m));
   socket.on('close', (event: { code?: number; reason?: string } | undefined) => {
-    log.warn('AgentMail: WebSocket closed (SDK auto-reconnects)', { code: event?.code });
+    // reason carries the diagnostic text for auth revocations / protocol errors.
+    log.warn('AgentMail: WebSocket closed (SDK auto-reconnects)', { code: event?.code, reason: event?.reason });
   });
   socket.on('error', (err: unknown) => log.error('AgentMail: WebSocket error', { err }));
 
-  await socket.waitForOpen();
-  socket.sendSubscribe({ type: 'subscribe', inboxIds });
+  // waitForOpen / the initial subscribe can throw; without this the rejection
+  // escapes the fire-and-forget caller and the subscriber dies silently until
+  // a host restart. Mirror the reconnect handler's guard.
+  try {
+    await socket.waitForOpen();
+    socket.sendSubscribe({ type: 'subscribe', inboxIds });
+    // eslint-disable-next-line no-catch-all/no-catch-all -- SDK throws diverse network/protocol errors here
+  } catch (err) {
+    log.error('AgentMail: initial subscribe failed — disabled (host restart to retry)', { err, inboxes: inboxIds });
+    return;
+  }
   log.info('AgentMail subscriber connected and subscribed', { inboxes: inboxIds, folders });
 
   // SDK auto-reconnects but won't re-subscribe — install AFTER the first

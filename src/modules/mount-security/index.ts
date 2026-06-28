@@ -266,7 +266,10 @@ export function validateMount(mount: AdditionalMount): MountValidationResult {
   // path in allowedRoots, they've consciously opted into a sensitive location
   // (e.g. `~/.ssh/gitlab` for git push from a dev container), so the explicit
   // listing wins over the default block. A broader parent allowedRoot does NOT
-  // grant the bypass — only an exact match.
+  // grant the bypass — only an exact match. NOTE: findAllowedRoot returns the
+  // FIRST matching root by array order, so a specific entry (e.g. ~/.ssh/gitlab)
+  // must appear BEFORE any broader parent (e.g. ~/.ssh) in allowedRoots for its
+  // exact-match bypass to fire.
   const allowedRoot = findAllowedRoot(realPath, allowlist.allowedRoots);
   if (allowedRoot === null) {
     return {

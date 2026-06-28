@@ -11,18 +11,17 @@ import { OneCLI } from '@onecli-sh/sdk';
 
 import {
   CONTAINER_CPU_LIMIT,
-  CONTAINER_DNS,
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
   CONTAINER_INSTALL_LABEL,
   CONTAINER_MEMORY_LIMIT,
-  CONTAINER_SKILL_ENV,
   DATA_DIR,
   GROUPS_DIR,
   ONECLI_API_KEY,
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
+import { CONTAINER_DNS, CONTAINER_SKILL_ENV } from './madison-extensions.js';
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';

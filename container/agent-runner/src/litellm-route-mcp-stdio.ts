@@ -26,6 +26,10 @@ import sharp from 'sharp';
 const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || 'http://172.31.0.1:4000';
 const LITELLM_API_KEY = process.env.LITELLM_API_KEY || '';
 const LITELLM_STATUS_FILE = '/workspace/ipc/litellm_status.json';
+const JPEG_QUALITY = 90;
+// Constrain generated-image writes to the agent's writable mounts (mirrors the
+// tool description) so a prompt-injected agent can't write arbitrary container paths.
+const ALLOWED_OUTPUT_ROOTS = ['/workspace/group/', '/workspace/downloads/', '/workspace/extra/'];
 
 function log(msg: string): void {
   console.error(`[LITELLM] ${msg}`);
@@ -264,6 +268,18 @@ server.tool(
       };
     }
 
+    if (args.output_path.includes('..') || !ALLOWED_OUTPUT_ROOTS.some((r) => args.output_path.startsWith(r))) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `output_path must be an absolute path under one of: ${ALLOWED_OUTPUT_ROOTS.join(', ')} (no "..").`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
     log(`>>> Generating image with ${model} -> ${args.output_path}`);
     writeStatus('generating', `Image: ${model}`);
 
@@ -330,7 +346,7 @@ server.tool(
       const ext = path.extname(args.output_path).toLowerCase();
       if (ext === '.png') pipeline = pipeline.png();
       else if (ext === '.webp') pipeline = pipeline.webp();
-      else pipeline = pipeline.jpeg({ quality: 90 });
+      else pipeline = pipeline.jpeg({ quality: JPEG_QUALITY });
       const out = await pipeline.toBuffer();
 
       fs.mkdirSync(path.dirname(args.output_path), { recursive: true });

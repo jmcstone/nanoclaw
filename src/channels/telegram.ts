@@ -322,5 +322,12 @@ registerChannelAdapter('telegram', {
 for (const [key, token] of Object.entries(readEnvKeysWithPrefix('TELEGRAM_BOT_TOKEN__'))) {
   const instance = key.slice('TELEGRAM_BOT_TOKEN__'.length).toLowerCase();
   if (!instance || !token) continue;
+  // 'telegram' is the default instance (registered above). Re-registering it
+  // would silently clobber the default bot's factory in the registry Map, so
+  // the main bot would stop responding with no diagnostic. Refuse it loudly.
+  if (instance === 'telegram') {
+    log.warn('Ignoring TELEGRAM_BOT_TOKEN__TELEGRAM — "telegram" is the reserved default instance', { key });
+    continue;
+  }
   registerChannelAdapter(instance, { factory: () => buildTelegramAdapter(token, instance) });
 }
