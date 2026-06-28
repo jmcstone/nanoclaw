@@ -17,6 +17,7 @@ const ext = readEnvFile([
   'RECALL_DB_DIR',
   'LITELLM_HOST_API_KEY',
   'SELF_IMPROVE_DIR',
+  'SELF_IMPROVE_GROUPS',
 ]);
 
 // Tailnet DNS resolver (MagicDNS) for agent containers; opt-in via CONTAINER_DNS.
@@ -75,7 +76,9 @@ export const LITELLM_HOST_API_KEY: string | undefined = process.env.LITELLM_HOST
 // helpfulness_events live here (host-side, on the btrfs-snapshotted data volume).
 // Mirrors RECALL_DB_DIR precedence: process.env first, then .env, then default.
 const _selfImproveDirRaw =
-  process.env.SELF_IMPROVE_DIR || ext.SELF_IMPROVE_DIR || path.join(os.homedir(), 'containers/data/NanoClaw/v2/self-improve/');
+  process.env.SELF_IMPROVE_DIR ||
+  ext.SELF_IMPROVE_DIR ||
+  path.join(os.homedir(), 'containers/data/NanoClaw/v2/self-improve/');
 export const SELF_IMPROVE_DIR = path.resolve(
   _selfImproveDirRaw.startsWith('~/') ? path.join(os.homedir(), _selfImproveDirRaw.slice(2)) : _selfImproveDirRaw,
 );
@@ -88,4 +91,21 @@ export function selfImproveDbPath(): string {
 /** Return the proposals directory for a specific agent group folder. */
 export function proposalsDir(folder: string): string {
   return path.join(SELF_IMPROVE_DIR, 'proposals', folder);
+}
+
+// Self-improve per-group allowlist — comma-separated group folders.
+// Only groups listed here participate in distillation and the nightly promote pass.
+// Default: empty set → the entire self-improvement system is a no-op (safe rollout).
+// process.env first (deploy override), then .env key SELF_IMPROVE_GROUPS.
+const _selfImproveGroupsRaw: string = process.env.SELF_IMPROVE_GROUPS || ext.SELF_IMPROVE_GROUPS || '';
+export const SELF_IMPROVE_GROUPS: Set<string> = new Set(
+  _selfImproveGroupsRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0),
+);
+
+/** Return true iff the given group folder is opted in to self-improvement. */
+export function isSelfImproveEnabled(folder: string): boolean {
+  return SELF_IMPROVE_GROUPS.has(folder);
 }

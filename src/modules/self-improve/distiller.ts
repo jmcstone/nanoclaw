@@ -32,7 +32,12 @@ import { GROUPS_DIR } from '../../config.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { log } from '../../log.js';
 import { callHostLiteLLM } from '../../litellm-host-client.js';
-import { proposalsDir, recallDbPathForGroup, selfImproveDbPath } from '../../madison-extensions.js';
+import {
+  isSelfImproveEnabled,
+  proposalsDir,
+  recallDbPathForGroup,
+  selfImproveDbPath,
+} from '../../madison-extensions.js';
 import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
 import { SQL_FTS_DELETE, SQL_FTS_INSERT, ensureRecallSchema, openRecallDb } from '../../recall/schema.js';
 import { inboundDbPath, outboundDbPath } from '../../session-manager.js';
@@ -78,6 +83,7 @@ const pendingDistills = new Map<string, NodeJS.Timeout>();
  * wakes and closes again resets the delay (SI-1 cancellable-delay pattern).
  */
 export function scheduleDistill(session: Session, folder: string): void {
+  if (!isSelfImproveEnabled(folder)) return;
   const existing = pendingDistills.get(session.id);
   if (existing !== undefined) {
     clearTimeout(existing);

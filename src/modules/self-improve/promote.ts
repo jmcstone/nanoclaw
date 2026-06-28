@@ -33,7 +33,7 @@ import path from 'path';
 import { getAllAgentGroups } from '../../db/agent-groups.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { log } from '../../log.js';
-import { proposalsDir, selfImproveDbPath } from '../../madison-extensions.js';
+import { isSelfImproveEnabled, proposalsDir, selfImproveDbPath } from '../../madison-extensions.js';
 import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
 import { appendJournal, commitJournalAndSkills } from './journal.js';
 import { reRankL1 } from './l1-lifecycle.js';
@@ -197,6 +197,7 @@ export async function runNightlyPromote(): Promise<void> {
 
   for (const group of groups) {
     const { folder } = group;
+    if (!isSelfImproveEnabled(folder)) continue;
     try {
       const candidates: GroupResult['candidates'] = [];
 
