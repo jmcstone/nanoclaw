@@ -15,6 +15,7 @@ import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
+import { startSessionIndexer, stopSessionIndexer } from './session-indexer.js';
 import { startAgentMailSubscriber, stopAgentMailSubscriber } from './agentmail-subscriber.js';
 import { startMailroomSubscriber, stopMailroomSubscriber } from './mailroom-subscriber.js';
 import { routeInbound } from './router.js';
@@ -168,6 +169,7 @@ async function main(): Promise<void> {
 
   // 6. Start host sweep
   startHostSweep();
+  startSessionIndexer();
   log.info('Host sweep started');
 
   // 6b. Start the mailroom subscriber (host-side ingest of the external
@@ -197,6 +199,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
+  stopSessionIndexer();
   stopMailroomSubscriber();
   stopAgentMailSubscriber();
   await stopCliServer();
