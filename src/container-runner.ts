@@ -21,7 +21,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { CONTAINER_DNS, CONTAINER_SKILL_ENV } from './madison-extensions.js';
+import { CONTAINER_DNS, CONTAINER_SKILL_ENV, recallDbPathForGroup } from './madison-extensions.js';
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
@@ -348,6 +348,15 @@ export function buildMounts(
   const skillsSrc = path.join(projectRoot, 'container', 'skills');
   if (fs.existsSync(skillsSrc)) {
     mounts.push({ hostPath: skillsSrc, containerPath: '/app/skills', readonly: true });
+  }
+
+  // Per-group recall DB — read-only so the in-container recall MCP can query
+  // it but the agent cannot modify it. Only mounted when the DB exists (new
+  // groups start with no recall history). Option B: each group gets its own
+  // DB mounted at the fixed container path the recall stdio MCP expects.
+  const recallDbPath = recallDbPathForGroup(agentGroup.folder);
+  if (fs.existsSync(recallDbPath)) {
+    mounts.push({ hostPath: recallDbPath, containerPath: '/workspace/extra/recall/recall.db', readonly: true });
   }
 
   // Additional mounts from container config
