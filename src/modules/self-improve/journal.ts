@@ -58,8 +58,8 @@ export function appendJournal(action: JournalAction, key: string, content: strin
 /**
  * Batch git commit of the journal + promoted skills — for the nightly cron pass.
  *
- * Path-scoped: stages only `self-improve-journal/JOURNAL.md` and
- * `container/skills/` — never touches other tracked files.
+ * Path-scoped: stages only `self-improve-journal/JOURNAL.md` (when it exists)
+ * and `container/skills/` — never touches other tracked files.
  * No-op when nothing is staged (idempotent on repeated calls).
  * Retries once on `index.lock` contention (500 ms wait).
  * Never throws.
@@ -68,9 +68,20 @@ export function commitJournalAndSkills(): void {
   const date = new Date().toISOString().slice(0, 10);
   const msg = `self-improve: ${date} journal+skills`;
 
+  // Build add-list dynamically so a missing journal (empty-state / first run)
+  // does not produce a fatal pathspec error.
+  const addPaths: string[] = ['container/skills'];
+  if (fs.existsSync(JOURNAL_PATH)) {
+    addPaths.push('self-improve-journal/JOURNAL.md');
+  }
+  if (addPaths.length === 0) {
+    log.debug('journal: commitJournalAndSkills — no paths to add, skipping');
+    return;
+  }
+
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      execSync('git add self-improve-journal/JOURNAL.md container/skills', {
+      execSync(`git add ${addPaths.join(' ')}`, {
         cwd: PROJECT_ROOT,
         stdio: 'pipe',
       });
