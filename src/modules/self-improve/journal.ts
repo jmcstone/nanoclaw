@@ -64,9 +64,13 @@ export function appendJournal(action: JournalAction, key: string, content: strin
 /**
  * Batch git commit of the journal + promoted skills — for the nightly cron pass.
  *
- * Path-scoped: stages only `self-improve-journal/JOURNAL.md` (when it exists)
- * and `container/skills/` — never touches other tracked files.
- * No-op when nothing is staged (idempotent on repeated calls).
+ * Stages only self-improve-authored files:
+ *   - `self-improve-journal/JOURNAL.md` (when it exists)
+ *   - NEW (untracked) files under `container/skills/` only — never stages
+ *     modifications to existing tracked skill files (those belong to the developer).
+ * No-op when there is nothing to stage.
+ * Path-scoped diff check and commit — unrelated staged changes are left untouched.
+ * Resets staged paths on commit failure to leave the developer's index clean.
  * Retries once on `index.lock` contention (500 ms wait).
  * Never throws.
  */
@@ -74,23 +78,46 @@ export async function commitJournalAndSkills(): Promise<void> {
   const date = new Date().toISOString().slice(0, 10);
   const msg = `self-improve: ${date} journal+skills`;
 
-  // Build add-list dynamically so a missing journal (empty-state / first run)
-  // does not produce a fatal pathspec error.
-  const addPaths: string[] = ['container/skills'];
-  if (fs.existsSync(JOURNAL_PATH)) {
-    addPaths.push('self-improve-journal/JOURNAL.md');
-  }
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // --- Determine which files to stage ---------------------------------------
+  // FIX 4: guard against absent skills directory (fresh/pruned tree).
+  // FIX 2: stage only NEW (untracked) skill files via ls-files --others;
+  //         existing tracked files under container/skills/ belong to the developer.
+  const stagedPaths: string[] = [];
+
+  if (fs.existsSync(SKILLS_DIR)) {
     try {
-      execSync(`git add ${addPaths.join(' ')}`, {
+      const lsOut = execSync('git ls-files --others --exclude-standard -z -- container/skills', {
         cwd: PROJECT_ROOT,
         stdio: 'pipe',
-      });
+      }).toString();
+      const newSkills = lsOut.split('\0').filter(Boolean);
+      stagedPaths.push(...newSkills);
+    } catch (err) {
+      log.error('journal: git ls-files failed', { err });
+      return;
+    }
+  }
 
-      // git diff --cached --quiet: exit 0 = nothing staged, exit 1 = staged changes.
+  if (fs.existsSync(JOURNAL_PATH)) {
+    stagedPaths.push('self-improve-journal/JOURNAL.md');
+  }
+
+  if (stagedPaths.length === 0) {
+    log.debug('journal: commitJournalAndSkills — nothing to stage, skipping');
+    return;
+  }
+
+  // Shell-safe path args: JSON.stringify wraps each path in double-quotes.
+  const pathArgs = stagedPaths.map((p) => JSON.stringify(p)).join(' ');
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      execSync(`git add -- ${pathArgs}`, { cwd: PROJECT_ROOT, stdio: 'pipe' });
+
+      // FIX 1: path-scope the staged check to self-improve paths only.
       let hasStagedChanges = false;
       try {
-        execSync('git diff --cached --quiet', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+        execSync(`git diff --cached --quiet -- ${pathArgs}`, { cwd: PROJECT_ROOT, stdio: 'pipe' });
       } catch {
         hasStagedChanges = true;
       }
@@ -100,7 +127,8 @@ export async function commitJournalAndSkills(): Promise<void> {
         return;
       }
 
-      execSync(`git commit -m ${JSON.stringify(msg)}`, {
+      // FIX 1: path-scope the commit; leaves unrelated staged changes untouched.
+      execSync(`git commit -m ${JSON.stringify(msg)} -- ${pathArgs}`, {
         cwd: PROJECT_ROOT,
         stdio: 'pipe',
       });
@@ -114,6 +142,13 @@ export async function commitJournalAndSkills(): Promise<void> {
         continue;
       }
       log.error('journal: commitJournalAndSkills failed', { err, attempt });
+      // FIX 3: best-effort unstage the paths this function staged; leaves the
+      //         developer's index as it was before this function ran.
+      try {
+        execSync(`git reset HEAD -- ${pathArgs}`, { cwd: PROJECT_ROOT, stdio: 'pipe' });
+      } catch {
+        // Ignore reset errors — never throw.
+      }
       return;
     }
   }
