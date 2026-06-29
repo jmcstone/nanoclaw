@@ -23,7 +23,13 @@ const PROJECT_ROOT = process.cwd();
 export const JOURNAL_DIR = path.join(PROJECT_ROOT, 'self-improve-journal');
 export const JOURNAL_PATH = path.join(JOURNAL_DIR, 'JOURNAL.md');
 
+/** Path to the container skills directory (git-tracked; committed by the nightly cron). */
+export const SKILLS_DIR = path.join(PROJECT_ROOT, 'container', 'skills');
+
 const HEADER = '# Self-Improvement Journal\n\n';
+
+/** Wait duration before retrying git commit after an index.lock collision. */
+const LOCK_RETRY_DELAY_MS = 500;
 
 export type JournalAction = 'fact-add' | 'fact-evict' | 'fact-correct' | 'skill-trial' | 'skill-promote';
 
@@ -64,7 +70,7 @@ export function appendJournal(action: JournalAction, key: string, content: strin
  * Retries once on `index.lock` contention (500 ms wait).
  * Never throws.
  */
-export function commitJournalAndSkills(): void {
+export async function commitJournalAndSkills(): Promise<void> {
   const date = new Date().toISOString().slice(0, 10);
   const msg = `self-improve: ${date} journal+skills`;
 
@@ -74,11 +80,6 @@ export function commitJournalAndSkills(): void {
   if (fs.existsSync(JOURNAL_PATH)) {
     addPaths.push('self-improve-journal/JOURNAL.md');
   }
-  if (addPaths.length === 0) {
-    log.debug('journal: commitJournalAndSkills — no paths to add, skipping');
-    return;
-  }
-
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       execSync(`git add ${addPaths.join(' ')}`, {
@@ -109,7 +110,7 @@ export function commitJournalAndSkills(): void {
       const isLock = err instanceof Error && err.message.includes('index.lock');
       if (isLock && attempt === 0) {
         log.warn('journal: index.lock detected, retrying after 500 ms');
-        execSync('sleep 0.5');
+        await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
         continue;
       }
       log.error('journal: commitJournalAndSkills failed', { err, attempt });

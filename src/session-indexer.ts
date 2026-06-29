@@ -26,6 +26,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { extractText } from './message-utils.js';
 import { recallDbPathForGroup } from './madison-extensions.js';
 import { openRecallDb, ensureRecallSchema, SQL_FTS_DELETE, SQL_FTS_INSERT, SQL_STATE_UPSERT } from './recall/schema.js';
 import { sessionsBaseDir, inboundDbPath, outboundDbPath } from './session-manager.js';
@@ -255,30 +256,4 @@ function indexSource(recallDb: Database.Database, opts: IndexSourceOpts): void {
   } finally {
     sourceDb.close();
   }
-}
-
-// ---------------------------------------------------------------------------
-// Content extraction
-// ---------------------------------------------------------------------------
-
-/**
- * Extract indexable text from a message content JSON blob.
- *
- * Both messages_in and messages_out store `content` as a JSON string.
- * The expected shape for user/email messages is `{ text: string, ... }`;
- * agent (outbound) messages may use `{ text: string }` or `{ markdown: string }`.
- * Falls back gracefully if the shape differs or JSON parse fails.
- */
-function extractText(contentStr: string): string {
-  try {
-    const parsed = JSON.parse(contentStr) as Record<string, unknown>;
-    if (typeof parsed.text === 'string' && parsed.text) return parsed.text;
-    if (typeof parsed.markdown === 'string' && parsed.markdown) return parsed.markdown;
-    if (typeof parsed.content === 'string' && parsed.content) return parsed.content;
-  } catch {
-    // Not JSON — index the raw string as-is if it's non-empty.
-    const trimmed = contentStr.trim();
-    if (trimmed) return trimmed;
-  }
-  return '';
 }

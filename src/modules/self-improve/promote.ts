@@ -35,32 +35,28 @@ import { getDeliveryAdapter } from '../../delivery.js';
 import { log } from '../../log.js';
 import { isSelfImproveEnabled, proposalsDir, selfImproveDbPath } from '../../madison-extensions.js';
 import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
-import { appendJournal, commitJournalAndSkills } from './journal.js';
+import { appendJournal, commitJournalAndSkills, SKILLS_DIR } from './journal.js';
 import { reRankL1 } from './l1-lifecycle.js';
 import { ensureSelfImproveSchema, openSelfImproveDb } from './schema.js';
+import type { SkillItem } from './schema.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = process.cwd();
-const SKILLS_DIR = path.join(PROJECT_ROOT, 'container', 'skills');
-
 const STARTUP_DELAY_MS = 60_000; // 60 s before the very first run
 const INTERVAL_MS = 24 * 60 * 60_000; // 24 h between runs
 const MIN_INTERVAL_MS = 20 * 60 * 60_000; // 20 h guard — skip if run too recently
 const CORRECTION_LOOKBACK_DAYS = 7;
+/** Token budget for L1 CLAUDE.local.md re-rank (Math.ceil(chars / 4) estimate). */
+const L1_TOKEN_BUDGET = 1500;
+
+/** Maximum number of recently-corrected keys reported in the nightly digest. */
+const MAX_CORRECTION_KEYS_DIGEST = 20;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-interface SkillCandidate {
-  key: string;
-  name: string;
-  procedure: string;
-  evidence_summary: string;
-}
 
 interface GroupResult {
   folder: string;
@@ -171,7 +167,7 @@ export async function runNightlyPromote(): Promise<void> {
       const since = new Date(now - CORRECTION_LOOKBACK_DAYS * 24 * 60 * 60_000).toISOString();
       const corrRows = db
         .prepare(
-          "SELECT DISTINCT key FROM helpfulness_events WHERE event = 'corrected' AND ts >= ? ORDER BY ts DESC LIMIT 20",
+          `SELECT DISTINCT key FROM helpfulness_events WHERE event = 'corrected' AND ts >= ? ORDER BY ts DESC LIMIT ${MAX_CORRECTION_KEYS_DIGEST}`,
         )
         .all(since) as Array<{ key: string }>;
       for (const r of corrRows) correctionKeys.push(r.key);
@@ -199,53 +195,8 @@ export async function runNightlyPromote(): Promise<void> {
     const { folder } = group;
     if (!isSelfImproveEnabled(folder)) continue;
     try {
-      const candidates: GroupResult['candidates'] = [];
-
-      // ── Step 1+2: surface skill candidates ───────────────────────────────
-      for (const key of qualifyingKeys) {
-        if (processedInRun.has(key)) continue;
-
-        const candidate = findSkillCandidate(folder, key);
-        if (!candidate) continue; // Not a skill from this group.
-
-        // Skip if the trial skill already exists (already approved in a prior pass).
-        if (fs.existsSync(path.join(SKILLS_DIR, candidate.name, 'instructions.md'))) {
-          log.debug('promote: skill already trialing — skipping', {
-            key,
-            name: candidate.name,
-            folder,
-          });
-          continue;
-        }
-
-        processedInRun.add(key);
-        candidates.push({
-          key: candidate.key,
-          name: candidate.name,
-          evidence_summary: candidate.evidence_summary,
-        });
-
-        appendJournal('skill-promote', key, candidate.name, folder);
-        log.info('promote: skill candidate surfaced', { key, name: candidate.name, folder });
-      }
-
-      // ── Step 3: re-rank L1 ───────────────────────────────────────────────
-      let resident: string[] = [];
-      let demoted: string[] = [];
-      try {
-        const rankResult = reRankL1(folder, 1500);
-        resident = rankResult.resident;
-        demoted = rankResult.demoted;
-        log.info('promote: L1 re-rank complete', {
-          folder,
-          resident: resident.length,
-          demoted: demoted.length,
-        });
-      } catch (err) {
-        log.error('promote: L1 re-rank failed', { folder, err });
-      }
-
-      results.push({ folder, candidates, resident, demoted });
+      const result = await processGroup(folder, qualifyingKeys, processedInRun);
+      results.push(result);
     } catch (err) {
       log.error('promote: per-group error (continuing)', { folder, err });
     }
@@ -256,7 +207,7 @@ export async function runNightlyPromote(): Promise<void> {
 
   // ── Nightly git commit: journal + container/skills/ (DISC-7) ──────────────
   // Single call, after all groups — one batched path-scoped commit per night.
-  commitJournalAndSkills();
+  await commitJournalAndSkills();
 
   lastRun = Date.now();
   log.info('promote: nightly promote pass complete', {
@@ -264,6 +215,60 @@ export async function runNightlyPromote(): Promise<void> {
     skillCandidates: results.reduce((s, r) => s + r.candidates.length, 0),
     lastRun,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Per-group helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Process a single agent group during the nightly promote pass.
+ *
+ * Surfaces qualifying skill candidates (session_count ≥ 2, not yet trialing)
+ * and re-ranks the L1 fact pool.  Updates `processedInRun` in place to prevent
+ * the same key from being surfaced across multiple groups in one night.
+ *
+ * Never throws — any error is logged and an empty result is returned so the
+ * loop continues with the next group.
+ */
+async function processGroup(
+  folder: string,
+  qualifyingKeys: string[],
+  processedInRun: Set<string>,
+): Promise<GroupResult> {
+  const candidates: GroupResult['candidates'] = [];
+
+  // Surface skill candidates.
+  for (const key of qualifyingKeys) {
+    if (processedInRun.has(key)) continue;
+
+    const candidate = findSkillItem(folder, key);
+    if (!candidate) continue;
+
+    if (fs.existsSync(path.join(SKILLS_DIR, candidate.name, 'instructions.md'))) {
+      log.debug('promote: skill already trialing — skipping', { key, name: candidate.name, folder });
+      continue;
+    }
+
+    processedInRun.add(key);
+    candidates.push({ key: candidate.key, name: candidate.name, evidence_summary: candidate.evidence_summary });
+    appendJournal('skill-promote', key, candidate.name, folder);
+    log.info('promote: skill candidate surfaced', { key, name: candidate.name, folder });
+  }
+
+  // Re-rank L1.
+  let resident: string[] = [];
+  let demoted: string[] = [];
+  try {
+    const rankResult = reRankL1(folder, L1_TOKEN_BUDGET);
+    resident = rankResult.resident;
+    demoted = rankResult.demoted;
+    log.info('promote: L1 re-rank complete', { folder, resident: resident.length, demoted: demoted.length });
+  } catch (err) {
+    log.error('promote: L1 re-rank failed', { folder, err });
+  }
+
+  return { folder, candidates, resident, demoted };
 }
 
 // ---------------------------------------------------------------------------
@@ -365,12 +370,12 @@ async function deliverDigest(results: GroupResult[], correctionKeys: string[]): 
  * mtime.  Returns null if no matching file exists or all candidates are
  * malformed.  Never throws.
  */
-function findSkillCandidate(folder: string, key: string): SkillCandidate | null {
+function findSkillItem(folder: string, key: string): SkillItem | null {
   const baseDir = proposalsDir(folder);
   if (!fs.existsSync(baseDir)) return null;
 
   const targetFile = `${key}-skill.json`;
-  let latestCandidate: SkillCandidate | null = null;
+  let latestCandidate: SkillItem | null = null;
   let latestMtime = 0;
 
   let sessionDirs: string[];
@@ -386,7 +391,7 @@ function findSkillCandidate(folder: string, key: string): SkillCandidate | null 
       if (!fs.existsSync(filePath)) continue;
       const mtime = fs.statSync(filePath).mtimeMs;
       if (mtime <= latestMtime) continue;
-      const raw = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<SkillCandidate>;
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<SkillItem>;
       if (typeof raw.key === 'string' && typeof raw.name === 'string' && typeof raw.procedure === 'string') {
         latestCandidate = {
           key: raw.key,

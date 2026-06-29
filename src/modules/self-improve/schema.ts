@@ -12,6 +12,38 @@ import path from 'path';
 /** Busy-timeout for the self-improve DB (mirrors recall DB). */
 export const SELF_IMPROVE_DB_BUSY_TIMEOUT_MS = 5000;
 
+// ---------------------------------------------------------------------------
+// Domain types shared across distiller, promote, and approvals
+// ---------------------------------------------------------------------------
+
+/**
+ * A distilled fact item from the LLM response — verified shape after JSON parse.
+ * key: kebab-slug identifying this fact across sessions.
+ * content: the human-readable fact text to store in CLAUDE.local.md.
+ * type: memory category (user | feedback | project | reference | episodic).
+ * pin: true only for correctness-critical facts (always resident, never evicted).
+ */
+export interface FactItem {
+  key: string;
+  content: string;
+  type: string;
+  pin: boolean;
+}
+
+/**
+ * A skill candidate from the LLM response — verified shape after JSON parse.
+ * key: kebab-slug stable across sessions (used for dedup + tombstone).
+ * name: human-readable skill name; also the container/skills/<name>/ directory.
+ * procedure: the skill instructions written to instructions.md on approval.
+ * evidence_summary: why this skill was proposed; shown in the nightly digest.
+ */
+export interface SkillItem {
+  key: string;
+  name: string;
+  procedure: string;
+  evidence_summary: string;
+}
+
 /**
  * SQL constants for the distiller write path.
  * Exported here (single source of truth) so the online distiller and
@@ -24,17 +56,6 @@ export const SQL_WATERMARK_UPSERT =
   ' ON CONFLICT(session_id) DO UPDATE SET' +
   '   last_rowid_in  = excluded.last_rowid_in,' +
   '   last_rowid_out = excluded.last_rowid_out';
-
-/** Insert or update a proposal key row (session_count accumulates). */
-export const SQL_PROPOSAL_KEY_UPSERT =
-  'INSERT INTO proposal_keys (key, tombstone, tombstone_reason, proposal_path, session_count, created_at, updated_at)' +
-  ' VALUES (?, ?, ?, ?, ?, ?, ?)' +
-  ' ON CONFLICT(key) DO UPDATE SET' +
-  '   tombstone        = excluded.tombstone,' +
-  '   tombstone_reason = excluded.tombstone_reason,' +
-  '   proposal_path    = COALESCE(excluded.proposal_path, proposal_path),' +
-  '   session_count    = session_count + excluded.session_count,' +
-  '   updated_at       = excluded.updated_at';
 
 /** Append a helpfulness event row. */
 export const SQL_HELPFULNESS_INSERT = 'INSERT INTO helpfulness_events (key, event, session_id, ts) VALUES (?, ?, ?, ?)';

@@ -55,10 +55,7 @@ import { recallDbPathForGroup } from '../src/madison-extensions.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const V1_SESSIONS_BASE = path.join(
-  os.homedir(),
-  'containers/data/NanoClaw/data/sessions',
-);
+const V1_SESSIONS_BASE = path.join(os.homedir(), 'containers/data/NanoClaw/data/sessions');
 
 /** Sub-path within each group's session folder where .jsonl transcripts live. */
 const TRANSCRIPT_SUBDIR = path.join('.claude', 'projects', '-workspace-group');
@@ -117,9 +114,7 @@ function listJsonlFiles(dir: string): string[] {
  * Returns: Map<messageId, {texts: string[], maxTs: string}>.
  * Lines that are missing message.id or have a null/empty message are skipped.
  */
-function parseTranscript(
-  filePath: string,
-): Map<string, { texts: string[]; maxTs: string }> {
+function parseTranscript(filePath: string): Map<string, { texts: string[]; maxTs: string }> {
   const byMessageId = new Map<string, { texts: string[]; maxTs: string }>();
   let raw: string;
   try {
@@ -178,9 +173,7 @@ function main(): void {
     ensureRecallSchema(recallDb);
 
     const deleteFts = recallDb.prepare<[string]>(SQL_FTS_DELETE);
-    const insertFts = recallDb.prepare<
-      [string, string, string, string, string, string]
-    >(SQL_FTS_INSERT);
+    const insertFts = recallDb.prepare<[string, string, string, string, string, string]>(SQL_FTS_INSERT);
     const upsertState = recallDb.prepare<[string, string]>(SQL_STATE_UPSERT);
 
     let totalAssistant = 0;
@@ -219,10 +212,7 @@ function main(): void {
 
     recallDb.close();
 
-    console.log(
-      `${folder}: ${totalAssistant} assistant rows indexed` +
-        ` from ${jsonlFiles.length} transcripts`,
-    );
+    console.log(`${folder}: ${totalAssistant} assistant rows indexed` + ` from ${jsonlFiles.length} transcripts`);
   }
 
   console.log('\nBackfill complete.');

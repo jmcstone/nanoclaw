@@ -74,8 +74,7 @@ function handleMcpBody(body: string): string {
         tools: [
           {
             name: 'recall_ping',
-            description:
-              'Spike probe tool — confirms gwbridge recall MCP reachability',
+            description: 'Spike probe tool — confirms gwbridge recall MCP reachability',
             inputSchema: { type: 'object', properties: {} },
           },
         ],
@@ -157,11 +156,10 @@ interface ProbeResult {
 }
 
 function dockerProbe(shellCmd: string): ProbeResult {
-  const result = spawnSync(
-    'docker',
-    ['run', '--rm', '--entrypoint', 'sh', CONTAINER_IMAGE, '-c', shellCmd],
-    { encoding: 'utf8', timeout: 30_000 }
-  );
+  const result = spawnSync('docker', ['run', '--rm', '--entrypoint', 'sh', CONTAINER_IMAGE, '-c', shellCmd], {
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
   return {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
@@ -209,9 +207,7 @@ async function main(): Promise<void> {
     if (goodProbeOutput.includes('recall_ping')) {
       console.log('  PASS: response contains "recall_ping"');
     } else {
-      failures.push(
-        `good-token probe: "recall_ping" absent from response (got: ${goodProbeOutput || '(empty)'})`
-      );
+      failures.push(`good-token probe: "recall_ping" absent from response (got: ${goodProbeOutput || '(empty)'})`);
       console.log('  FAIL: response does not contain "recall_ping"');
     }
 
@@ -237,9 +233,7 @@ async function main(): Promise<void> {
     if (badProbeOutput === '401') {
       console.log('  PASS: got HTTP 401 for bad token');
     } else {
-      failures.push(
-        `bad-token probe: expected HTTP 401, got "${badProbeOutput}"`
-      );
+      failures.push(`bad-token probe: expected HTTP 401, got "${badProbeOutput}"`);
       console.log(`  FAIL: expected 401, got "${badProbeOutput}"`);
     }
   } finally {
@@ -255,10 +249,7 @@ async function main(): Promise<void> {
       await closeServer(server2);
     } catch (err: unknown) {
       const nodeErr = err as NodeJS.ErrnoException;
-      const msg =
-        nodeErr.code === 'EADDRINUSE'
-          ? `EADDRINUSE on port ${PORT}`
-          : `unexpected error: ${nodeErr.message}`;
+      const msg = nodeErr.code === 'EADDRINUSE' ? `EADDRINUSE on port ${PORT}` : `unexpected error: ${nodeErr.message}`;
       failures.push(`restart: ${msg}`);
       console.log(`  FAIL: ${msg}`);
       // Attempt cleanup even after error

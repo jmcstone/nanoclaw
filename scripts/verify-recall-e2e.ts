@@ -151,7 +151,10 @@ function partB(): void {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Minimal MCP stdio client: sends requests, collects responses by id. */
-async function driveMcpContainer(dockerArgs: string[], requests: string[]): Promise<{
+async function driveMcpContainer(
+  dockerArgs: string[],
+  requests: string[],
+): Promise<{
   responses: Record<number, unknown>;
   stderr: string[];
   exitCode: number | null;
@@ -216,13 +219,20 @@ async function partC(): Promise<void> {
   // gracefully; Part C tests FTS5 data path + citation building, not the
   // Anthropic summarization path end-to-end.
   const dockerArgs = [
-    'run', '--rm', '-i',
-    '--dns', '100.100.100.100',
-    '--entrypoint', 'bash',
-    '-v', `${INBOX_DB}:/recall/recall.db:ro`,
-    '-v', `${AGENT_RUNNER_SRC}:/app/src:ro`,
+    'run',
+    '--rm',
+    '-i',
+    '--dns',
+    '100.100.100.100',
+    '--entrypoint',
+    'bash',
+    '-v',
+    `${INBOX_DB}:/recall/recall.db:ro`,
+    '-v',
+    `${AGENT_RUNNER_SRC}:/app/src:ro`,
     CONTAINER_IMAGE,
-    '-c', 'exec bun run /app/src/recall-mcp-stdio.ts',
+    '-c',
+    'exec bun run /app/src/recall-mcp-stdio.ts',
   ];
 
   info(`Image: ${CONTAINER_IMAGE}`);
@@ -232,7 +242,9 @@ async function partC(): Promise<void> {
   // MCP stdio protocol: newline-delimited JSON-RPC 2.0
   const requests = [
     JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'initialize',
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
       params: {
         protocolVersion: '2024-11-05',
         capabilities: {},
@@ -242,7 +254,9 @@ async function partC(): Promise<void> {
     JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n',
     JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n',
     JSON.stringify({
-      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
       params: { name: 'recall_sessions', arguments: { query: 'email' } },
     }) + '\n',
   ];
@@ -273,9 +287,11 @@ async function partC(): Promise<void> {
   }
 
   // ── tools/call check ───────────────────────────────────────────────────
-  const callResp = responses[3] as {
-    result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
-  } | undefined;
+  const callResp = responses[3] as
+    | {
+        result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
+      }
+    | undefined;
 
   if (callResp?.result?.isError) {
     fail(`tools/call returned isError=true`);
@@ -302,7 +318,9 @@ async function partC(): Promise<void> {
 
     // Summarization via OneCLI proxy is not exercised by this script (no HTTPS_PROXY).
     const summarizationWorked = !summary.startsWith('[Summarization unavailable');
-    info(`Anthropic summarization: ${summarizationWorked ? 'WORKING (live Haiku summary)' : 'DEGRADED — OneCLI proxy not available in test env (expected)'}`);
+    info(
+      `Anthropic summarization: ${summarizationWorked ? 'WORKING (live Haiku summary)' : 'DEGRADED — OneCLI proxy not available in test env (expected)'}`,
+    );
 
     info(`\n  Summary (first 400 chars):`);
     info(`  ${summary.slice(0, 400)}${summary.length > 400 ? '...' : ''}`);
@@ -349,10 +367,7 @@ function partD(): void {
   }
 
   // Verify recall-mcp-stdio.ts only reads from the constant RECALL_DB_PATH
-  const mcpSrc = fs.readFileSync(
-    path.join(PROJECT_ROOT, 'container/agent-runner/src/recall-mcp-stdio.ts'),
-    'utf8',
-  );
+  const mcpSrc = fs.readFileSync(path.join(PROJECT_ROOT, 'container/agent-runner/src/recall-mcp-stdio.ts'), 'utf8');
   const usesConstantPath = mcpSrc.includes("const RECALL_DB_PATH = '/recall/recall.db'");
   const noAgentGroupParam = !mcpSrc.includes('agent_group') || !mcpSrc.match(/agent_group.*param|param.*agent_group/i);
 

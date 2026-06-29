@@ -64,8 +64,7 @@ interface Args {
   role: Role;
 }
 
-const DEFAULT_WELCOME =
-  'System instruction: run /welcome to introduce yourself to the user on this new channel.';
+const DEFAULT_WELCOME = 'System instruction: run /welcome to introduce yourself to the user on this new channel.';
 
 const DEFAULT_ROLE: Role = 'owner';
 
@@ -102,9 +101,7 @@ function parseArgs(argv: string[]): Args {
       case '--role': {
         const raw = (val ?? '').toLowerCase();
         if (raw !== 'owner' && raw !== 'admin' && raw !== 'member') {
-          console.error(
-            `Invalid --role: ${raw} (expected 'owner', 'admin', or 'member')`,
-          );
+          console.error(`Invalid --role: ${raw} (expected 'owner', 'admin', or 'member')`);
           process.exit(2);
         }
         out.role = raw;
@@ -232,9 +229,7 @@ async function main(): Promise<void> {
   // getUserRoles prevents duplicates on re-runs.
   const existingRoles = getUserRoles(userId);
   if (args.role === 'owner') {
-    const alreadyOwner = existingRoles.some(
-      (r) => r.role === 'owner' && r.agent_group_id === null,
-    );
+    const alreadyOwner = existingRoles.some((r) => r.role === 'owner' && r.agent_group_id === null);
     if (!alreadyOwner) {
       grantRole({
         user_id: userId,
@@ -247,9 +242,7 @@ async function main(): Promise<void> {
     // Owner's agent group gets global CLI access
     updateContainerConfigScalars(ag.id, { cli_scope: 'global' });
   } else if (args.role === 'admin') {
-    const alreadyAdmin = existingRoles.some(
-      (r) => r.role === 'admin' && r.agent_group_id === ag.id,
-    );
+    const alreadyAdmin = existingRoles.some((r) => r.role === 'admin' && r.agent_group_id === ag.id);
     if (!alreadyAdmin) {
       grantRole({
         user_id: userId,
@@ -305,11 +298,7 @@ async function main(): Promise<void> {
   });
 
   const roleLabel =
-    args.role === 'owner'
-      ? 'owner (global)'
-      : args.role === 'admin'
-        ? `admin (scoped to ${ag.id})`
-        : 'member';
+    args.role === 'owner' ? 'owner (global)' : args.role === 'admin' ? `admin (scoped to ${ag.id})` : 'member';
 
   console.log('');
   console.log('Init complete.');
@@ -354,11 +343,7 @@ async function sendWelcomeViaCliSocket(
     };
 
     socket.once('error', (err) =>
-      settle(
-        new Error(
-          `CLI socket at ${sockPath} not reachable: ${err.message}. Is the NanoClaw service running?`,
-        ),
-      ),
+      settle(new Error(`CLI socket at ${sockPath} not reachable: ${err.message}. Is the NanoClaw service running?`)),
     );
     socket.once('connect', () => {
       const payload =

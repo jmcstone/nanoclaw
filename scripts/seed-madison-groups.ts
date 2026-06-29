@@ -53,52 +53,80 @@ interface Spec {
 
 const SPECS: Spec[] = [
   {
-    folder: 'telegram_main', name: 'Madison', chatId: '6847601234', isGroup: false,
-    model: null, assistantName: 'Madison',
+    folder: 'telegram_main',
+    name: 'Madison',
+    chatId: '6847601234',
+    isGroup: false,
+    model: null,
+    assistantName: 'Madison',
     mcp: { ollama, tasks },
-    mounts: [{ hostPath: path.join(OBS, 'NanoClaw/Personal'), containerPath: 'obsidian', readonly: false }, wikiMount, sharedMount],
+    mounts: [
+      { hostPath: path.join(OBS, 'NanoClaw/Personal'), containerPath: 'obsidian', readonly: false },
+      wikiMount,
+      sharedMount,
+    ],
     apt: [],
   },
   {
-    folder: 'telegram_inbox', name: 'Madison Inbox', chatId: '-5273779685', isGroup: true,
-    model: 'claude-sonnet-4-6', assistantName: 'Madison',
+    folder: 'telegram_inbox',
+    name: 'Madison Inbox',
+    chatId: '-5273779685',
+    isGroup: true,
+    model: 'claude-sonnet-4-6',
+    assistantName: 'Madison',
     mcp: { ollama, messages, tasks },
     mounts: [
       { hostPath: path.join(OBS, 'NanoClaw/Inbox'), containerPath: 'obsidian', readonly: false },
       { hostPath: path.join(CODE, 'inbox'), containerPath: 'code', readonly: false },
-      wikiMount, sharedMount,
+      wikiMount,
+      sharedMount,
     ],
     apt: [],
   },
   {
-    folder: 'telegram_avp', name: 'Madison AVP', chatId: '-1003800188692', isGroup: true,
-    model: 'claude-opus-4-7', assistantName: 'Madison',
+    folder: 'telegram_avp',
+    name: 'Madison AVP',
+    chatId: '-1003800188692',
+    isGroup: true,
+    model: 'claude-opus-4-7',
+    assistantName: 'Madison',
     mcp: { ollama },
     mounts: [
       { hostPath: path.join(OBS, 'NanoClaw/AmericanVoxPop'), containerPath: 'obsidian', readonly: false },
       { hostPath: path.join(CODE, 'avp-research'), containerPath: 'code', readonly: false },
-      wikiMount, sharedMount,
+      wikiMount,
+      sharedMount,
     ],
     apt: devApt,
   },
   {
-    folder: 'telegram_avp_outreach', name: 'Madison AVP-Outreach', chatId: '-5152405016', isGroup: true,
-    model: null, assistantName: 'Madison AVP-Outreach',
+    folder: 'telegram_avp_outreach',
+    name: 'Madison AVP-Outreach',
+    chatId: '-5152405016',
+    isGroup: true,
+    model: null,
+    assistantName: 'Madison AVP-Outreach',
     mcp: { ollama },
     mounts: [
       { hostPath: path.join(OBS, 'NanoClaw/AmericanVoxPop'), containerPath: 'obsidian', readonly: false },
       { hostPath: path.join(CODE, 'avp-outreach'), containerPath: 'code', readonly: false },
-      wikiMount, sharedMount,
+      wikiMount,
+      sharedMount,
     ],
     apt: devApt,
   },
   {
-    folder: 'telegram_trading', name: 'Madison Trading', chatId: '-5211322204', isGroup: true,
-    model: 'claude-opus-4-7', assistantName: 'Madison',
+    folder: 'telegram_trading',
+    name: 'Madison Trading',
+    chatId: '-5211322204',
+    isGroup: true,
+    model: 'claude-opus-4-7',
+    assistantName: 'Madison',
     mcp: { ollama },
     mounts: [
       { hostPath: path.join(OBS, 'NanoClaw/AlgoTrader'), containerPath: 'algotrader', readonly: false },
-      wikiMount, sharedMount,
+      wikiMount,
+      sharedMount,
     ],
     apt: [],
   },
@@ -141,20 +169,34 @@ function main() {
     let mg = getMessagingGroupByPlatform('telegram', `telegram:${s.chatId}`);
     if (!mg) {
       mg = {
-        id: gen('mg'), channel_type: 'telegram', platform_id: `telegram:${s.chatId}`,
-        instance: 'telegram', name: s.name, is_group: s.isGroup ? 1 : 0,
-        unknown_sender_policy: 'strict', created_at: now(),
+        id: gen('mg'),
+        channel_type: 'telegram',
+        platform_id: `telegram:${s.chatId}`,
+        instance: 'telegram',
+        name: s.name,
+        is_group: s.isGroup ? 1 : 0,
+        unknown_sender_policy: 'strict',
+        created_at: now(),
       };
       createMessagingGroup(mg);
     }
     if (!getMessagingGroupAgentByPair(mg.id, ag.id)) {
       createMessagingGroupAgent({
-        id: gen('mga'), messaging_group_id: mg.id, agent_group_id: ag.id,
-        engage_mode: 'pattern', engage_pattern: '.', sender_scope: 'all',
-        ignored_message_policy: 'drop', session_mode: 'shared', priority: 0, created_at: now(),
+        id: gen('mga'),
+        messaging_group_id: mg.id,
+        agent_group_id: ag.id,
+        engage_mode: 'pattern',
+        engage_pattern: '.',
+        sender_scope: 'all',
+        ignored_message_policy: 'drop',
+        session_mode: 'shared',
+        priority: 0,
+        created_at: now(),
       });
     }
-    console.log(`seeded ${s.folder} → ${ag.id} (${mg.platform_id}, model=${s.model ?? 'default'}, mounts=${s.mounts.length})`);
+    console.log(
+      `seeded ${s.folder} → ${ag.id} (${mg.platform_id}, model=${s.model ?? 'default'}, mounts=${s.mounts.length})`,
+    );
   }
   console.log('\nDone. 5 groups seeded.');
 }

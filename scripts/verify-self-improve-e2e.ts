@@ -91,7 +91,10 @@ function cleanupTempFiles(): void {
       // journalLinesBeforeTests was measured from the raw split — use that count.
       const kept = lines.slice(0, journalLinesBeforeTests);
       // If we trimmed everything and the file would be empty or header-only, remove it.
-      const trimmed = kept.join('\n');
+      // Preserve the original trailing-newline convention so the next append starts on a
+      // fresh line (join('\n') alone does not produce a trailing newline).
+      const hadTrailingNewline = content.endsWith('\n');
+      const trimmed = kept.join('\n') + (hadTrailingNewline ? '\n' : '');
       if (trimmed.replace(/\s/g, '').length === 0) {
         // File was empty/non-existent before — remove what we created.
         const dir = path.dirname(journalPathResolved);
@@ -122,9 +125,7 @@ async function partA(): Promise<void> {
   const dbPath = path.join(TEMP_SI_DIR, 'test-schema.db');
   fs.mkdirSync(TEMP_SI_DIR, { recursive: true });
 
-  const { openSelfImproveDb, ensureSelfImproveSchema } = await import(
-    '../src/modules/self-improve/schema.js'
-  );
+  const { openSelfImproveDb, ensureSelfImproveSchema } = await import('../src/modules/self-improve/schema.js');
 
   let db: import('better-sqlite3').Database | undefined;
   try {
@@ -182,9 +183,7 @@ async function partB(): Promise<void> {
 
   const dbPath = path.join(TEMP_SI_DIR, 'test-tombstone.db');
 
-  const { openSelfImproveDb, ensureSelfImproveSchema } = await import(
-    '../src/modules/self-improve/schema.js'
-  );
+  const { openSelfImproveDb, ensureSelfImproveSchema } = await import('../src/modules/self-improve/schema.js');
   const { upsertProposalKey, incrementSessionCount, getSessionCount, recordTombstone, checkTombstone } =
     await import('../src/modules/self-improve/tombstone.js');
 
@@ -268,10 +267,8 @@ async function partC(): Promise<void> {
   //   - <!-- key:fact-about-cats -->      (high score: 2× corroborated → admitted under tiny budget)
   //   - <!-- key:fact-about-dogs -->      (low score: 1× corrected → DEMOTED at tiny budget)
   const unkeyed = '# Test group memory\n\nThis is unkeyed preamble.\n\n';
-  const pinnedBlock =
-    '<!-- key:pinned-identity pin -->\nMy name is Madison.\n<!-- /key -->\n';
-  const catsBlock =
-    '<!-- key:fact-about-cats -->\nCats are independent animals known for agility.\n<!-- /key -->\n';
+  const pinnedBlock = '<!-- key:pinned-identity pin -->\nMy name is Madison.\n<!-- /key -->\n';
+  const catsBlock = '<!-- key:fact-about-cats -->\nCats are independent animals known for agility.\n<!-- /key -->\n';
   const dogsBlock =
     '<!-- key:fact-about-dogs -->\nDogs are loyal animals that make excellent companions.\n<!-- /key -->\n';
 
@@ -285,9 +282,8 @@ async function partC(): Promise<void> {
   // ── Pre-populate helpfulness_events in the temp self-improve.db ──────────
   // (selfImproveDbPath() → TEMP_SI_DIR/self-improve.db via the env override)
   const siDbPath = path.join(TEMP_SI_DIR, 'self-improve.db');
-  const { openSelfImproveDb, ensureSelfImproveSchema, SQL_HELPFULNESS_INSERT } = await import(
-    '../src/modules/self-improve/schema.js'
-  );
+  const { openSelfImproveDb, ensureSelfImproveSchema, SQL_HELPFULNESS_INSERT } =
+    await import('../src/modules/self-improve/schema.js');
 
   const siDb = openSelfImproveDb(siDbPath);
   ensureSelfImproveSchema(siDb);
@@ -306,9 +302,7 @@ async function partC(): Promise<void> {
   const { JOURNAL_PATH } = await import('../src/modules/self-improve/journal.js');
   journalPathResolved = JOURNAL_PATH;
   const journalExistedBefore = fs.existsSync(JOURNAL_PATH);
-  journalLinesBeforeTests = journalExistedBefore
-    ? fs.readFileSync(JOURNAL_PATH, 'utf8').split('\n').length
-    : 0;
+  journalLinesBeforeTests = journalExistedBefore ? fs.readFileSync(JOURNAL_PATH, 'utf8').split('\n').length : 0;
   info(`Journal before test: exists=${journalExistedBefore}, lines=${journalLinesBeforeTests}`);
 
   // ── Call reRankL1 with a tiny budget ─────────────────────────────────────
@@ -392,7 +386,88 @@ async function partC(): Promise<void> {
     fail(`No fact-evict line found in journal (${newLines.length} new line(s) added, none are fact-evict)`);
     for (const l of newLines) info(`  ${l}`);
   }
+}
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Part C-bis — upsertKeyedBlock format contract
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function partCBis(): Promise<void> {
+  log('\n## Part C-bis — upsertKeyedBlock format contract');
+
+  // We can test upsertKeyedBlock indirectly: write a synthetic CLAUDE.local.md,
+  // call reRankL1 (which exercises parseClaudeLocal / KEY_BLOCK_RE), then verify
+  // the block format round-trips correctly.
+  //
+  // Direct import of upsertKeyedBlock is not possible (it's a private function in
+  // distiller.ts).  Instead we verify the format contract from the consumer side:
+  // a block written in the exact format upsertKeyedBlock produces must parse
+  // correctly under KEY_BLOCK_RE as used by l1-lifecycle.ts.
+
+  const { reRankL1 } = await import('../src/modules/self-improve/l1-lifecycle.js');
+
+  // The canonical block format produced by upsertKeyedBlock:
+  //   <!-- key:<slug> -->        (or <!-- key:<slug> pin --> for pinned)
+  //   <content ending with \n>
+  //   <!-- /key -->
+  const testGroup2 = `test-si-cbis-${pid}`;
+  const testGroupDir2 = path.join(GROUPS_DIR_PATH, testGroup2);
+  fs.mkdirSync(testGroupDir2, { recursive: true });
+
+  const regularBlock = `<!-- key:test-regular -->\nSome regular fact content.\n<!-- /key -->\n`;
+  const pinnedBlock2 = `<!-- key:test-pinned pin -->\nA pinned correctness fact.\n<!-- /key -->\n`;
+  const injectionBlock = `<!-- key:injection-attempt -->\nContent with <!-- /key --> embedded.\n<!-- /key -->\n`;
+
+  const claudeLocalPath2 = path.join(testGroupDir2, 'CLAUDE.local.md');
+  fs.writeFileSync(claudeLocalPath2, regularBlock + pinnedBlock2);
+
+  // Verify regular + pinned blocks parse and survive re-rank (both under tiny budget? use large budget).
+  let result2: { resident: string[]; demoted: string[] };
+  try {
+    result2 = reRankL1(testGroup2, 5000); // large budget — both should survive
+  } catch (err) {
+    fail(`Part C-bis: reRankL1 on format-contract file threw: ${err instanceof Error ? err.message : String(err)}`);
+    fs.rmSync(testGroupDir2, { recursive: true, force: true });
+    return;
+  }
+
+  if (result2.resident.includes('test-regular')) {
+    pass('Part C-bis: regular keyed block parsed and resident');
+  } else {
+    fail(`Part C-bis: regular keyed block not parsed — resident=[${result2.resident.join(', ')}]`);
+  }
+
+  if (result2.resident.includes('test-pinned')) {
+    pass('Part C-bis: pinned keyed block parsed and resident');
+  } else {
+    fail(`Part C-bis: pinned keyed block not parsed as pinned — resident=[${result2.resident.join(', ')}]`);
+  }
+
+  // Verify injection defense: a block whose content contains <!-- /key --> should
+  // NOT produce two parsed blocks (the embedded delimiter was stripped by upsertKeyedBlock).
+  // Here we simulate what the content looks like AFTER upsertKeyedBlock strips it:
+  // the injected <!-- /key --> is gone, so the block content is just the surrounding text.
+  const strippedContent = `Content with  embedded.`; // stripped form
+  const safeInjectionBlock = `<!-- key:injection-attempt -->\n${strippedContent}\n<!-- /key -->\n`;
+  fs.writeFileSync(claudeLocalPath2, safeInjectionBlock);
+
+  let result3: { resident: string[]; demoted: string[] };
+  try {
+    result3 = reRankL1(testGroup2, 5000);
+  } catch (err) {
+    fail(`Part C-bis: reRankL1 on injection-stripped file threw: ${err instanceof Error ? err.message : String(err)}`);
+    fs.rmSync(testGroupDir2, { recursive: true, force: true });
+    return;
+  }
+
+  // Should parse exactly ONE block (injection-attempt), not two
+  if (result3.resident.length === 1 && result3.resident[0] === 'injection-attempt') {
+    pass('Part C-bis: injection-stripped block parses as single block (no extra blocks)');
+  } else {
+    fail(`Part C-bis: expected 1 resident block, got ${result3.resident.length}: [${result3.resident.join(', ')}]`);
+  }
+
+  fs.rmSync(testGroupDir2, { recursive: true, force: true });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -474,7 +549,6 @@ async function partD(): Promise<void> {
   info('  commitJournalAndSkills: skipped. Would stage self-improve-journal/JOURNAL.md +');
   info('  container/skills/ and commit. Not run here to avoid a test artifact commit.');
   info('  Production path: nightly promote pass calls it once after all groups are processed.');
-
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -504,9 +578,9 @@ function partEDocumented(): void {
   log('  2. PROPOSAL + RECALL SUMMARY');
   log('     · A fact proposal JSON should appear under:');
   log('       ~/containers/data/NanoClaw/v2/self-improve/proposals/<folder>/<session>/');
-  log('     · A `role=\'summary\'` row in the group\'s recall DB:');
+  log("     · A `role='summary'` row in the group's recall DB:");
   log('       sqlite3 ~/containers/data/NanoClaw/v2/recall/<folder>.db \\');
-  log("         \"SELECT role, content FROM session_fts WHERE role='summary' ORDER BY rowid DESC LIMIT 3;\"");
+  log('         "SELECT role, content FROM session_fts WHERE role=\'summary\' ORDER BY rowid DESC LIMIT 3;"');
   log('');
   log('  3. FACT AUTO-APPLY + NOTIFY');
   log('     · The fact should appear as a keyed block in:');
@@ -523,7 +597,7 @@ function partEDocumented(): void {
   log('     · Verify a path-scoped git commit appears:');
   log('       git log --oneline self-improve-journal/JOURNAL.md | head -3');
   log('       git log --oneline container/skills/ | head -3');
-  log('     · Verify per-group isolation: confirm group B has no proposals/keys from group A\'s session:');
+  log("     · Verify per-group isolation: confirm group B has no proposals/keys from group A's session:");
   log('       ls ~/containers/data/NanoClaw/v2/self-improve/proposals/');
   log('       (each subdirectory corresponds to one group folder)');
   log('');
@@ -551,6 +625,10 @@ await partB().catch((err: unknown) => {
 
 await partC().catch((err: unknown) => {
   fail(`Part C threw: ${err instanceof Error ? err.message : String(err)}`);
+});
+
+await partCBis().catch((err: unknown) => {
+  fail(`Part C-bis threw: ${err instanceof Error ? err.message : String(err)}`);
 });
 
 await partD().catch((err: unknown) => {

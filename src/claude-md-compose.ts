@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
+import { isTrialSkillFragment } from './modules/self-improve/markers.js';
 import type { McpServerConfig } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { log } from './log.js';
@@ -69,7 +70,7 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
       const hostFragment = path.join(skillsHostDir, skillName, 'instructions.md');
       if (fs.existsSync(hostFragment)) {
         const fragContent = fs.readFileSync(hostFragment, 'utf8');
-        if (fragContent.startsWith('<!-- trial: true -->')) {
+        if (isTrialSkillFragment(fragContent)) {
           // Trial skills land provisional — switch to inline so we can prepend
           // a warning header (symlinks can't carry extra content).
           desired.set(`skill-${skillName}.md`, {

@@ -63,10 +63,7 @@ import { recallDbPathForGroup } from '../src/madison-extensions.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-const V1_DB_PATH = path.join(
-  os.homedir(),
-  'containers/data/NanoClaw/store/messages.db',
-);
+const V1_DB_PATH = path.join(os.homedir(), 'containers/data/NanoClaw/store/messages.db');
 
 const BACKFILL_SOURCE = 'v1-backfill';
 
@@ -109,9 +106,7 @@ function main(): void {
   // Open v1 archive read-only and fetch all rows upfront.
   const v1Db = new Database(V1_DB_PATH, { readonly: true });
   const allRows = v1Db
-    .prepare<[], V1Message>(
-      'SELECT id, chat_jid, sender, content, timestamp FROM messages ORDER BY timestamp ASC',
-    )
+    .prepare<[], V1Message>('SELECT id, chat_jid, sender, content, timestamp FROM messages ORDER BY timestamp ASC')
     .all();
   v1Db.close();
 
@@ -146,9 +141,10 @@ function main(): void {
     // Per-group idempotency: if this group's DB already has the backfill
     // marker, skip it without touching any data.
     const existing = recallDb
-      .prepare<[string], { source: string; last_indexed_ts: string }>(
-        'SELECT source, last_indexed_ts FROM session_fts_state WHERE source = ?',
-      )
+      .prepare<
+        [string],
+        { source: string; last_indexed_ts: string }
+      >('SELECT source, last_indexed_ts FROM session_fts_state WHERE source = ?')
       .get(BACKFILL_SOURCE);
 
     if (existing) {
@@ -199,9 +195,7 @@ function main(): void {
     console.log(`  ${folder}: ${count} rows inserted`);
   }
   for (const [folder, ts] of Object.entries(alreadyDoneByFolder)) {
-    console.log(
-      `  ${folder}: already backfilled (last_indexed_ts=${ts}) — skipped`,
-    );
+    console.log(`  ${folder}: already backfilled (last_indexed_ts=${ts}) — skipped`);
   }
 
   const skippedJids = Object.keys(skippedByJid);

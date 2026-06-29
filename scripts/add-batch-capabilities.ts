@@ -22,13 +22,7 @@ import { getContainerConfig, updateContainerConfigJson } from '../src/db/contain
 const HOME = os.homedir();
 const V1_ENV = path.join(HOME, 'containers/nanoclaw/.env');
 
-const BRAVE_GROUPS = [
-  'telegram_main',
-  'telegram_inbox',
-  'telegram_avp',
-  'telegram_avp_outreach',
-  'telegram_trading',
-];
+const BRAVE_GROUPS = ['telegram_main', 'telegram_inbox', 'telegram_avp', 'telegram_avp_outreach', 'telegram_trading'];
 const GITLAB_GROUPS = ['telegram_avp', 'telegram_inbox', 'telegram_avp_outreach'];
 
 const gitlabMount = {

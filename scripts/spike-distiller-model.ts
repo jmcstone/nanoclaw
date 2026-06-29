@@ -46,8 +46,7 @@ function parseEnvFile(envPath: string): Record<string, string> {
       let value = trimmed.slice(eqIdx + 1).trim();
       if (
         value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'")))
+        ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
       ) {
         value = value.slice(1, -1);
       }
@@ -77,9 +76,7 @@ let testFallbackName = '';
 if (!primaryKey) {
   const siblingEnvPath = path.join(PROJECT_ROOT, '../nanoclaw/.env');
   const siblingEnv = parseEnvFile(siblingEnvPath);
-  const fallbackEntry = Object.entries(siblingEnv).find(([k]) =>
-    k.startsWith('LITELLM_API_KEY_'),
-  );
+  const fallbackEntry = Object.entries(siblingEnv).find(([k]) => k.startsWith('LITELLM_API_KEY_'));
   if (fallbackEntry) {
     [testFallbackName, testFallbackKey] = fallbackEntry;
   }
@@ -152,28 +149,14 @@ if (registeredModels.length === 0) {
 // Priority (cheapest/fastest first): gemini flash, gpt-mini, grok fast.
 // ---------------------------------------------------------------------------
 
-const CHEAP_PATTERNS: RegExp[] = [
-  /gemini.*flash/i,
-  /gpt.*mini/i,
-  /grok.*fast/i,
-  /gemini.*lite/i,
-  /gpt.*nano/i,
-];
+const CHEAP_PATTERNS: RegExp[] = [/gemini.*flash/i, /gpt.*mini/i, /grok.*fast/i, /gemini.*lite/i, /gpt.*nano/i];
 
-const ANTHROPIC_PATTERNS: RegExp[] = [
-  /claude/i,
-  /haiku/i,
-  /sonnet/i,
-  /opus/i,
-  /anthropic/i,
-];
+const ANTHROPIC_PATTERNS: RegExp[] = [/claude/i, /haiku/i, /sonnet/i, /opus/i, /anthropic/i];
 
 const isAnthropicModel = (m: string): boolean => ANTHROPIC_PATTERNS.some((p) => p.test(m));
 
 // First try: models matching a cheap-model pattern.
-let candidates = registeredModels.filter(
-  (m) => CHEAP_PATTERNS.some((p) => p.test(m)) && !isAnthropicModel(m),
-);
+let candidates = registeredModels.filter((m) => CHEAP_PATTERNS.some((p) => p.test(m)) && !isAnthropicModel(m));
 
 // Fallback: any non-Anthropic model.
 if (candidates.length === 0) {
@@ -204,11 +187,9 @@ const failures: string[] = [];
 for (const alias of candidates) {
   process.stdout.write(`  ${alias} ... `);
   try {
-    const reply = await callHostLiteLLM(
-      alias,
-      [{ role: 'user', content: 'Reply with exactly: OK' }],
-      { apiKey: effectiveKey },
-    );
+    const reply = await callHostLiteLLM(alias, [{ role: 'user', content: 'Reply with exactly: OK' }], {
+      apiKey: effectiveKey,
+    });
     const trimmed = reply.trim();
     process.stdout.write(`PASS (reply: ${JSON.stringify(trimmed.slice(0, 80))})\n`);
     if (passAlias === undefined) {

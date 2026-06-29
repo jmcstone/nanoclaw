@@ -24,13 +24,10 @@ import { registerApprovalHandler } from '../approvals/index.js';
 import type { ApprovalHandler } from '../approvals/index.js';
 import { registerApprovalResolvedHandler } from '../approvals/primitive.js';
 import type { ApprovalResolvedHandler } from '../approvals/primitive.js';
-import { appendJournal } from './journal.js';
+import { appendJournal, SKILLS_DIR } from './journal.js';
+import { TRIAL_MARKER } from './markers.js';
 import { ensureSelfImproveSchema, openSelfImproveDb } from './schema.js';
 import { recordTombstone } from './tombstone.js';
-
-// Mirror how journal.ts resolves PROJECT_ROOT (process.cwd() at host startup).
-const PROJECT_ROOT = process.cwd();
-const SKILLS_DIR = path.join(PROJECT_ROOT, 'container', 'skills');
 
 /**
  * Apply handler: fires when an admin approves a `propose_skill` card.
@@ -57,6 +54,15 @@ const applyProposeSkill: ApprovalHandler = async ({ payload, notify }) => {
     return;
   }
 
+  // Guard: `name` becomes a filesystem directory component in path.join(SKILLS_DIR, name).
+  // Reject any name that isn't a plain slug — prevents path traversal via LLM output.
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    const msg = `propose_skill approved but "name" is not a safe slug (path traversal risk): ${JSON.stringify(name)}`;
+    log.error('self-improve/approvals: applyProposeSkill — unsafe name slug', { key, name });
+    notify(msg);
+    return;
+  }
+
   try {
     const skillDir = path.join(SKILLS_DIR, name);
     fs.mkdirSync(skillDir, { recursive: true });
@@ -65,7 +71,7 @@ const applyProposeSkill: ApprovalHandler = async ({ payload, notify }) => {
     const tmpDest = dest + '.tmp';
     // First line MUST be the trial marker (claude-md-compose conditional include
     // at :66 uses this to flag provisional skills).
-    const fileContent = `<!-- trial: true -->\n${procedure}`;
+    const fileContent = `${TRIAL_MARKER}\n${procedure}`;
     fs.writeFileSync(tmpDest, fileContent, 'utf8');
     fs.renameSync(tmpDest, dest);
 
@@ -110,8 +116,9 @@ const onProposeSkillResolved: ApprovalResolvedHandler = async (event) => {
     return;
   }
 
-  const db = openSelfImproveDb(selfImproveDbPath());
+  let db: ReturnType<typeof openSelfImproveDb> | undefined;
   try {
+    db = openSelfImproveDb(selfImproveDbPath());
     ensureSelfImproveSchema(db);
     recordTombstone(db, key, 'rejected');
     appendJournal('skill-trial', key, 'rejected → tombstoned', scope);
@@ -119,7 +126,11 @@ const onProposeSkillResolved: ApprovalResolvedHandler = async (event) => {
   } catch (err) {
     log.error('self-improve/approvals: tombstone write failed', { err, key, scope });
   } finally {
-    db.close();
+    try {
+      db?.close();
+    } catch {
+      /* ignore */
+    }
   }
 };
 
