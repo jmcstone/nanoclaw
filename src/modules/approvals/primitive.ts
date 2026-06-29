@@ -23,7 +23,7 @@
  */
 import { normalizeOptions, type RawOption } from '../../channels/ask-question.js';
 import { getMessagingGroup } from '../../db/messaging-groups.js';
-import { createPendingApproval, getSession } from '../../db/sessions.js';
+import { createPendingApproval, deletePendingApproval, getSession } from '../../db/sessions.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { wakeContainer } from '../../container-runner.js';
 import { log } from '../../log.js';
@@ -93,7 +93,12 @@ export function getApprovalHandler(action: string): ApprovalHandler | undefined 
 
 export interface ApprovalResolvedEvent {
   approval: PendingApproval;
-  session: Session;
+  /**
+   * The requesting session; null for sessionless approvals (e.g. propose_skill
+   * issued from the nightly promote cron where no live session exists).
+   * Resolved handlers that observe the event must null-check before using this.
+   */
+  session: Session | null;
   outcome: 'approve' | 'reject';
   /** Namespaced user ID (`<channel>:<handle>`) of the resolving admin. Empty string if unknown. */
   userId: string;
@@ -277,4 +282,100 @@ export async function requestApproval(opts: RequestApprovalOptions): Promise<voi
   }
 
   log.info('Approval requested', { action, approvalId, agentName, approver: target.userId });
+}
+
+/**
+ * Sessionless approval options.  Two buttons (Approve / Reject) — no
+ * "Reject with reason…" because there is no agent session to relay the reason
+ * to.  Used by `requestApprovalForGroup`.
+ */
+const SESSIONLESS_APPROVAL_OPTIONS: RawOption[] = [
+  { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
+  { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
+];
+
+export interface RequestApprovalForGroupOptions {
+  /** Agent group on whose behalf the approval is being requested. */
+  agentGroupId: string;
+  /** Free-form action identifier — must match a registered `registerApprovalHandler` key. */
+  action: string;
+  /** JSON-serializable opaque payload handed to the handler on approve. */
+  payload: Record<string, unknown>;
+  /** Card title shown to the admin. */
+  title: string;
+  /** Card body shown to the admin. */
+  question: string;
+  /** Deliver the card to this specific user instead of the group's admins. */
+  approverUserId?: string;
+}
+
+/**
+ * Sessionless variant of `requestApproval`.  Use when there is no live agent
+ * session — e.g. a nightly cron pass.
+ *
+ * Key differences from `requestApproval`:
+ *   - `session_id` is persisted as null; `agent_group_id` is set directly.
+ *   - No `notifyAgent` calls (there is no agent to wake).
+ *   - On delivery failure the pending row is deleted (no agent to notify).
+ *   - Uses two-button Approve / Reject card (no "reject with reason" flow).
+ *
+ * Returns true if the card was delivered and the pending row persisted; false
+ * if no eligible approver was found, no DM channel was reachable, or delivery
+ * failed (caller may retry on the next scheduled run).
+ */
+export async function requestApprovalForGroup(opts: RequestApprovalForGroupOptions): Promise<boolean> {
+  const { agentGroupId, action, payload, title, question, approverUserId } = opts;
+
+  const approvers = approverUserId ? [approverUserId] : pickApprover(agentGroupId);
+  if (approvers.length === 0) {
+    log.warn(`${action}: no owner or admin configured to approve (group: ${agentGroupId})`);
+    return false;
+  }
+
+  const target = await pickApprovalDelivery(approvers, '');
+  if (!target) {
+    log.warn(`${action}: no DM channel found for any eligible approver`, { agentGroupId });
+    return false;
+  }
+
+  const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const normalizedOptions = normalizeOptions(SESSIONLESS_APPROVAL_OPTIONS);
+  createPendingApproval({
+    approval_id: approvalId,
+    session_id: null,
+    request_id: approvalId,
+    action,
+    payload: JSON.stringify(payload),
+    created_at: new Date().toISOString(),
+    agent_group_id: agentGroupId,
+    title,
+    options_json: JSON.stringify(normalizedOptions),
+    approver_user_id: approverUserId ?? null,
+  });
+
+  const adapter = getDeliveryAdapter();
+  if (adapter) {
+    try {
+      await adapter.deliver(
+        target.messagingGroup.channel_type,
+        target.messagingGroup.platform_id,
+        null,
+        'chat-sdk',
+        JSON.stringify({
+          type: 'ask_question',
+          questionId: approvalId,
+          title,
+          question,
+          options: SESSIONLESS_APPROVAL_OPTIONS,
+        }),
+      );
+    } catch (err) {
+      log.error('Failed to deliver sessionless approval card', { action, approvalId, err });
+      deletePendingApproval(approvalId);
+      return false;
+    }
+  }
+
+  log.info('Sessionless approval requested', { action, approvalId, agentGroupId, approver: target.userId });
+  return true;
 }

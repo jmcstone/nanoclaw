@@ -17,6 +17,7 @@
  */
 import { wakeContainer } from '../../container-runner.js';
 import { deletePendingApproval, getPendingApproval, getSession } from '../../db/sessions.js';
+import type { Session } from '../../types.js';
 import type { ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
@@ -60,8 +61,11 @@ async function handleRegisteredApproval(
   selectedOption: string,
   userId: string,
 ): Promise<void> {
+  // Sessionless approvals (session_id = null, agent_group_id set) — issued by
+  // the nightly promote cron for propose_skill candidates.  Dispatch via a
+  // dedicated path that skips agent-session machinery.
   if (!approval.session_id) {
-    deletePendingApproval(approval.approval_id);
+    await handleSessionlessApproval(approval, selectedOption, userId);
     return;
   }
   const session = getSession(approval.session_id);
@@ -124,6 +128,68 @@ async function handleRegisteredApproval(
   deletePendingApproval(approval.approval_id);
   await notifyApprovalResolved({ approval, session, outcome: 'approve', userId });
   await wakeContainer(session);
+}
+
+/**
+ * Dispatch path for sessionless approvals (session_id = null, agent_group_id set).
+ *
+ * Used by the nightly promote cron's propose_skill cards.  Skips agent-session
+ * machinery (notifyAgent, wakeContainer, reason-capture).  Still fires
+ * notifyApprovalResolved so resolved handlers (e.g. propose_skill tombstone on
+ * reject) can observe the outcome.
+ *
+ * Reject-with-reason is treated as plain reject — there is no session channel
+ * to capture a follow-up message from.
+ *
+ * Handler contract for sessionless actions: the registered ApprovalHandler
+ * MUST NOT dereference ctx.session (it is null at runtime).  propose_skill's
+ * handler already satisfies this constraint.
+ */
+async function handleSessionlessApproval(
+  approval: PendingApproval,
+  selectedOption: string,
+  userId: string,
+): Promise<void> {
+  if (selectedOption === 'approve') {
+    const handler = getApprovalHandler(approval.action);
+    if (handler) {
+      const payload = JSON.parse(approval.payload) as Record<string, unknown>;
+      try {
+        // session is null for sessionless approvals; handlers registered for
+        // these actions (propose_skill) must not access ctx.session.
+        // The type cast avoids changing ApprovalHandlerContext (which would
+        // force null-checks on all session-backed handlers).
+        await handler({ session: null as unknown as Session, payload, userId, notify: () => {} });
+        log.info('Sessionless approval handled', {
+          approvalId: approval.approval_id,
+          action: approval.action,
+          userId,
+        });
+      } catch (err) {
+        log.error('Sessionless approval handler threw', {
+          approvalId: approval.approval_id,
+          action: approval.action,
+          err,
+        });
+      }
+    } else {
+      log.warn('No handler registered for sessionless approval — row dropped', {
+        approvalId: approval.approval_id,
+        action: approval.action,
+      });
+    }
+    deletePendingApproval(approval.approval_id);
+    await notifyApprovalResolved({ approval, session: null, outcome: 'approve', userId });
+  } else {
+    // Reject (or "reject with reason…" — treated as plain reject; no session to relay from).
+    log.info('Sessionless approval rejected', {
+      approvalId: approval.approval_id,
+      action: approval.action,
+      userId,
+    });
+    deletePendingApproval(approval.approval_id);
+    await notifyApprovalResolved({ approval, session: null, outcome: 'reject', userId });
+  }
 }
 
 function namespacedUserId(payload: ResponsePayload): string | null {

@@ -39,6 +39,7 @@ import { appendJournal, commitJournalAndSkills, SKILLS_DIR } from './journal.js'
 import { reRankL1 } from './l1-lifecycle.js';
 import { ensureSelfImproveSchema, openSelfImproveDb } from './schema.js';
 import type { SkillItem } from './schema.js';
+import { issueSkillApprovalCard } from './skill-approval.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -57,6 +58,12 @@ const MAX_CORRECTION_KEYS_DIGEST = 20;
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** A qualifying proposal_key row from the self-improve DB. */
+interface QualifyingKey {
+  key: string;
+  session_count: number;
+}
 
 interface GroupResult {
   folder: string;
@@ -143,7 +150,7 @@ export async function runNightlyPromote(): Promise<void> {
   // Closed before the per-group loop so reRankL1 (which opens its own handle)
   // doesn't contend for the write lock.
   let db: Database.Database | null = null;
-  let qualifyingKeys: string[] = [];
+  let qualifyingKeys: QualifyingKey[] = [];
   const correctionKeys: string[] = [];
 
   try {
@@ -152,11 +159,9 @@ export async function runNightlyPromote(): Promise<void> {
 
     // Query keys that have recurred across ≥ 2 sessions and are not tombstoned.
     try {
-      qualifyingKeys = (
-        db.prepare('SELECT key FROM proposal_keys WHERE tombstone = 0 AND session_count >= 2').all() as Array<{
-          key: string;
-        }>
-      ).map((r) => r.key);
+      qualifyingKeys = db
+        .prepare('SELECT key, session_count FROM proposal_keys WHERE tombstone = 0 AND session_count >= 2')
+        .all() as QualifyingKey[];
       log.debug('promote: qualifying skill keys', { count: qualifyingKeys.length });
     } catch (err) {
       log.error('promote: failed to query proposal_keys', { err });
@@ -192,10 +197,10 @@ export async function runNightlyPromote(): Promise<void> {
   const processedInRun = new Set<string>();
 
   for (const group of groups) {
-    const { folder } = group;
+    const { folder, id: agentGroupId } = group;
     if (!isSelfImproveEnabled(folder)) continue;
     try {
-      const result = await processGroup(folder, qualifyingKeys, processedInRun);
+      const result = await processGroup(agentGroupId, folder, qualifyingKeys, processedInRun);
       results.push(result);
     } catch (err) {
       log.error('promote: per-group error (continuing)', { folder, err });
@@ -224,7 +229,8 @@ export async function runNightlyPromote(): Promise<void> {
 /**
  * Process a single agent group during the nightly promote pass.
  *
- * Surfaces qualifying skill candidates (session_count ≥ 2, not yet trialing)
+ * Surfaces qualifying skill candidates (session_count ≥ 2, not yet trialing),
+ * issues sessionless approval cards for each (dedup via card_issued_at),
  * and re-ranks the L1 fact pool.  Updates `processedInRun` in place to prevent
  * the same key from being surfaced across multiple groups in one night.
  *
@@ -232,28 +238,41 @@ export async function runNightlyPromote(): Promise<void> {
  * loop continues with the next group.
  */
 async function processGroup(
+  agentGroupId: string,
   folder: string,
-  qualifyingKeys: string[],
+  qualifyingKeys: QualifyingKey[],
   processedInRun: Set<string>,
 ): Promise<GroupResult> {
   const candidates: GroupResult['candidates'] = [];
 
-  // Surface skill candidates.
-  for (const key of qualifyingKeys) {
-    if (processedInRun.has(key)) continue;
+  // Surface skill candidates and issue approval cards.
+  for (const qk of qualifyingKeys) {
+    if (processedInRun.has(qk.key)) continue;
 
-    const candidate = findSkillItem(folder, key);
+    const candidate = findSkillItem(folder, qk.key);
     if (!candidate) continue;
 
     if (fs.existsSync(path.join(SKILLS_DIR, candidate.name, 'instructions.md'))) {
-      log.debug('promote: skill already trialing — skipping', { key, name: candidate.name, folder });
+      log.debug('promote: skill already trialing — skipping', { key: qk.key, name: candidate.name, folder });
       continue;
     }
 
-    processedInRun.add(key);
+    processedInRun.add(qk.key);
     candidates.push({ key: candidate.key, name: candidate.name, evidence_summary: candidate.evidence_summary });
-    appendJournal('skill-promote', key, candidate.name, folder);
-    log.info('promote: skill candidate surfaced', { key, name: candidate.name, folder });
+    appendJournal('skill-promote', qk.key, candidate.name, folder);
+
+    // Issue a sessionless approval card (dedup guard inside issueSkillApprovalCard).
+    try {
+      await issueSkillApprovalCard(agentGroupId, folder, candidate, qk.session_count);
+    } catch (err) {
+      log.error('promote: issueSkillApprovalCard failed (card skipped, continuing)', {
+        folder,
+        key: qk.key,
+        err,
+      });
+    }
+
+    log.info('promote: skill candidate surfaced', { key: qk.key, name: candidate.name, folder });
   }
 
   // Re-rank L1.
@@ -305,10 +324,7 @@ async function deliverDigest(results: GroupResult[], correctionKeys: string[]): 
       lines.push(`· \`${c.key}\` — ${c.name} | ${evidence} (group: ${c.folder})`);
     }
     lines.push('');
-    lines.push(
-      '_Approval: trigger a session and confirm via the propose_skill card. ' +
-        'Session-bridge for host-cron approval is a pending enhancement._',
-    );
+    lines.push('_Approval cards delivered to your DM. Tap Approve/Reject on each card._');
   } else {
     lines.push('**Skills**: none ready for approval this cycle.');
   }

@@ -121,6 +121,8 @@ const onProposeSkillResolved: ApprovalResolvedHandler = async (event) => {
     db = openSelfImproveDb(selfImproveDbPath());
     ensureSelfImproveSchema(db);
     recordTombstone(db, key, 'rejected');
+    // Clear card_issued_at so the key can receive a new card if ever un-tombstoned.
+    db.prepare('UPDATE proposal_keys SET card_issued_at = NULL WHERE key = ?').run(key);
     appendJournal('skill-trial', key, 'rejected → tombstoned', scope);
     log.info('self-improve: propose_skill tombstoned on rejection', { key, scope });
   } catch (err) {

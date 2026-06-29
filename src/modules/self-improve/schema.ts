@@ -104,7 +104,8 @@ export function ensureSelfImproveSchema(db: Database.Database): void {
       proposal_path    TEXT,
       session_count    INTEGER NOT NULL DEFAULT 0,
       created_at       TEXT,
-      updated_at       TEXT
+      updated_at       TEXT,
+      card_issued_at   TEXT
     );
 
     CREATE TABLE IF NOT EXISTS helpfulness_events (
@@ -115,4 +116,13 @@ export function ensureSelfImproveSchema(db: Database.Database): void {
       ts         TEXT    NOT NULL
     );
   `);
+
+  // Additive migration: card_issued_at was added after initial release.
+  // SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS, so we
+  // swallow the "duplicate column name" error on existing DBs.
+  try {
+    db.exec('ALTER TABLE proposal_keys ADD COLUMN card_issued_at TEXT');
+  } catch {
+    // Column already exists — ignore.
+  }
 }
