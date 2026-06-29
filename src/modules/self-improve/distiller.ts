@@ -44,6 +44,7 @@ import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
 import { SQL_FTS_DELETE, SQL_FTS_INSERT, ensureRecallSchema, openRecallDb } from '../../recall/schema.js';
 import { inboundDbPath, outboundDbPath } from '../../session-manager.js';
 import { appendJournal } from './journal.js';
+import { withGroupLock } from './group-lock.js';
 import { SQL_HELPFULNESS_INSERT, SQL_WATERMARK_UPSERT, ensureSelfImproveSchema, openSelfImproveDb } from './schema.js';
 import type { FactItem, SkillItem } from './schema.js';
 import { checkTombstone, incrementSessionCount, upsertProposalKey } from './tombstone.js';
@@ -194,6 +195,7 @@ async function runDistillPass(session: Session, folder: string): Promise<void> {
     const recallContext = buildRecallContext(folder, transcript);
 
     // ── Step 5: call the distiller model ─────────────────────────────────────
+    let llmSucceeded = false;
     let modelResponse = '';
     try {
       const systemPrompt = [
@@ -228,18 +230,40 @@ async function runDistillPass(session: Session, folder: string): Promise<void> {
         ],
         { apiKey: resolveGroupLitellmKey(folder) },
       );
+      llmSucceeded = true; // LLM call completed; response obtained.
     } catch (err) {
       log.error('distiller: step 5 — LiteLLM call', { sessionId: session.id, err });
     }
     const { facts, skills } = parseDistillerResponse(modelResponse, session.id);
 
     // ── Step 6: facts — AUTO-APPLY (DISC-1/2) ────────────────────────────────
-    // Each fact is processed independently so one failure doesn't block the rest.
-    for (const fact of facts) {
+    // All upsertKeyedBlock writes are batched synchronously inside a cooperative
+    // lock so reRankL1 cannot interleave via the event loop between individual
+    // writes.  Notifications and journal entries are deferred to a second loop
+    // after the lock is released (so no await breaks the synchronous batch).
+    const pendingNotifications: Array<{
+      key: string;
+      content: string;
+      agentGroupId: string;
+      sessionIdPath: string;
+    }> = [];
+    withGroupLock(folder, () => {
+      for (const fact of facts) {
+        try {
+          const pending = applyFactSync(siDb!, fact, folder, session);
+          if (pending !== null) pendingNotifications.push(pending);
+        } catch (err) {
+          log.error('distiller: step 6 — fact failed', { key: fact.key, sessionId: session.id, err });
+        }
+      }
+    });
+    // Second pass: notify + journal (async, outside the lock, best-effort).
+    for (const n of pendingNotifications) {
       try {
-        await applyFact(siDb!, fact, folder, session);
+        await notifyFactLearned(n.agentGroupId, n.key, n.content);
+        appendJournal('fact-add', n.key, n.content, n.sessionIdPath);
       } catch (err) {
-        log.error('distiller: step 6 — fact failed', { key: fact.key, sessionId: session.id, err });
+        log.warn('distiller: step 6 — notify/journal failed', { key: n.key, sessionId: session.id, err });
       }
     }
 
@@ -254,12 +278,17 @@ async function runDistillPass(session: Session, folder: string): Promise<void> {
     }
 
     // ── Step 8: distiller summary → recall (AC-9) ────────────────────────────
-    // Insert a 'summary' row so future recall searches surface what was distilled.
-    writeRecallSummary(folder, session, facts, skills);
+    // Only written when the LLM ran — avoids a misleading "no facts" summary
+    // when the model was never called (network/auth/429 failure).
+    if (llmSucceeded) {
+      writeRecallSummary(folder, session, facts, skills);
+    }
 
     // ── Step 9: advance watermark ─────────────────────────────────────────────
+    // Only advance when the LLM actually ran — a failed call (network/auth/429)
+    // means facts were never extracted, so the next pass must retry this session.
     try {
-      if (maxRowidIn > cursorIn || maxRowidOut > cursorOut) {
+      if (llmSucceeded && (maxRowidIn > cursorIn || maxRowidOut > cursorOut)) {
         siDb.prepare(SQL_WATERMARK_UPSERT).run(session.id, maxRowidIn, maxRowidOut);
         log.debug('distiller: step 9 — watermark advanced', { sessionId: session.id, maxRowidIn, maxRowidOut });
       }
@@ -455,20 +484,29 @@ function buildTranscript(
 }
 
 /**
- * Apply a single distilled fact: write the proposal JSON, upsert the keyed
- * block into CLAUDE.local.md, notify, journal, and record a helpfulness event.
+ * Apply a single distilled fact synchronously: write the proposal JSON, upsert
+ * the keyed block into CLAUDE.local.md, and record a helpfulness event.
  *
- * Operates independently — each call is wrapped in a try/catch in the caller
- * so a failure in one fact does not block the rest.  Never throws.
+ * Returns notification metadata so the caller can dispatch notifyFactLearned
+ * and appendJournal after the full batch completes (keeping all upsertKeyedBlock
+ * calls synchronous within a withGroupLock section — no await between them).
+ * Returns null when the fact is skipped (invalid key or tombstoned).
+ *
+ * Must be called inside a withGroupLock block.  Never throws.
  */
-async function applyFact(siDb: Database.Database, fact: FactItem, folder: string, session: Session): Promise<void> {
+function applyFactSync(
+  siDb: Database.Database,
+  fact: FactItem,
+  folder: string,
+  session: Session,
+): { key: string; content: string; agentGroupId: string; sessionIdPath: string } | null {
   if (!isValidSlug(fact.key)) {
     log.warn('distiller: step 6 — invalid fact key, skipping', { key: fact.key });
-    return;
+    return null;
   }
   if (checkTombstone(siDb, fact.key)) {
     log.debug('distiller: step 6 — tombstoned, skipping', { key: fact.key });
-    return;
+    return null;
   }
 
   // Write proposal JSON (audit trail, readable by the nightly pass).
@@ -487,16 +525,18 @@ async function applyFact(siDb: Database.Database, fact: FactItem, folder: string
   const claudeLocalPath = path.join(GROUPS_DIR, folder, 'CLAUDE.local.md');
   upsertKeyedBlock(claudeLocalPath, fact.key, fact.content, fact.pin === true);
 
-  // Notify Jeff — best-effort (DISC-2/DISC-4).
-  await notifyFactLearned(session.agent_group_id, fact.key, fact.content);
-
-  // Append to git-tracked journal (DISC-7).
-  appendJournal('fact-add', fact.key, fact.content, `${folder}/${session.id}`);
-
   // Helpfulness event — corroborated = first observation of this fact.
   siDb.prepare(SQL_HELPFULNESS_INSERT).run(fact.key, 'corroborated', session.id, new Date().toISOString());
 
   log.info('distiller: step 6 — fact applied', { key: fact.key, folder });
+
+  // Return deferred notification data for the post-batch second loop.
+  return {
+    key: fact.key,
+    content: fact.content,
+    agentGroupId: session.agent_group_id,
+    sessionIdPath: `${folder}/${session.id}`,
+  };
 }
 
 /**
@@ -743,7 +783,7 @@ function extractKeywords(transcript: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter((w) => w.length > MIN_KEYWORD_LENGTH && !STOPWORDS.has(w));
+    .filter((w) => w.length >= MIN_KEYWORD_LENGTH && !STOPWORDS.has(w));
 
   const seen = new Set<string>();
   const keywords: string[] = [];

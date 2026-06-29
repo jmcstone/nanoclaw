@@ -25,6 +25,7 @@
  * The Wave-4 approval handler that WRITES new facts must use these exact
  * delimiters so that this parser picks them up correctly.
  */
+import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
@@ -32,6 +33,7 @@ import { GROUPS_DIR } from '../../config.js';
 import { log } from '../../log.js';
 import { selfImproveDbPath } from '../../madison-extensions.js';
 import { appendJournal } from './journal.js';
+import { withGroupLock } from './group-lock.js';
 import { ensureSelfImproveSchema, openSelfImproveDb } from './schema.js';
 
 // ---------------------------------------------------------------------------
@@ -219,89 +221,101 @@ function serializeBlock(block: ParsedBlock): string {
 export function reRankL1(folder: string, tokenBudget: number): { resident: string[]; demoted: string[] } {
   const localMdPath = path.join(GROUPS_DIR, folder, 'CLAUDE.local.md');
 
-  // Step 1: Read + parse.
-  let parsed: ParsedFile;
-  try {
-    const raw = fs.existsSync(localMdPath) ? fs.readFileSync(localMdPath, 'utf8') : '';
-    parsed = parseClaudeLocal(raw);
-  } catch (err) {
-    log.error('l1-lifecycle: failed to read/parse CLAUDE.local.md', { folder, err });
-    return { resident: [], demoted: [] };
-  }
-
-  if (parsed.blocks.length === 0) {
-    // File is empty or entirely unkeyed — nothing to rank.
-    return { resident: [], demoted: [] };
-  }
-
-  // Step 2: Query helpfulness events for the keys present in this file.
-  let events: HelpfulnessEvent[] = [];
-  try {
-    const db = openSelfImproveDb(selfImproveDbPath());
-    ensureSelfImproveSchema(db);
-
-    const keys = parsed.blocks.map((b) => b.key);
-    if (keys.length > 0) {
-      const placeholders = keys.map(() => '?').join(',');
-      events = db
-        .prepare(`SELECT key, event, ts FROM helpfulness_events WHERE key IN (${placeholders})`)
-        .all(...keys) as HelpfulnessEvent[];
+  // Wrap the file read + compute + file write in a cooperative lock so the
+  // distiller's synchronous fact-write batch and this rewrite cannot interleave.
+  // NOTE: the in-container agent does NOT take this lock — agent-vs-host races
+  // remain a documented follow-up item out of scope here.
+  return withGroupLock(folder, () => {
+    // Step 1: Read + parse.
+    let parsed: ParsedFile;
+    try {
+      const raw = fs.existsSync(localMdPath) ? fs.readFileSync(localMdPath, 'utf8') : '';
+      parsed = parseClaudeLocal(raw);
+    } catch (err) {
+      log.error('l1-lifecycle: failed to read/parse CLAUDE.local.md', { folder, err });
+      return { resident: [], demoted: [] };
     }
 
-    db.close();
-  } catch (err) {
-    log.error('l1-lifecycle: failed to query helpfulness_events', { folder, err });
-    // Continue — facts with no events score 0 and compete on budget alone.
-  }
-
-  // Step 3: Score the pool.
-  const scores = scorePool(events);
-
-  // Step 4: Partition and rank.
-  // Pinned blocks are always resident; non-pinned compete for the remaining budget.
-  const pinnedBlocks = parsed.blocks.filter((b) => b.pinned);
-  const scoredBlocks = parsed.blocks
-    .filter((b) => !b.pinned)
-    .sort((a, b) => (scores.get(b.key) ?? 0) - (scores.get(a.key) ?? 0)); // desc by score
-
-  // Seed token usage with the unkeyed preamble + pinned blocks (always in).
-  const pinnedText = parsed.unkeyed + pinnedBlocks.map(serializeBlock).join('');
-  let usedTokens = Math.ceil(pinnedText.length / 4);
-
-  const residentScored: ParsedBlock[] = [];
-  const demotedBlocks: ParsedBlock[] = [];
-
-  for (const block of scoredBlocks) {
-    const blockTokens = Math.ceil(serializeBlock(block).length / 4);
-    if (usedTokens + blockTokens <= tokenBudget) {
-      residentScored.push(block);
-      usedTokens += blockTokens;
-    } else {
-      demotedBlocks.push(block);
+    if (parsed.blocks.length === 0) {
+      // File is empty or entirely unkeyed — nothing to rank.
+      return { resident: [], demoted: [] };
     }
-  }
 
-  // Step 5: Atomic rewrite — preamble + pinned + resident scored.
-  const residentBlocks = [...pinnedBlocks, ...residentScored];
-  const newContent = parsed.unkeyed + residentBlocks.map(serializeBlock).join('');
+    // Step 2: Query helpfulness events for the keys present in this file.
+    // db is declared before the try so the finally can always close it (FIX-3).
+    let events: HelpfulnessEvent[] = [];
+    let db: Database.Database | null = null;
+    try {
+      db = openSelfImproveDb(selfImproveDbPath());
+      ensureSelfImproveSchema(db);
 
-  try {
-    const tmp = `${localMdPath}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, newContent, 'utf8');
-    fs.renameSync(tmp, localMdPath);
-  } catch (err) {
-    log.error('l1-lifecycle: failed to atomically rewrite CLAUDE.local.md', { folder, err });
-    return { resident: [], demoted: [] };
-  }
+      const keys = parsed.blocks.map((b) => b.key);
+      if (keys.length > 0) {
+        const placeholders = keys.map(() => '?').join(',');
+        events = db
+          .prepare(`SELECT key, event, ts FROM helpfulness_events WHERE key IN (${placeholders})`)
+          .all(...keys) as HelpfulnessEvent[];
+      }
+    } catch (err) {
+      log.error('l1-lifecycle: failed to query helpfulness_events', { folder, err });
+      // Continue — facts with no events score 0 and compete on budget alone.
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
 
-  // Step 6: Journal each eviction.
-  for (const block of demotedBlocks) {
-    appendJournal('fact-evict', block.key, 'below L1 budget', folder);
-  }
+    // Step 3: Score the pool.
+    const scores = scorePool(events);
 
-  // Step 7: Return key lists for the caller to log.
-  return {
-    resident: residentBlocks.map((b) => b.key),
-    demoted: demotedBlocks.map((b) => b.key),
-  };
+    // Step 4: Partition and rank.
+    // Pinned blocks are always resident; non-pinned compete for the remaining budget.
+    const pinnedBlocks = parsed.blocks.filter((b) => b.pinned);
+    const scoredBlocks = parsed.blocks
+      .filter((b) => !b.pinned)
+      .sort((a, b) => (scores.get(b.key) ?? 0) - (scores.get(a.key) ?? 0)); // desc by score
+
+    // Seed token usage with the unkeyed preamble + pinned blocks (always in).
+    const pinnedText = parsed.unkeyed + pinnedBlocks.map(serializeBlock).join('');
+    let usedTokens = Math.ceil(pinnedText.length / 4);
+
+    const residentScored: ParsedBlock[] = [];
+    const demotedBlocks: ParsedBlock[] = [];
+
+    for (const block of scoredBlocks) {
+      const blockTokens = Math.ceil(serializeBlock(block).length / 4);
+      if (usedTokens + blockTokens <= tokenBudget) {
+        residentScored.push(block);
+        usedTokens += blockTokens;
+      } else {
+        demotedBlocks.push(block);
+      }
+    }
+
+    // Step 5: Atomic rewrite — preamble + pinned + resident scored.
+    const residentBlocks = [...pinnedBlocks, ...residentScored];
+    const newContent = parsed.unkeyed + residentBlocks.map(serializeBlock).join('');
+
+    try {
+      const tmp = `${localMdPath}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, newContent, 'utf8');
+      fs.renameSync(tmp, localMdPath);
+    } catch (err) {
+      log.error('l1-lifecycle: failed to atomically rewrite CLAUDE.local.md', { folder, err });
+      return { resident: [], demoted: [] };
+    }
+
+    // Step 6: Journal each eviction.
+    for (const block of demotedBlocks) {
+      appendJournal('fact-evict', block.key, 'below L1 budget', folder);
+    }
+
+    // Step 7: Return key lists for the caller to log.
+    return {
+      resident: residentBlocks.map((b) => b.key),
+      demoted: demotedBlocks.map((b) => b.key),
+    };
+  });
 }
