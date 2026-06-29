@@ -295,6 +295,25 @@ async function processGroup(
 // ---------------------------------------------------------------------------
 
 async function deliverDigest(results: GroupResult[], correctionKeys: string[]): Promise<void> {
+  // Compute summary metrics up front so we can gate delivery before any I/O.
+  const allCandidates = results.flatMap((r) => r.candidates.map((c) => ({ ...c, folder: r.folder })));
+  const totalResident = results.reduce((s, r) => s + r.resident.length, 0);
+  const totalDemoted = results.reduce((s, r) => s + r.demoted.length, 0);
+
+  // Only deliver when there is something actionable to report.
+  // Resident count is informational only — resident > 0 alone must NOT trigger a send.
+  const hasContent = allCandidates.length > 0 || totalDemoted > 0 || correctionKeys.length > 0;
+  if (!hasContent) {
+    log.info('promote: nothing to report — digest suppressed', {
+      groups: results.length,
+      totalResident,
+      totalDemoted,
+      skillCandidates: allCandidates.length,
+      corrections: correctionKeys.length,
+    });
+    return;
+  }
+
   const adapter = getDeliveryAdapter();
   if (!adapter) {
     log.warn('promote: delivery adapter not set — skipping digest');
@@ -316,7 +335,6 @@ async function deliverDigest(results: GroupResult[], correctionKeys: string[]): 
   const lines: string[] = ['**Madison self-improvement digest** (nightly promote pass)', ''];
 
   // Skills section.
-  const allCandidates = results.flatMap((r) => r.candidates.map((c) => ({ ...c, folder: r.folder })));
   if (allCandidates.length > 0) {
     lines.push(`**Skills awaiting approval** (${allCandidates.length}):`);
     for (const c of allCandidates) {
@@ -331,8 +349,6 @@ async function deliverDigest(results: GroupResult[], correctionKeys: string[]): 
   lines.push('');
 
   // L1 re-rank section.
-  const totalResident = results.reduce((s, r) => s + r.resident.length, 0);
-  const totalDemoted = results.reduce((s, r) => s + r.demoted.length, 0);
   lines.push(`**L1 re-rank**: ${totalResident} resident, ${totalDemoted} demoted across ${results.length} group(s).`);
   for (const r of results) {
     if (r.demoted.length > 0) {
