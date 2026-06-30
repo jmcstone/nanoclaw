@@ -78,6 +78,27 @@ describe('per-container resource limits (structural)', () => {
   });
 });
 
+describe('agent observability env (structural)', () => {
+  it('enables metadata-only OTEL for spawned agent containers', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'container-runner.ts'), 'utf-8');
+    expect(src).toContain('CLAUDE_CODE_ENABLE_TELEMETRY=1');
+    expect(src).toContain('OTEL_EXPORTER_OTLP_ENDPOINT');
+    expect(src).toContain('OTEL_RESOURCE_ATTRIBUTES');
+    expect(src).toContain('agent.surface');
+    expect(src).toContain('nanoclaw.agent_group.id');
+    expect(src).toContain('agent.provider');
+  });
+
+  it('keeps prompt, response, tool, and raw body logging disabled', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'container-runner.ts'), 'utf-8');
+    expect(src).toContain('OTEL_LOG_USER_PROMPTS=0');
+    expect(src).toContain('OTEL_LOG_ASSISTANT_RESPONSES=0');
+    expect(src).toContain('OTEL_LOG_TOOL_DETAILS=0');
+    expect(src).toContain('OTEL_LOG_TOOL_CONTENT=0');
+    expect(src).toContain('OTEL_LOG_RAW_API_BODIES=0');
+  });
+});
+
 describe('container boot-failure tripwire (structural)', () => {
   // A container that dies at boot (unknown provider, missing CLI binary, bad
   // config) explains itself only on stderr — which logs at debug, below the

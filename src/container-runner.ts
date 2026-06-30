@@ -5,6 +5,7 @@
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
@@ -67,6 +68,33 @@ const activeContainers = new Map<string, { process: ChildProcess; containerName:
  * racy double-replies.
  */
 const wakePromises = new Map<string, Promise<boolean>>();
+
+function otelAttrValue(value: string | null | undefined): string {
+  return String(value || '').replace(/[,\n=]/g, '_');
+}
+
+function otelResourceAttributes(
+  agentGroup: AgentGroup,
+  containerName: string,
+  provider: string,
+  containerConfig: import('./container-config.js').ContainerConfig,
+): string {
+  const attrs = [
+    ['service.name', 'nanoclaw-agent'],
+    ['agent.surface', 'nanoclaw'],
+    ['machine.name', os.hostname().split('.')[0] || 'jarvis'],
+    ['repo.name', 'nanoclaw-v2'],
+    ['repo.path', process.cwd()],
+    ['nanoclaw.agent_group.id', agentGroup.id],
+    ['nanoclaw.agent_group.name', agentGroup.name],
+    ['nanoclaw.agent_group.folder', agentGroup.folder],
+    ['container.name', containerName],
+    ['agent.provider', provider],
+    ['agent.model', containerConfig.model || ''],
+    ['agent.effort', containerConfig.effort || ''],
+  ];
+  return attrs.map(([key, value]) => `${key}=${otelAttrValue(value)}`).join(',');
+}
 
 export function getActiveContainerCount(): number {
   return activeContainers.size;
@@ -452,7 +480,7 @@ async function buildContainerArgs(
   containerName: string,
   agentGroup: AgentGroup,
   containerConfig: import('./container-config.js').ContainerConfig,
-  _provider: string,
+  provider: string,
   providerContribution: ProviderContainerContribution,
   agentIdentifier?: string,
 ): Promise<string[]> {
@@ -468,6 +496,24 @@ async function buildContainerArgs(
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  const otelEndpoint = process.env.AGENT_OTEL_ENDPOINT || 'http://qcm-de:4317';
+  args.push('-e', 'CLAUDE_CODE_ENABLE_TELEMETRY=1');
+  args.push('-e', 'OTEL_METRICS_EXPORTER=otlp');
+  args.push('-e', 'OTEL_LOGS_EXPORTER=otlp');
+  args.push('-e', 'OTEL_TRACES_EXPORTER=none');
+  args.push('-e', 'OTEL_EXPORTER_OTLP_PROTOCOL=grpc');
+  args.push('-e', `OTEL_EXPORTER_OTLP_ENDPOINT=${otelEndpoint}`);
+  args.push('-e', 'OTEL_LOG_USER_PROMPTS=0');
+  args.push('-e', 'OTEL_LOG_ASSISTANT_RESPONSES=0');
+  args.push('-e', 'OTEL_LOG_TOOL_DETAILS=0');
+  args.push('-e', 'OTEL_LOG_TOOL_CONTENT=0');
+  args.push('-e', 'OTEL_LOG_RAW_API_BODIES=0');
+  args.push('-e', 'OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES=true');
+  args.push('-e', `OTEL_RESOURCE_ATTRIBUTES=${otelResourceAttributes(agentGroup, containerName, provider, containerConfig)}`);
+  args.push('--label', `nanoclaw.agent_group_id=${agentGroup.id}`);
+  args.push('--label', `nanoclaw.agent_group_folder=${agentGroup.folder}`);
+  args.push('--label', `nanoclaw.provider=${provider}`);
 
   // Skill-facing service env (tailnet REST APIs used by container skills, e.g.
   // teslamate / ambient-weather). Sourced from .env via config — NOT process.env,
