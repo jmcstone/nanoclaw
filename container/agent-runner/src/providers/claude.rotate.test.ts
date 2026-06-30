@@ -14,6 +14,9 @@ let prevHome: string | undefined;
 let prevConv: string | undefined;
 let prevBytes: string | undefined;
 let prevDays: string | undefined;
+let prevOtelEndpoint: string | undefined;
+let prevOtelAttrs: string | undefined;
+let prevTelemetryEnabled: string | undefined;
 
 const PROJECT_DIR = '-workspace-agent';
 const CWD = '/workspace/agent';
@@ -39,9 +42,15 @@ beforeEach(() => {
   prevConv = process.env.NANOCLAW_CONVERSATIONS_DIR;
   prevBytes = process.env.CLAUDE_TRANSCRIPT_ROTATE_BYTES;
   prevDays = process.env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS;
+  prevOtelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  prevOtelAttrs = process.env.OTEL_RESOURCE_ATTRIBUTES;
+  prevTelemetryEnabled = process.env.CLAUDE_CODE_ENABLE_TELEMETRY;
   process.env.HOME = tmp;
   delete process.env.CLAUDE_CONFIG_DIR;
   process.env.NANOCLAW_CONVERSATIONS_DIR = path.join(tmp, 'conversations');
+  delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  delete process.env.OTEL_RESOURCE_ATTRIBUTES;
+  delete process.env.CLAUDE_CODE_ENABLE_TELEMETRY;
 });
 
 afterEach(() => {
@@ -50,6 +59,9 @@ afterEach(() => {
   restore('NANOCLAW_CONVERSATIONS_DIR', prevConv);
   restore('CLAUDE_TRANSCRIPT_ROTATE_BYTES', prevBytes);
   restore('CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS', prevDays);
+  restore('OTEL_EXPORTER_OTLP_ENDPOINT', prevOtelEndpoint);
+  restore('OTEL_RESOURCE_ATTRIBUTES', prevOtelAttrs);
+  restore('CLAUDE_CODE_ENABLE_TELEMETRY', prevTelemetryEnabled);
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -85,5 +97,19 @@ describe('ClaudeProvider.maybeRotateContinuation', () => {
   it('returns null for an unknown session id', () => {
     const provider = new ClaudeProvider();
     expect(provider.maybeRotateContinuation('does-not-exist', CWD)).toBeNull();
+  });
+
+  it('passes inherited telemetry env to the Claude SDK process env', () => {
+    process.env.CLAUDE_CODE_ENABLE_TELEMETRY = '1';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://qcm-de:4317';
+    process.env.OTEL_RESOURCE_ATTRIBUTES = 'service.name=nanoclaw-agent,agent.surface=nanoclaw';
+
+    const provider = new ClaudeProvider({ env: { CUSTOM_VAR: 'kept' } });
+    const env = (provider as unknown as { env: Record<string, string | undefined> }).env;
+
+    expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
+    expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('http://qcm-de:4317');
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toContain('agent.surface=nanoclaw');
+    expect(env.CUSTOM_VAR).toBe('kept');
   });
 });

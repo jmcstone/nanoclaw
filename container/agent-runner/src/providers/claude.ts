@@ -331,6 +331,31 @@ const CLAUDE_CODE_AUTO_COMPACT_WINDOW = process.env.CLAUDE_CODE_AUTO_COMPACT_WIN
  */
 const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
 
+const CLAUDE_TELEMETRY_ENV_KEYS = [
+  'CLAUDE_CODE_ENABLE_TELEMETRY',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_PROTOCOL',
+  'OTEL_METRICS_EXPORTER',
+  'OTEL_LOGS_EXPORTER',
+  'OTEL_TRACES_EXPORTER',
+  'OTEL_RESOURCE_ATTRIBUTES',
+  'OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES',
+  'OTEL_LOG_USER_PROMPTS',
+  'OTEL_LOG_ASSISTANT_RESPONSES',
+  'OTEL_LOG_TOOL_DETAILS',
+  'OTEL_LOG_TOOL_CONTENT',
+  'OTEL_LOG_RAW_API_BODIES',
+] as const;
+
+function inheritedClaudeTelemetryEnv(): Record<string, string> {
+  return Object.fromEntries(
+    CLAUDE_TELEMETRY_ENV_KEYS.flatMap((key) => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+}
+
 export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
 
@@ -348,6 +373,7 @@ export class ClaudeProvider implements AgentProvider {
     this.model = options.model;
     this.effort = options.effort;
     this.env = {
+      ...inheritedClaudeTelemetryEnv(),
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
     };
